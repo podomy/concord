@@ -1,0 +1,38 @@
+[
+  {
+    "label": "go: lint",
+    "command": "make",
+    "args": ["lint"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "go: verify",
+    "command": "make",
+    "args": ["verify"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "go: fmt",
+    "command": "make",
+    "args": ["fmt"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "reveal": "no_focus",
+    "hide": "on_success"
+  },
+  {
+    "label": "go: test",
+    "command": "make",
+    "args": ["test"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "save": "all",
+    "reveal": "always",
+    "hide": "never"
+  }
+]
