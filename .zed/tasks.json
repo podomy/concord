@@ -1,6 +1,6 @@
 [
   {
-    "label": "go: lint",
+    "label": "ocaml: lint",
     "command": "make",
     "args": ["lint"],
     "cwd": "$ZED_WORKTREE_ROOT",
@@ -9,7 +9,7 @@
     "hide": "never"
   },
   {
-    "label": "go: verify",
+    "label": "ocaml: verify",
     "command": "make",
     "args": ["verify"],
     "cwd": "$ZED_WORKTREE_ROOT",
@@ -18,7 +18,7 @@
     "hide": "never"
   },
   {
-    "label": "go: fmt",
+    "label": "ocaml: fmt",
     "command": "make",
     "args": ["fmt"],
     "cwd": "$ZED_WORKTREE_ROOT",
@@ -27,7 +27,7 @@
     "hide": "on_success"
   },
   {
-    "label": "go: test",
+    "label": "ocaml: test",
     "command": "make",
     "args": ["test"],
     "cwd": "$ZED_WORKTREE_ROOT",
