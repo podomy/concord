@@ -1,5 +1,15 @@
                               HIVE
-Distributed system software for swarms and airgapped systems
+Infrastructure for machine fleets that cannot stay connected.
+
+If your software needs one live global truth, Hive is the wrong
+place to run it. If your machines must keep working when the network
+breaks, Hive is built for that.
+
+Hive is not standard Kubernetes. It may support Kubernetes-like
+deployment workflows, but it does not promise a coherent cluster
+network, a central control plane, or one always-current source of truth.
+Cluster segmentation is expected. Local operation and later
+reconciliation are part of the model.
 
 Supported IDEs we work with:
 https://zed.dev/
