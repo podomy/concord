@@ -1,3 +1,4 @@
 (executable
  (public_name hive)
+ (libraries hive)
  (name main))
