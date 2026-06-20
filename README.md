@@ -12,8 +12,6 @@ is reconciled by explicit rules instead of a hidden central truth.
 ## Formal Verification
 
 - The design of important system parts is fully formally verified.
-- Selected critical implementation paths are formally verified at the
-  code level.
 
 ## Kubernetes Compatibility
 
