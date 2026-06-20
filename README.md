@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hive.png" width="300" alt="Hive Logo">
+  <img src="assets/logo-qxvtrm.png" width="300" alt="Hive Logo">
 </p>
 
 Hive is a runtime and control layer for running software across machine
