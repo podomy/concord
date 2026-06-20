@@ -17,8 +17,8 @@ Types:
 
 Scope:
 
-  Use a short lowercase area name, such as ocaml, go, zed, docs,
-  boilerplate, tests, or build.
+  Use a short lowercase area name, such as go, zed, docs, boilerplate,
+  tests, or build.
 
 Summary:
 
@@ -28,9 +28,9 @@ Summary:
 
 Examples:
 
-  feat(ocaml): add dune project scaffold
-  chore(ocaml): update editor tooling
-  chore(go): remove go scaffold
+  feat(go): add command entrypoint
+  chore(go): update lint configuration
+  chore(zed): update editor tooling
   docs(commits): document commit message format
 
 Prefer small commits. If a change includes unrelated work, split it into

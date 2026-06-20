@@ -1,0 +1,150 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/podomy/hive
+      extra-rules: true
+    goimports:
+      local-prefixes:
+        - github.com/podomy/hive
+
+linters:
+  default: none
+  enable:
+    # Dependency and module checks.
+    - gomoddirectives
+
+    # Core Go correctness and static analysis.
+    - asasalint
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - gochecksumtype
+    - govet
+    - ineffassign
+    - makezero
+    - nilerr
+    - nilnesserr
+    - noctx
+    - nosprintfhostport
+    - recvcheck
+    - staticcheck
+    - unused
+    - wastedassign
+
+    # Security, supply-chain, and unsafe text checks.
+    - asciicheck
+    - bidichk
+    - gosec
+
+    # Error handling and API hygiene.
+    - errname
+    - wrapcheck
+
+    # Maintainability, complexity, and design pressure.
+    - cyclop
+    - dupl
+    - gocognit
+    - gocritic
+    - nestif
+    - predeclared
+    - reassign
+    - unparam
+
+    # Modern Go simplifications and performance improvements.
+    - exptostd
+    - intrange
+    - mirror
+    - modernize
+    - perfsprint
+    - unconvert
+    - usestdlibvars
+    - usetesting
+
+    # Documentation, naming, formatting, and style polish.
+    - goheader
+    - iotamixing
+    - nolintlint
+  settings:
+    bodyclose:
+      check-consumption: true
+    copyloopvar:
+      check-alias: true
+    cyclop:
+      max-complexity: 10
+      package-average: 5
+    dupl:
+      threshold: 100
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      disable-default-exclusions: true
+      verbose: true
+    errchkjson:
+      check-error-free-encoding: true
+      report-no-exported: true
+    errorlint:
+      errorf: true
+      errorf-multi: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      check:
+        - switch
+        - map
+      default-signifies-exhaustive: false
+      package-scope-only: false
+      explicit-exhaustive-switch: false
+      explicit-exhaustive-map: false
+      default-case-required: true
+    fatcontext:
+      check-struct-pointers: true
+    gochecksumtype:
+      default-signifies-exhaustive: false
+      include-shared-interfaces: true
+    gocognit:
+      min-complexity: 15
+    goheader:
+      template: |-
+        Copyright (C) {{ YEAR }} Podomy.
+        SPDX-License-Identifier: AGPL-3.0-or-later
+    gomoddirectives:
+      replace-local: false
+      retract-allow-no-explanation: false
+      exclude-forbidden: true
+      ignore-forbidden: true
+      toolchain-forbidden: false
+      tool-forbidden: false
+      go-debug-forbidden: true
+      go-version-pattern: ^1\.25(\.\d+)?$
+      check-module-path: true
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
