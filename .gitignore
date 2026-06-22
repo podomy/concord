@@ -8,3 +8,6 @@ coverage.out
 
 # OS/editor noise
 .DS_Store
+
+# Temp files folder
+.temp

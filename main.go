@@ -4,10 +4,13 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/podomy/hive/src/journal"
 	"github.com/podomy/hive/src/logs"
 )
 
@@ -23,5 +26,8 @@ func main() {
 		}
 	}()
 
-	logger.Info("node runtime started")
+	nodeID := uuid.New()
+	event := journal.NewEvent(nodeID, "node.started", json.RawMessage(`{}`))
+
+	logger.Info("node runtime started", zap.String("node_id", nodeID.String()), zap.String("event_id", event.ID.String()))
 }
