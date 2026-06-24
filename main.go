@@ -48,19 +48,19 @@ func run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Open the JSONL journal file for appending runtime events.
-	journalStore, err := journal.OpenJSONL()
+	journalJSONLStore, err := journal.OpenJSONL()
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
 	}
 	defer func() {
-		if err := journalStore.Close(); err != nil {
+		if err := journalJSONLStore.Close(); err != nil {
 			logger.Error("close journal", zap.Error(err))
 		}
 	}()
 
 	// Create a startup event and persist it to the journal before announcing readiness.
 	event := journal.NewEvent(nodeConfig.ID, "node.started", json.RawMessage(`{}`))
-	if err := journalStore.Append(ctx, event); err != nil {
+	if err := journalJSONLStore.Append(ctx, event); err != nil {
 		return fmt.Errorf("append startup event: %w", err)
 	}
 	logger.Info("node runtime started",
