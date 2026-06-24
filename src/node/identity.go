@@ -60,6 +60,8 @@ func LoadOrCreateNodeConfig() (config *NodeConfig, err error) {
 	return decodeNodeConfig(file)
 }
 
+// decodeNodeConfig unmarshals JSON from the provided reader into a NodeConfig.
+// If the reader is empty (io.EOF), it falls back to creating and persisting a new config.
 func decodeNodeConfig(reader io.Reader) (*NodeConfig, error) {
 	var config NodeConfig
 
@@ -74,6 +76,7 @@ func decodeNodeConfig(reader io.Reader) (*NodeConfig, error) {
 	return &config, nil
 }
 
+// createNodeConfig generates a new NodeConfig with a fresh UUID and persists it to disk.
 func createNodeConfig() (*NodeConfig, error) {
 	config := &NodeConfig{ID: uuid.New()}
 	if _, err := UpdateNodeConfig(config); err != nil {

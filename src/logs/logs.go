@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// Init initialises a production-grade zap logger and returns a sync function
+// that should be called before exit to flush buffered log entries.
 func Init() (*zap.Logger, func() error, error) {
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -37,6 +39,7 @@ func Init() (*zap.Logger, func() error, error) {
 	return logger, syncLogs, nil
 }
 
+// Node returns a logger enriched with the node_id field for correlated logging.
 func Node(logger *zap.Logger, nodeID string) *zap.Logger {
 	return logger.With(zap.String("node_id", nodeID))
 }

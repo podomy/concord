@@ -19,6 +19,7 @@ type Event struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// NewEvent creates a new Event with a random ID, the current UTC timestamp, and the given parameters.
 func NewEvent(nodeID uuid.UUID, eventType string, payload json.RawMessage) Event {
 	return Event{
 		ID:        uuid.New(),
@@ -29,6 +30,7 @@ func NewEvent(nodeID uuid.UUID, eventType string, payload json.RawMessage) Event
 	}
 }
 
+// Journal is the interface for appending events to a persistent event log.
 type Journal interface {
 	Append(ctx context.Context, event Event) error
 }
