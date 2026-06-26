@@ -4,20 +4,17 @@
 package journal
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
 type JSONL struct {
-	file    *os.File
-	scanner *bufio.Scanner
-	mu      sync.Mutex
+	file *os.File
+	mu   sync.Mutex
 }
 
 // Append marshals the event and appends it as a JSON line to the journal file.
@@ -80,48 +77,10 @@ func OpenJSONL() (*JSONL, error) {
 	}
 
 	// #nosec G304: journal paths are local runtime configuration.
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
 
-	// Creating a scanner for the file
-	reader := bufio.NewReader(file)
-	scanner := bufio.NewScanner(reader)
-
-	jsonl := JSONL{
-		file:    file,
-		scanner: scanner,
-	}
-
-	return &jsonl, nil
-}
-
-func (j *JSONL) Read(ctx context.Context) (*Event, error) {
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("read cancelled: %w", ctx.Err())
-	default:
-	}
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
-	// Get a line from the file.
-	if !j.scanner.Scan() {
-		if err := j.scanner.Err(); err != nil {
-			return nil, fmt.Errorf("scan journal: %w", j.scanner.Err())
-		}
-		return nil, io.EOF
-	}
-	line := j.scanner.Text()
-
-	// Process the line.
-	var event Event
-	err := json.Unmarshal([]byte(line), &event)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal json: %w", err)
-	}
-
-	return &event, nil
+	return &JSONL{file: file}, nil
 }

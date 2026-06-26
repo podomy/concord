@@ -30,12 +30,8 @@ func NewEvent(nodeID uuid.UUID, eventType string, payload json.RawMessage) Event
 	}
 }
 
-type Reader interface {
-	Read(ctx context.Context) (*Event, error)
-	Close() error
-}
-
 // Journal is the interface for appending events to a persistent event log.
 type Journal interface {
+	// Append marshals and persists an event to the journal.
 	Append(ctx context.Context, event Event) error
 }

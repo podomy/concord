@@ -13,8 +13,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/podomy/hive/src/bbolt"
 	"github.com/podomy/hive/src/journal"
+	"github.com/podomy/hive/src/kvstore"
 	"github.com/podomy/hive/src/logs"
 	"github.com/podomy/hive/src/node"
 )
@@ -79,13 +79,13 @@ func run(ctx context.Context, logger *zap.Logger) error {
 }
 
 type stores struct {
-	kv      *bbolt.KVStore
+	kv      *kvstore.KVStore
 	journal *journal.JSONL
 }
 
 // openStores initialises the bbolt key-value store and the JSONL journal.
 func openStores() (*stores, error) {
-	kvStore, err := bbolt.Open()
+	kvStore, err := kvstore.Open()
 	if err != nil {
 		return nil, fmt.Errorf("load kv store: %w", err)
 	}
