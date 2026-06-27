@@ -18,7 +18,7 @@ import (
 	"github.com/podomy/hive/src/kvstore"
 )
 
-const bucketName = "eventsbyid"
+const bucketNameEventsByID = "eventsbyid"
 
 type EventsByID struct {
 	kvStore kvstore.KVStore
@@ -43,6 +43,7 @@ func (e *EventsByID) putEvent(b *bolt.Bucket, event journal.Event) error {
 	return nil
 }
 
+//nolint:dupl // Projection methods intentionally keep bucket-specific logic local.
 func (e *EventsByID) Apply(ctx context.Context, event journal.Event) error {
 	select {
 	case <-ctx.Done():
@@ -53,7 +54,7 @@ func (e *EventsByID) Apply(ctx context.Context, event journal.Event) error {
 	kv := e.kvStore.DB()
 
 	err := kv.Update(func(tx *bolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists([]byte(bucketName))
+		b, err := tx.CreateBucketIfNotExists([]byte(bucketNameEventsByID))
 		if err != nil {
 			return fmt.Errorf("kv bucket creation: %w", err)
 		}
@@ -67,11 +68,11 @@ func (e *EventsByID) Apply(ctx context.Context, event journal.Event) error {
 }
 
 func (e *EventsByID) resetBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
-	if err := tx.DeleteBucket([]byte(bucketName)); err != nil && !errors.Is(err, berrors.ErrBucketNotFound) {
+	if err := tx.DeleteBucket([]byte(bucketNameEventsByID)); err != nil && !errors.Is(err, berrors.ErrBucketNotFound) {
 		return nil, fmt.Errorf("kv bucket deletion: %w", err)
 	}
 
-	b, err := tx.CreateBucket([]byte(bucketName))
+	b, err := tx.CreateBucket([]byte(bucketNameEventsByID))
 	if err != nil {
 		return nil, fmt.Errorf("kv bucket creation: %w", err)
 	}
@@ -111,6 +112,7 @@ func readEvent(ctx context.Context, jr journalreader.Reader) (*journal.Event, er
 	return event, nil
 }
 
+//nolint:dupl // Projection methods intentionally keep rebuild flow local to each view.
 func (e *EventsByID) Rebuild(ctx context.Context, jr journalreader.Reader) error {
 	select {
 	case <-ctx.Done():
