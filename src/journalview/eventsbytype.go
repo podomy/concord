@@ -4,6 +4,7 @@
 package journalview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,22 +31,27 @@ type EventsByTypeKey struct {
 }
 
 func (e *EventsByType) putEvent(b *bolt.Bucket, event journal.Event) error {
-	key := EventsByTypeKey{
-		EventType: event.Type,
-		ID:        event.ID,
-	}
+	serializedEventType := []byte(event.Type)
 
-	serializedKey, err := json.Marshal(key)
+	serializedID, err := event.ID.MarshalBinary()
 	if err != nil {
 		return fmt.Errorf("serialization: %w", err)
 	}
+
+	key := make([]byte, 0, len(serializedEventType)+len(serializedID))
+	key = append(key, serializedEventType...)
+	// a separator, while UUID is a fixed 16 byte type,
+	// the string can be arbitrarily large, we need something
+	// to know when it ends
+	key = append(key, 0)
+	key = append(key, serializedID...)
 
 	serializedEvent, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("serialization: %w", err)
 	}
 
-	err = b.Put(serializedKey, serializedEvent)
+	err = b.Put(key, serializedEvent)
 	if err != nil {
 		return fmt.Errorf("kv put: %w", err)
 	}
@@ -130,4 +136,100 @@ func (e *EventsByType) Rebuild(ctx context.Context, jr journalreader.Reader) err
 	}
 
 	return nil
+}
+
+func (e *EventsByType) Get(ctx context.Context, eventType string, id uuid.UUID) (*journal.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
+	default:
+	}
+
+	serializedType := []byte(eventType)
+	serializedID, err := id.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("serialization: %w", err)
+	}
+
+	key := make([]byte, 0, len(serializedType)+len(serializedID))
+	key = append(key, serializedType...)
+	// separator for the string type, because it can be
+	// arbitrarily large
+	key = append(key, 0)
+	key = append(key, serializedID...)
+
+	kv := e.kv.DB()
+
+	var event *journal.Event
+	err = kv.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketNameEventsByType))
+		if b == nil {
+			return nil
+		}
+
+		serializedEvent := b.Get(key)
+		if serializedEvent == nil {
+			return nil
+		}
+
+		var decoded journal.Event
+		err = json.Unmarshal(serializedEvent, &decoded)
+		if err != nil {
+			return fmt.Errorf("deserialization: %w", err)
+		}
+
+		event = &decoded
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("kv view: %w", err)
+	}
+
+	return event, nil
+}
+
+func (e *EventsByType) List(ctx context.Context, eventType string) ([]journal.Event, error) {
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
+	default:
+	}
+
+	serializedType := []byte(eventType)
+
+	prefix := make([]byte, 0, len(serializedType)+1)
+	prefix = append(prefix, serializedType...)
+	// separator for the string type, because it can be
+	// arbitrarily large
+	prefix = append(prefix, 0)
+
+	kv := e.kv.DB()
+
+	events := []journal.Event{}
+	err := kv.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketNameEventsByType))
+		if b == nil {
+			return nil
+		}
+
+		c := b.Cursor()
+
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var event journal.Event
+			err := json.Unmarshal(v, &event)
+			if err != nil {
+				return fmt.Errorf("deserialization: %w", err)
+			}
+
+			events = append(events, event)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("kv view: %w", err)
+	}
+
+	return events, nil
 }

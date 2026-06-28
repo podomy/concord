@@ -35,7 +35,10 @@ func (e *EventsByID) putEvent(b *bolt.Bucket, event journal.Event) error {
 		return fmt.Errorf("serialization: %w", err)
 	}
 
-	err = b.Put(serializedEventID, serializedEvent)
+	key := make([]byte, 0, len(serializedEventID))
+	key = append(key, serializedEventID...)
+
+	err = b.Put(key, serializedEvent)
 	if err != nil {
 		return fmt.Errorf("bucket put kv: %w", err)
 	}

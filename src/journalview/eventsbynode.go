@@ -31,22 +31,26 @@ type EventsByNodeKey struct {
 }
 
 func (e *EventsByNode) putEvent(b *bolt.Bucket, event journal.Event) error {
+	serializedNodeID, err := event.NodeID.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("serialization: %w", err)
+	}
+
+	serializedID, err := event.ID.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("serialization: %w", err)
+	}
+
+	key := make([]byte, 0, len(serializedNodeID)+len(serializedID))
+	key = append(key, serializedNodeID...)
+	key = append(key, serializedID...)
+
 	serializedEvent, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("serialization: %w", err)
 	}
 
-	key := EventsByNodeKey{
-		NodeID: event.NodeID,
-		ID:     event.ID,
-	}
-
-	serializedKey, err := json.Marshal(key)
-	if err != nil {
-		return fmt.Errorf("serialization: %w", err)
-	}
-
-	err = b.Put(serializedKey, serializedEvent)
+	err = b.Put(key, serializedEvent)
 	if err != nil {
 		return fmt.Errorf("bucket put kv: %w", err)
 	}
