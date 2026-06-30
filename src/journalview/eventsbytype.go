@@ -22,12 +22,18 @@ import (
 const bucketNameEventsByType = "eventsbytype"
 
 type EventsByType struct {
-	kv kvstore.KVStore
+	kv *kvstore.KVStore
 }
 
 type EventsByTypeKey struct {
 	EventType string    `json:"event_type"`
 	ID        uuid.UUID `json:"id"`
+}
+
+func NewEventsByType(kv *kvstore.KVStore) *EventsByType {
+	return &EventsByType{
+		kv: kv,
+	}
 }
 
 func (e *EventsByType) putEvent(b *bolt.Bucket, event journal.Event) error {

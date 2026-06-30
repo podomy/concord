@@ -1,26 +1,25 @@
 // Copyright (C) 2026 Podomy.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+//nolint:dupl // Projection tests intentionally keep view-specific setup and assertions local.
 package journalview
 
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/kvstore"
 )
 
-func TestEventsByIDGet(t *testing.T) {
+func TestEventsByNodeGet(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	kv := testKVStore(t)
-	view := NewEventsByID(kv)
+	view := NewEventsByNode(kv)
 
 	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
 
@@ -28,34 +27,17 @@ func TestEventsByIDGet(t *testing.T) {
 		t.Fatalf("apply event: %v", err)
 	}
 
-	got, err := view.Get(ctx, event.ID)
+	got, err := view.Get(ctx, event.NodeID, event.ID)
 	if err != nil {
 		t.Fatalf("get event: %v", err)
 	}
 	if got == nil {
 		t.Fatalf("expected event got nil")
 	}
+	if got.NodeID != event.NodeID {
+		t.Fatalf("expected node ID %s, got %s", event.NodeID, got.NodeID)
+	}
 	if got.ID != event.ID {
 		t.Fatalf("expected event ID %s, got %s", event.ID, got.ID)
 	}
-}
-
-// This function sits really awkwardly here, I have no options
-// in my mind to place it somewhere better. It is used for the
-// tests in the journalview package.
-func testKVStore(t *testing.T) *kvstore.KVStore {
-	t.Helper()
-
-	kv, err := kvstore.OpenDBPath(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open db path: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := kv.Close(); err != nil {
-			t.Fatalf("test close db: %v", err)
-		}
-	})
-
-	return kv
 }
