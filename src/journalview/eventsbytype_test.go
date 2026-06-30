@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 
 	"github.com/podomy/hive/src/journal"
@@ -39,5 +41,46 @@ func TestEventsByTypeGet(t *testing.T) {
 	}
 	if got.ID != event.ID {
 		t.Fatalf("expected event ID %s, got %s", event.ID, got.ID)
+	}
+}
+
+func TestEventsByTypeList(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+
+	eventType := "node.started"
+	event1 := journal.NewEvent(uuid.New(), eventType, json.RawMessage(`{}`))
+	event2 := journal.NewEvent(uuid.New(), eventType, json.RawMessage(`{}`))
+	event3 := journal.NewEvent(uuid.New(), "node.restarting", json.RawMessage(`{}`))
+	sampleJournalEvents := []journal.Event{}
+	sampleJournalEvents = append(sampleJournalEvents, event1)
+	sampleJournalEvents = append(sampleJournalEvents, event2)
+	sampleJournalEvents = append(sampleJournalEvents, event3)
+	for _, sampleEvent := range sampleJournalEvents {
+		err := view.Apply(ctx, sampleEvent)
+		if err != nil {
+			t.Fatalf("view apply: %v", err)
+		}
+	}
+
+	// This is the journal list we expect after doing view.List
+	// it won't contain the event3
+	expectedJournalEvents := []journal.Event{}
+	expectedJournalEvents = append(expectedJournalEvents, event1)
+	expectedJournalEvents = append(expectedJournalEvents, event2)
+
+	journalEvents, err := view.List(ctx, eventType)
+	if err != nil {
+		t.Fatalf("view list: %v", err)
+	}
+	sortEventsByTimestamp := cmpopts.SortSlices(func(a, b journal.Event) bool { return a.Timestamp.After(b.Timestamp) })
+	// We compare the journals exactly, and before comparing them we sort them
+	// in order, because bbolt cursor returns the events in unordered slice.
+	// If we don't order both we get an error of the slices not matching.
+	if diff := cmp.Diff(expectedJournalEvents, journalEvents, sortEventsByTimestamp); diff != "" {
+		t.Fatalf("events mismatch (-want +got):\n%s", diff)
 	}
 }
