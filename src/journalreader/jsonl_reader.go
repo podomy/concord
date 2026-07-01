@@ -45,6 +45,11 @@ func OpenJSONLReader() (*JSONLReader, error) {
 		return nil, err
 	}
 
+	return OpenJSONLReaderPath(path)
+}
+
+// OpenJSONLReaderPath opens the journal file at the provided path for reading.
+func OpenJSONLReaderPath(path string) (*JSONLReader, error) {
 	// #nosec G304: journal paths are local runtime configuration.
 	file, err := os.Open(path)
 	if err != nil {

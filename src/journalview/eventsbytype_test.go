@@ -44,6 +44,68 @@ func TestEventsByTypeGet(t *testing.T) {
 	}
 }
 
+func TestEventsByTypeApplyCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
+
+	if err := view.Apply(ctx, event); err == nil {
+		t.Fatalf("expected apply cancellation error")
+	}
+}
+
+func TestEventsByTypeGetCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+
+	if _, err := view.Get(ctx, "node.started", uuid.New()); err == nil {
+		t.Fatalf("expected get cancellation error")
+	}
+}
+
+func TestEventsByTypeGetMissingBucket(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+
+	got, err := view.Get(ctx, "node.started", uuid.New())
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil event, got %v", got)
+	}
+}
+
+func TestEventsByTypeGetMissingKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
+
+	if err := view.Apply(ctx, event); err != nil {
+		t.Fatalf("apply event: %v", err)
+	}
+
+	got, err := view.Get(ctx, event.Type, uuid.New())
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil event, got %v", got)
+	}
+}
+
 func TestEventsByTypeList(t *testing.T) {
 	t.Parallel()
 
@@ -82,5 +144,54 @@ func TestEventsByTypeList(t *testing.T) {
 	// If we don't order both we get an error of the slices not matching.
 	if diff := cmp.Diff(expectedJournalEvents, journalEvents, sortEventsByTimestamp); diff != "" {
 		t.Fatalf("events mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEventsByTypeListCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+
+	if _, err := view.List(ctx, "node.started"); err == nil {
+		t.Fatalf("expected list cancellation error")
+	}
+}
+
+func TestEventsByTypeListMissingBucket(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+
+	journalEvents, err := view.List(ctx, "node.started")
+	if err != nil {
+		t.Fatalf("view list: %v", err)
+	}
+	if len(journalEvents) != 0 {
+		t.Fatalf("expected no events, got %d", len(journalEvents))
+	}
+}
+
+func TestEventsByTypeListMissingKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByType(kv)
+	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
+
+	if err := view.Apply(ctx, event); err != nil {
+		t.Fatalf("apply event: %v", err)
+	}
+
+	journalEvents, err := view.List(ctx, "node.running")
+	if err != nil {
+		t.Fatalf("view list: %v", err)
+	}
+	if len(journalEvents) != 0 {
+		t.Fatalf("expected no events, got %d", len(journalEvents))
 	}
 }

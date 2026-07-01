@@ -69,9 +69,45 @@ func getJournalPath() (string, error) {
 	return filepath.Join(appDir, "journal.jsonl"), nil
 }
 
+// TestGetJournalPath returns the auto-determined path for the local journal file.
+func TestGetJournalPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("get user config directory: %w", err)
+	}
+
+	appDir := filepath.Join(dir, "hive")
+	if err := os.MkdirAll(appDir, 0o700); err != nil {
+		return "", fmt.Errorf("create node config directory: %w", err)
+	}
+
+	return filepath.Join(appDir, "test_journal.jsonl"), nil
+}
+
 // OpenJSONL opens a JSONL journal file at the auto-determined path, creating it if it doesn't exist.
 func OpenJSONL() (*JSONL, error) {
 	path, err := getJournalPath()
+	if err != nil {
+		return nil, err
+	}
+
+	return OpenJSONLPath(path)
+}
+
+// OpenJSONLPath opens a JSONL journal file at the provided path, creating it if it doesn't exist.
+func OpenJSONLPath(path string) (*JSONL, error) {
+	// #nosec G304: journal paths are local runtime configuration.
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open journal: %w", err)
+	}
+
+	return &JSONL{file: file}, nil
+}
+
+// TestOpenJSONL opens a JSONL journal file at the auto-determined path, creating it if it doesn't exist.
+func TestOpenJSONL() (*JSONL, error) {
+	path, err := TestGetJournalPath()
 	if err != nil {
 		return nil, err
 	}
@@ -83,4 +119,18 @@ func OpenJSONL() (*JSONL, error) {
 	}
 
 	return &JSONL{file: file}, nil
+}
+
+func TestDeleteOpenJSONL() error {
+	path, err := TestGetJournalPath()
+	if err != nil {
+		return fmt.Errorf("get test journal path: %w", err)
+	}
+
+	err = os.Remove(path)
+	if err != nil {
+		return fmt.Errorf("remove test journal: %w", err)
+	}
+
+	return nil
 }

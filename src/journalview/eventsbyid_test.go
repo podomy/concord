@@ -42,6 +42,68 @@ func TestEventsByIDGet(t *testing.T) {
 	}
 }
 
+func TestEventsByIDApplyCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
+
+	if err := view.Apply(ctx, event); err == nil {
+		t.Fatalf("expected apply cancellation error")
+	}
+}
+
+func TestEventsByIDGetCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+
+	if _, err := view.Get(ctx, uuid.New()); err == nil {
+		t.Fatalf("expected get cancellation error")
+	}
+}
+
+func TestEventsByIDGetMissingBucket(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+
+	got, err := view.Get(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil event, got %v", got)
+	}
+}
+
+func TestEventsByIDGetMissingKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+	event := journal.NewEvent(uuid.New(), "node.started", json.RawMessage(`{}`))
+
+	if err := view.Apply(ctx, event); err != nil {
+		t.Fatalf("apply event: %v", err)
+	}
+
+	got, err := view.Get(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("get event: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil event, got %v", got)
+	}
+}
+
 func TestEventsByIDList(t *testing.T) {
 	t.Parallel()
 
@@ -73,6 +135,41 @@ func TestEventsByIDList(t *testing.T) {
 	// If we don't order both we get an error of the slices not matching.
 	if diff := cmp.Diff(sampleJournalEvents, journalEvents, sortEventsByTimestamp); diff != "" {
 		t.Fatalf("events mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEventsByIDListCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := cancelledContext()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+
+	if _, err := view.List(ctx); err == nil {
+		t.Fatalf("expected list cancellation error")
+	}
+}
+
+func cancelledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	return ctx
+}
+
+func TestEventsByIDListMissingBucket(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewEventsByID(kv)
+
+	journalEvents, err := view.List(ctx)
+	if err != nil {
+		t.Fatalf("view list: %v", err)
+	}
+	if len(journalEvents) != 0 {
+		t.Fatalf("expected no events, got %d", len(journalEvents))
 	}
 }
 
