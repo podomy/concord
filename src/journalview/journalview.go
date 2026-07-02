@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/journalreader"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/journalreader"
 )
 
 func checkContext(ctx context.Context, message string) error {

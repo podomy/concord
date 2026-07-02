@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/podomy/hive/src/journalreader"
-	"github.com/podomy/hive/src/journalview"
-	"github.com/podomy/hive/src/kvstore"
+	"github.com/podomy/concord/src/journalreader"
+	"github.com/podomy/concord/src/journalview"
+	"github.com/podomy/concord/src/kvstore"
 )
 
 // newViews initializes all journal views backed by the provided key-value store.

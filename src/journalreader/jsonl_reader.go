@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/podomy/hive/src/journal"
+	"github.com/podomy/concord/src/journal"
 )
 
 // JSONLReader reads journal events from a JSONL file sequentially.
@@ -28,7 +28,7 @@ func getJournalPath() (string, error) {
 		return "", fmt.Errorf("get user config directory: %w", err)
 	}
 
-	appDir := filepath.Join(dir, "hive")
+	appDir := filepath.Join(dir, "concord")
 	if err := os.MkdirAll(appDir, 0o700); err != nil {
 		return "", fmt.Errorf("create config directory: %w", err)
 	}

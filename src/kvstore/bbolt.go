@@ -23,7 +23,7 @@ func openDB() (*bolt.DB, error) {
 		return nil, fmt.Errorf("get user config directory: %w", err)
 	}
 
-	appDir := filepath.Join(dir, "hive")
+	appDir := filepath.Join(dir, "concord")
 	if err := os.MkdirAll(appDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create config directory: %w", err)
 	}

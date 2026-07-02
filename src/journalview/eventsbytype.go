@@ -14,9 +14,9 @@ import (
 	bolt "go.etcd.io/bbolt"
 	berrors "go.etcd.io/bbolt/errors"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/journalreader"
-	"github.com/podomy/hive/src/kvstore"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/journalreader"
+	"github.com/podomy/concord/src/kvstore"
 )
 
 const bucketNameEventsByType = "eventsbytype"

@@ -9,11 +9,11 @@ formatters:
     - goimports
   settings:
     gofumpt:
-      module-path: github.com/podomy/hive
+      module-path: github.com/podomy/concord
       extra-rules: true
     goimports:
       local-prefixes:
-        - github.com/podomy/hive
+        - github.com/podomy/concord
 
 linters:
   default: none

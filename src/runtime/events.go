@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/journalview"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/journalview"
 )
 
 // recordEvent appends an event to the journal and applies it to every configured view.

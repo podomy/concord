@@ -1,16 +1,16 @@
-# Hive
+# Concord
 
-Hive is a runtime and control layer for running software across machine
+Concord is a runtime and control layer for running software across machine
 fleets in environments with poor connectivity and conditions that degrade
 electronics and communication, such as space, remote terrain,
-underground sites, or the sea. Hive is built for clusters that segment,
+underground sites, or the sea. Concord is built for clusters that segment,
 keep operating locally, and meet again later.
 
-Hive is designed for mathematical consistency. Each segment can keep
+Concord is designed for mathematical consistency. Each segment can keep
 operating from local knowledge, and when segments meet again their state
 is reconciled by explicit rules instead of a hidden central truth.
 
-## What Hive Is For
+## What Concord Is For
 
 - Machine fleets that cannot depend on continuous connectivity
 - Remote systems where communication degrades or disappears
@@ -23,10 +23,10 @@ is reconciled by explicit rules instead of a hidden central truth.
 
 ## Kubernetes Compatibility
 
-Hive is not standard Kubernetes. It may support Kubernetes-like
+Concord is not standard Kubernetes. It may support Kubernetes-like
 deployment workflows, but it does not promise a coherent cluster
 network, a central control plane, or one always-current source of truth.
-If your software needs one live global truth, Hive is the wrong place to
+If your software needs one live global truth, Concord is the wrong place to
 run it. Cluster segmentation is expected. Local operation and later
 reconciliation are part of the model.
 
@@ -42,5 +42,5 @@ the moment.
 
 ## License
 
-Hive is distributed under the GNU Affero General Public License v3.0 or
+Concord is distributed under the GNU Affero General Public License v3.0 or
 later. See [LICENSE](./LICENSE).

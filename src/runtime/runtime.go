@@ -10,8 +10,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/node"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/node"
 )
 
 // Run performs application startup, blocks for the process lifetime, and handles graceful shutdown.

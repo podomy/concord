@@ -11,8 +11,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/podomy/hive/src/logs"
-	hiveruntime "github.com/podomy/hive/src/runtime"
+	"github.com/podomy/concord/src/logs"
+	concordruntime "github.com/podomy/concord/src/runtime"
 )
 
 // main initialises the logger, sets up signal-based shutdown, and runs the node runtime.
@@ -31,7 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := hiveruntime.Run(ctx, logger); err != nil {
+	if err := concordruntime.Run(ctx, logger); err != nil {
 		logger.Fatal("runtime error", zap.Error(err))
 	}
 }

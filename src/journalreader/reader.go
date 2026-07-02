@@ -6,7 +6,7 @@ package journalreader
 import (
 	"context"
 
-	"github.com/podomy/hive/src/journal"
+	"github.com/podomy/concord/src/journal"
 )
 
 // Reader reads events from the journal sequentially.

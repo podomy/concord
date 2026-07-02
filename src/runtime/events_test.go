@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/journalview"
-	"github.com/podomy/hive/src/kvstore"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/journalview"
+	"github.com/podomy/concord/src/kvstore"
 )
 
 func TestRecordEvent(t *testing.T) {

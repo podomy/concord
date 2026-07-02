@@ -13,7 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 
-	"github.com/podomy/hive/src/journal"
+	"github.com/podomy/concord/src/journal"
 )
 
 func TestEventsByNodeGet(t *testing.T) {

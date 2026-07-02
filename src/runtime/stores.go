@@ -6,8 +6,8 @@ package runtime
 import (
 	"fmt"
 
-	"github.com/podomy/hive/src/journal"
-	"github.com/podomy/hive/src/kvstore"
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/kvstore"
 )
 
 // stores groups the runtime's persistent storage handles.

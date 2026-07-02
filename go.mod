@@ -1,4 +1,4 @@
-module github.com/podomy/hive
+module github.com/podomy/concord
 
 go 1.25.0
 
