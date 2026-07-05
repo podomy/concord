@@ -5,13 +5,11 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/netip"
 
 	"go.uber.org/zap"
 
-	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/node"
 )
 
@@ -52,9 +50,8 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Create a startup event and persist it before announcing readiness.
-	event := journal.NewEvent(nodeConfig.ID, "node.started", json.RawMessage(`{}`))
-	if err = recordEventAndLog(ctx, logger, st.journal, views, event, "node runtime started"); err != nil {
-		return fmt.Errorf("append startup event: %w", err)
+	if err = recordNodeStarted(ctx, logger, st.journal, views, nodeConfig.ID, nodeConfig.PeerAddress); err != nil {
+		return err
 	}
 
 	// Initialize the peer service.
