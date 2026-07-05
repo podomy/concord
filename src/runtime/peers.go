@@ -21,16 +21,15 @@ import (
 )
 
 func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig) (*peerdiscovery.MemberService, error) {
-	const address = "0.0.0.0:7946"
 	localNode := peerdiscovery.Node{
 		ID:      nodeConfig.ID,
-		Address: netip.MustParseAddrPort(address),
+		Address: netip.MustParseAddrPort(nodeConfig.PeerAddress.String()),
 	}
 	peerService, err := peerdiscovery.Start(localNode, nil)
 	if err != nil {
 		return nil, fmt.Errorf("start peer discovery: %w", err)
 	}
-	logger.Info("peer discovery started", zap.String("address", address))
+	logger.Info("peer discovery started", zap.String("address", nodeConfig.PeerAddress.String()))
 
 	return peerService, nil
 }

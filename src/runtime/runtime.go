@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 
 	"go.uber.org/zap"
 
@@ -20,6 +21,11 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	nodeConfig, err := node.LoadOrCreateNodeConfig()
 	if err != nil {
 		return fmt.Errorf("load node config: %w", err)
+	}
+
+	// The ip address and port
+	if !nodeConfig.PeerAddress.IsValid() {
+		nodeConfig.PeerAddress = netip.MustParseAddrPort("0.0.0.0:7946")
 	}
 
 	st, err := openStores()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 
@@ -15,7 +16,8 @@ import (
 )
 
 type NodeConfig struct {
-	ID uuid.UUID `json:"id"`
+	PeerAddress netip.AddrPort `json:"peer_address"`
+	ID          uuid.UUID      `json:"id"`
 }
 
 // getNodeConfigPath returns the auto-determined path for the local node config.
