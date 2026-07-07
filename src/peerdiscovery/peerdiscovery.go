@@ -5,6 +5,8 @@ package peerdiscovery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/netip"
 
 	"github.com/google/uuid"
@@ -63,43 +65,53 @@ func NewMultiResolver(resolvers ...Resolver) *MultiResolver {
 
 // Resolve calls every configured resolver and deduplicates the results.
 func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
-	type result struct {
-		addrs []netip.AddrPort
-		err   error
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
+	default:
 	}
 
-	ch := make(chan result, len(m.resolvers))
-	for _, r := range m.resolvers {
-		go func() {
-			addrs, err := r.Resolve(ctx)
-			ch <- result{addrs: addrs, err: err}
-		}()
-	}
+	// All of the addresses we will get from the
+	// resolvers will be stored here.
+	addresses := make(map[netip.AddrPort]struct{}, 0)
 
-	seen := map[string]struct{}{}
-	var out []netip.AddrPort
-
-	for range m.resolvers {
-		res := <-ch
-		if res.err != nil {
+	// We fail only if all of the resolvers fail
+	var errs []error
+	for _, resolver := range m.resolvers {
+		tempAddresses, err := resolver.Resolve(ctx)
+		if err != nil {
+			errs = append(errs, err)
 			continue
 		}
 
-		for _, addr := range res.addrs {
-			s := addr.String()
-			if _, ok := seen[s]; ok {
-				continue
-			}
-			seen[s] = struct{}{}
-			out = append(out, addr)
+		for _, address := range tempAddresses {
+			addresses[address] = struct{}{}
 		}
+
 	}
 
-	return out, nil
+	if len(addresses) == 0 && len(errs) > 0 {
+		combinedError := errors.Join(errs...)
+		return nil, fmt.Errorf("all resolvers failed: %w", combinedError)
+	}
+
+	result := make([]netip.AddrPort, 0, len(addresses))
+	for address := range addresses {
+		result = append(result, address)
+	}
+
+	return result, nil
 }
 
-// Default mDNS and DNS SRV service identifiers for Concord peer discovery.
-// Implementations should use these constants to ensure interoperability.
+// Service identifiers for Concord peer discovery. The format follows RFC 6763.
+//
+// * MDNSService (_concord._udp) is used for mDNS / LAN discovery.
+// Nodes on the same local network advertise themselves via multicast.
+// Other nodes discover them by browsing for this service.
+//
+// * DNSSRVService (_concord._tcp) is used for DNS SRV record discovery.
+// Operators add SRV records to a DNS zone so nodes can resolve candidate
+// peer addresses through standard DNS queries.
 const (
 	MDNSService   = "_concord._udp"
 	DNSSRVService = "_concord._tcp"
