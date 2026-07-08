@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
