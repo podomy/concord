@@ -1,13 +1,12 @@
 // Copyright (C) 2026 Podomy.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package runtime
+package peerdiscovery
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"time"
 
 	"go.uber.org/zap"
@@ -16,33 +15,20 @@ import (
 
 	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/journalview"
-	"github.com/podomy/concord/src/node"
-	"github.com/podomy/concord/src/peerdiscovery"
 )
 
-func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig) (*peerdiscovery.MemberService, error) {
-	localNode := peerdiscovery.Node{
-		ID:      nodeConfig.ID,
-		Address: netip.MustParseAddrPort(nodeConfig.PeerAddress.String()),
-	}
-	peerService, err := peerdiscovery.Start(localNode, nil)
-	if err != nil {
-		return nil, fmt.Errorf("start peer discovery: %w", err)
-	}
-	logger.Info("peer discovery started", zap.String("address", nodeConfig.PeerAddress.String()))
-
-	return peerService, nil
-}
-
-func observePeers(
+// ObservePeers polls the memberlist every 5 seconds, diffs the result against
+// the previous snapshot, and records peer.seen, peer.updated, and peer.lost
+// events. It blocks until the context is cancelled.
+func ObservePeers(
 	ctx context.Context,
 	logger *zap.Logger,
 	localNodeID uuid.UUID,
-	memberService *peerdiscovery.MemberService,
+	memberService *MemberService,
 	j journal.Journal,
 	views []journalview.View,
 ) {
-	previous := map[uuid.UUID]peerdiscovery.Node{}
+	previous := map[uuid.UUID]Node{}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -67,11 +53,11 @@ func pollPeerChanges(
 	ctx context.Context,
 	logger *zap.Logger,
 	localNodeID uuid.UUID,
-	memberService *peerdiscovery.MemberService,
+	memberService *MemberService,
 	j journal.Journal,
 	views []journalview.View,
-	previous map[uuid.UUID]peerdiscovery.Node,
-) (map[uuid.UUID]peerdiscovery.Node, error) {
+	previous map[uuid.UUID]Node,
+) (map[uuid.UUID]Node, error) {
 	currentMembers, err := memberService.Members()
 	if err != nil {
 		return nil, fmt.Errorf("list peer members: %w", err)
@@ -84,8 +70,8 @@ func pollPeerChanges(
 	return current, nil
 }
 
-func currentPeerMap(localNodeID uuid.UUID, members []peerdiscovery.Node) map[uuid.UUID]peerdiscovery.Node {
-	current := map[uuid.UUID]peerdiscovery.Node{}
+func currentPeerMap(localNodeID uuid.UUID, members []Node) map[uuid.UUID]Node {
+	current := map[uuid.UUID]Node{}
 	for _, member := range members {
 		if member.ID == localNodeID {
 			continue
@@ -103,8 +89,8 @@ func recordSeenOrUpdatedPeers(
 	j journal.Journal,
 	views []journalview.View,
 	localNodeID uuid.UUID,
-	previous map[uuid.UUID]peerdiscovery.Node,
-	current map[uuid.UUID]peerdiscovery.Node,
+	previous map[uuid.UUID]Node,
+	current map[uuid.UUID]Node,
 ) {
 	for id, member := range current {
 		old, exists := previous[id]
@@ -129,8 +115,8 @@ func recordLostPeers(
 	j journal.Journal,
 	views []journalview.View,
 	localNodeID uuid.UUID,
-	previous map[uuid.UUID]peerdiscovery.Node,
-	current map[uuid.UUID]peerdiscovery.Node,
+	previous map[uuid.UUID]Node,
+	current map[uuid.UUID]Node,
 ) {
 	for id, old := range previous {
 		if _, exists := current[id]; !exists {
@@ -142,12 +128,12 @@ func recordLostPeers(
 }
 
 type peerEventPayload struct {
-	Address string                  `json:"address"`
-	State   peerdiscovery.NodeState `json:"state"`
-	PeerID  uuid.UUID               `json:"peer_id"`
+	Address string    `json:"address"`
+	State   NodeState `json:"state"`
+	PeerID  uuid.UUID `json:"peer_id"`
 }
 
-func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, localNodeID uuid.UUID, eventType string, peer peerdiscovery.Node) error {
+func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, localNodeID uuid.UUID, eventType string, peer Node) error {
 	payload, err := json.Marshal(peerEventPayload{
 		PeerID:  peer.ID,
 		Address: peer.Address.String(),
@@ -158,7 +144,7 @@ func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal,
 	}
 
 	event := journal.NewEvent(localNodeID, eventType, payload)
-	if err := recordEventAndLog(ctx, logger, j, views, event, eventType,
+	if err := journalview.RecordEventAndLog(ctx, logger, j, views, event, eventType,
 		zap.String("peer_id", peer.ID.String()),
 		zap.String("peer_address", peer.Address.String()),
 		zap.String("peer_state", string(peer.State)),

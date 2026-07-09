@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Podomy.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package runtime
+package journalview
 
 import (
 	"context"
@@ -13,21 +13,21 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/journal"
-	"github.com/podomy/concord/src/journalview"
 )
 
-func recordNodeStarted(
+// RecordNodeStarted creates a node.started event and persists it.
+func RecordNodeStarted(
 	ctx context.Context,
 	logger *zap.Logger,
 	j journal.Journal,
-	views []journalview.View,
+	views []View,
 	nodeID uuid.UUID,
 	peerAddress netip.AddrPort,
 ) error {
 	payload := []byte(`{"peer_address":` + strconv.Quote(peerAddress.String()) + `}`)
 
 	event := journal.NewEvent(nodeID, "node.started", payload)
-	if err := recordEventAndLog(ctx, logger, j, views, event, "node runtime started",
+	if err := RecordEventAndLog(ctx, logger, j, views, event, "node runtime started",
 		zap.String("peer_address", peerAddress.String()),
 	); err != nil {
 		return fmt.Errorf("append startup event: %w", err)
@@ -36,8 +36,8 @@ func recordNodeStarted(
 	return nil
 }
 
-// recordEvent appends an event to the journal and applies it to every configured view.
-func recordEvent(ctx context.Context, j journal.Journal, views []journalview.View, event journal.Event) error {
+// RecordEvent appends an event to the journal and applies it to every configured view.
+func RecordEvent(ctx context.Context, j journal.Journal, views []View, event journal.Event) error {
 	if err := j.Append(ctx, event); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
@@ -51,17 +51,17 @@ func recordEvent(ctx context.Context, j journal.Journal, views []journalview.Vie
 	return nil
 }
 
-// recordEventAndLog appends an event, applies it to views, and logs the persisted event.
-func recordEventAndLog(
+// RecordEventAndLog appends an event, applies it to views, and logs the persisted event.
+func RecordEventAndLog(
 	ctx context.Context,
 	logger *zap.Logger,
 	j journal.Journal,
-	views []journalview.View,
+	views []View,
 	event journal.Event,
 	message string,
 	fields ...zap.Field,
 ) error {
-	if err := recordEvent(ctx, j, views, event); err != nil {
+	if err := RecordEvent(ctx, j, views, event); err != nil {
 		return err
 	}
 

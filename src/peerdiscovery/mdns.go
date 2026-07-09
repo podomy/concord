@@ -9,13 +9,18 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/mdns"
 )
 
-// MDNSResolver discovers Concord peers on the local network using multicast DNS.
+type MDNSResolver struct {
+	Timeout time.Duration
+}
+
+// Resolve discovers Concord peers on the local network using multicast DNS.
 // It browses for the configured mDNS service and returns discovered peer addresses.
-func MDNSResolver(ctx context.Context) ([]netip.AddrPort, error) {
+func (m *MDNSResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
@@ -23,7 +28,7 @@ func MDNSResolver(ctx context.Context) ([]netip.AddrPort, error) {
 	}
 
 	// Browse the local network for the concord nodes
-	serviceEntries, err := mdnsBrowse(ctx)
+	serviceEntries, err := m.mdnsBrowse(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("browsing the local network: %w", err)
 	}
@@ -66,8 +71,8 @@ func entryToAddrPort(entry *mdns.ServiceEntry) (netip.AddrPort, bool) {
 }
 
 // mdnsBrowse sends a multicast mDNS query for the Concord service and returns
-// all discovered service entries. It blocks for the default Lookup timeout (1s).
-func mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, error) {
+// all discovered service entries found within the resolver's timeout.
+func (m *MDNSResolver) mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, error) {
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
@@ -85,9 +90,15 @@ func mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, error) {
 		}
 	})
 
-	// mdns.Lookup sends a single multicast query and collects responses
-	// for the default timeout (1 second), then returns. It is not indefinite.
-	err := mdns.Lookup(MDNSService, entriesCh)
+	// mdns.Query sends a single multicast query and collects responses
+	// until the configured timeout, then returns. It is not indefinite.
+	params := mdns.DefaultParams(MDNSService)
+	params.Timeout = m.Timeout
+	if params.Timeout == 0 {
+		params.Timeout = time.Second
+	}
+	params.Entries = entriesCh
+	err := mdns.Query(params)
 	close(entriesCh)
 
 	wg.Wait()
