@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
+	github.com/miekg/dns v1.1.72
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 )
@@ -21,7 +22,6 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/golang-lru v0.5.0 // indirect
-	github.com/miekg/dns v1.1.72 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/mod v0.31.0 // indirect
