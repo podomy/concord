@@ -61,7 +61,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go peerdiscovery.ObservePeers(ctx, logger, nodeConfig.ID, peerService, st.journal, views)
 
 	// Start the DNS server
-	err = dnsserver.Start(peerService)
+	err = dnsserver.Start(peerService, logger)
 	if err != nil {
 		return fmt.Errorf("dns server start failed: %w", err)
 	}

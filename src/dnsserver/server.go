@@ -4,9 +4,8 @@
 package dnsserver
 
 import (
-	"fmt"
-
 	"github.com/miekg/dns"
+	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/peerdiscovery"
 )
@@ -49,10 +48,14 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
-func Start(memberService *peerdiscovery.MemberService) error {
+func Start(memberService *peerdiscovery.MemberService, logger *zap.Logger) error {
 	srv := &dns.Server{Addr: ":8053", Net: "udp", Handler: &handler{memberService: memberService}}
-	if err := srv.ListenAndServe(); err != nil {
-		return fmt.Errorf("dns server: %w", err)
-	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			logger.Error("dns server", zap.Error(err))
+		}
+	}()
+
 	return nil
 }
