@@ -4,11 +4,15 @@
 package dnsserver
 
 import (
+	"strings"
+
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/peerdiscovery"
 )
+
+const TLDConcord = ".concord.local."
 
 type handler struct {
 	memberService *peerdiscovery.MemberService
@@ -27,21 +31,32 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	switch r.Question[0].Qtype {
 	// return all members we know as SRV records
+	// SRV query: _concord._tcp.<domain>
 	case dns.TypeSRV:
+		if !strings.HasPrefix(r.Question[0].Name, peerdiscovery.DNSSRVService) {
+			msg.Rcode = dns.RcodeNameError
+			_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
+			return
+		}
+
 		for _, node := range nodes {
 			msg.Answer = append(msg.Answer, &dns.SRV{
 				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
-				Target: node.ID.String() + ".concord.local.",
+				Target: node.ID.String() + TLDConcord,
 				Port:   node.Address.Port(),
 			})
 		}
 	// return all member we know as A records
+	// A query: <UUID>.concord.local.
 	case dns.TypeA:
 		for _, node := range nodes {
-			msg.Answer = append(msg.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-				A:   node.Address.Addr().AsSlice(),
-			})
+			target := node.ID.String() + TLDConcord
+			if dns.Fqdn(r.Question[0].Name) == target {
+				msg.Answer = append(msg.Answer, &dns.A{
+					Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+					A:   node.Address.Addr().AsSlice(),
+				})
+			}
 		}
 	}
 
