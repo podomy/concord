@@ -5,37 +5,52 @@ package dnsserver
 
 import (
 	"fmt"
-	"net"
 
 	"github.com/miekg/dns"
+
+	"github.com/podomy/concord/src/peerdiscovery"
 )
 
-type handler struct{}
+type handler struct {
+	memberService *peerdiscovery.MemberService
+}
 
 func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := dns.Msg{}
 	msg.SetReply(r)
+
+	nodes, err := h.memberService.Members()
+	if err != nil {
+		msg.Rcode = dns.RcodeServerFailure
+		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
+		return
+	}
+
 	switch r.Question[0].Qtype {
-	// return SRV record pointing to this node
+	// return all members we know as SRV records
 	case dns.TypeSRV:
-		msg.Answer = append(msg.Answer, &dns.SRV{
-			Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
-			Target: "node1.concord.local.",
-			Port:   7946,
-		})
-	// return A record for target
+		for _, node := range nodes {
+			msg.Answer = append(msg.Answer, &dns.SRV{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
+				Target: node.ID.String() + ".concord.local.",
+				Port:   node.Address.Port(),
+			})
+		}
+	// return all member we know as A records
 	case dns.TypeA:
-		msg.Answer = append(msg.Answer, &dns.A{
-			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-			A:   net.ParseIP("10.0.0.1"),
-		})
+		for _, node := range nodes {
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   node.Address.Addr().AsSlice(),
+			})
+		}
 	}
 
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
-func Start() error {
-	srv := &dns.Server{Addr: ":8053", Net: "udp", Handler: &handler{}}
+func Start(memberService *peerdiscovery.MemberService) error {
+	srv := &dns.Server{Addr: ":8053", Net: "udp", Handler: &handler{memberService: memberService}}
 	if err := srv.ListenAndServe(); err != nil {
 		return fmt.Errorf("dns server: %w", err)
 	}

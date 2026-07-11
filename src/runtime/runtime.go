@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/src/dnsserver"
 	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/kvstore"
 	"github.com/podomy/concord/src/node"
@@ -57,8 +58,13 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return err
 	}
 	defer shutdownPeerService(logger, peerService)
-
 	go peerdiscovery.ObservePeers(ctx, logger, nodeConfig.ID, peerService, st.journal, views)
+
+	// Start the DNS server
+	err = dnsserver.Start(peerService)
+	if err != nil {
+		return fmt.Errorf("dns server start failed: %w", err)
+	}
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
