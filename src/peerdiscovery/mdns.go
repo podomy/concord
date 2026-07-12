@@ -92,7 +92,7 @@ func (m *MDNSResolver) mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, er
 
 	// mdns.Query sends a single multicast query and collects responses
 	// until the configured timeout, then returns. It is not indefinite.
-	params := mdns.DefaultParams(MDNSService)
+	params := mdns.DefaultParams(DNSService)
 	params.Timeout = m.Timeout
 	if params.Timeout == 0 {
 		params.Timeout = time.Second

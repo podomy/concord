@@ -109,10 +109,10 @@ func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 // Nodes on the same local network advertise themselves via multicast.
 // Other nodes discover them by browsing for this service.
 //
-// * DNSSRVService (_concord._tcp) is used for DNS SRV record discovery.
-// Operators add SRV records to a DNS zone so nodes can resolve candidate
-// peer addresses through standard DNS queries.
+// * DNSService (_concord._udp) is also used for DNS SRV record discovery.
+// Nodes query each other's embedded DNS servers to discover the full
+// memberlist, extending reach beyond the local network segment.
 const (
-	MDNSService   = "_concord._udp"
-	DNSSRVService = "_concord._tcp"
+	DNSService = "_concord._udp"
+	DNSPort    = "8053"
 )
