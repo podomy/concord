@@ -7,6 +7,7 @@
 package dnsserver
 
 import (
+	"context"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -48,48 +49,63 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	switch r.Question[0].Qtype {
-	// return all members we know as SRV records
-	// SRV query: _concord._tcp.<domain>
 	case dns.TypeSRV:
-		if !strings.HasPrefix(r.Question[0].Name, peerdiscovery.DNSService) {
-			msg.Rcode = dns.RcodeNameError
-			_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
-			return
-		}
-
-		for _, node := range nodes {
-			msg.Answer = append(msg.Answer, &dns.SRV{
-				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
-				Target: node.ID.String() + tldConcord,
-				Port:   node.Address.Port(),
-			})
-			msg.Extra = append(msg.Extra, &dns.A{
-				Hdr: dns.RR_Header{Name: dns.Fqdn(node.ID.String() + tldConcord), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-				A:   node.Address.Addr().AsSlice(),
-			})
-		}
-	// return all member we know as A records
-	// A query: <UUID>.concord.local.
+		h.serveSRV(&msg, nodes, r.Question[0].Name)
 	case dns.TypeA:
-		for _, node := range nodes {
-			target := node.ID.String() + tldConcord
-			if dns.Fqdn(r.Question[0].Name) == target {
-				msg.Answer = append(msg.Answer, &dns.A{
-					Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-					A:   node.Address.Addr().AsSlice(),
-				})
-			}
-		}
+		h.serveA(&msg, nodes, r.Question[0].Name)
 	}
 
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
+// serveSRV populates msg with SRV records for all known members and
+// their corresponding A records in the additional section.
+func (h *handler) serveSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+	if !strings.HasPrefix(name, peerdiscovery.DNSService) {
+		msg.Rcode = dns.RcodeNameError
+		return
+	}
+
+	for _, node := range nodes {
+		msg.Answer = append(msg.Answer, &dns.SRV{
+			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
+			Target: node.ID.String() + tldConcord,
+			Port:   node.Address.Port(),
+		})
+		msg.Extra = append(msg.Extra, &dns.A{
+			Hdr: dns.RR_Header{Name: dns.Fqdn(node.ID.String() + tldConcord), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   node.Address.Addr().AsSlice(),
+		})
+	}
+}
+
+// serveA populates msg with A records for members matching the queried hostname.
+func (h *handler) serveA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+	for _, node := range nodes {
+		target := node.ID.String() + tldConcord
+		if dns.Fqdn(name) == target {
+			msg.Answer = append(msg.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   node.Address.Addr().AsSlice(),
+			})
+		}
+	}
+}
+
 // Start launches an embedded DNS server on port 8053 that serves Concord's
 // peer membership from the provided MemberService. It runs in a background
 // goroutine and returns immediately. Errors from ListenAndServe are logged.
-func Start(memberService *peerdiscovery.MemberService, logger *zap.Logger) error {
+func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger) error {
 	srv := &dns.Server{Addr: ":" + peerdiscovery.DNSPort, Net: "udp", Handler: &handler{memberService: memberService}}
+
+	// Graceful shutdown.
+	go func() {
+		<-ctx.Done()
+
+		if err := srv.Shutdown(); err != nil {
+			logger.Error("dns server shutdown", zap.Error(err))
+		}
+	}()
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {

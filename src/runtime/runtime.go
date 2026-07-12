@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -62,7 +63,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 
 	// Start the DNS server
 	logger.Info("DNS server starting")
-	err = dnsserver.Start(peerService, logger)
+	err = dnsserver.Start(ctx, peerService, logger)
 	if err != nil {
 		return fmt.Errorf("dns server start failed: %w", err)
 	}
@@ -104,8 +105,10 @@ func setupViews(ctx context.Context, kv *kvstore.KVStore) ([]journalview.View, e
 
 func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, error) {
 	logger.Info("mDNS resolver starting")
-	mdnsResolver := peerdiscovery.MDNSResolver{}
-	multiResolver := peerdiscovery.NewMultiResolver(&mdnsResolver)
+	mdnsResolver := peerdiscovery.MDNSResolver{Timeout: 5 * time.Second}
+	dnsSrvResolver := peerdiscovery.DNSSRVResolver{Timeout: 5 * time.Second}
+
+	multiResolver := peerdiscovery.NewMultiResolver(&mdnsResolver, &dnsSrvResolver)
 	addrs, err := multiResolver.Resolve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve: %w", err)
