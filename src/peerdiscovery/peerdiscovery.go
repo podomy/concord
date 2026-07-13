@@ -10,6 +10,9 @@ import (
 	"net/netip"
 
 	"github.com/google/uuid"
+	"github.com/hashicorp/mdns"
+
+	"github.com/podomy/concord/src/node"
 )
 
 // NodeState describes memberlist's current liveness observation for a node.
@@ -101,6 +104,32 @@ func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	}
 
 	return result, nil
+}
+
+func MDNSAdvertise(ctx context.Context, nodeConfig *node.NodeConfig) (*mdns.Server, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context cancellation: %w", err)
+	}
+
+	service, err := mdns.NewMDNSService(
+		nodeConfig.ID.String(), // unique name — use node ID string
+		DNSService,
+		"", // domain, empty = local
+		"", // hostname, empty = auto
+		int(nodeConfig.MemberlistAddress.Port()),
+		nil, // IPs, nil = all interfaces
+		nil, // TXT records optional
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mdns service creation: %w", err)
+	}
+
+	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	if err != nil {
+		return nil, fmt.Errorf("mdns server creation: %w", err)
+	}
+
+	return server, nil
 }
 
 // Service identifiers for Concord peer discovery. The format follows RFC 6763.

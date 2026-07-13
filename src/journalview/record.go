@@ -22,13 +22,13 @@ func RecordNodeStarted(
 	j journal.Journal,
 	views []View,
 	nodeID uuid.UUID,
-	peerAddress netip.AddrPort,
+	memberlistAddress netip.AddrPort,
 ) error {
-	payload := []byte(`{"peer_address":` + strconv.Quote(peerAddress.String()) + `}`)
+	payload := []byte(`{"memberlist_address":` + strconv.Quote(memberlistAddress.String()) + `}`)
 
 	event := journal.NewEvent(nodeID, "node.started", payload)
 	if err := RecordEventAndLog(ctx, logger, j, views, event, "node runtime started",
-		zap.String("peer_address", peerAddress.String()),
+		zap.String("memberlist_address", memberlistAddress.String()),
 	); err != nil {
 		return fmt.Errorf("append startup event: %w", err)
 	}

@@ -27,8 +27,8 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// The ip address and port
-	if !nodeConfig.PeerAddress.IsValid() {
-		nodeConfig.PeerAddress = netip.MustParseAddrPort("0.0.0.0:7946")
+	if !nodeConfig.MemberlistAddress.IsValid() {
+		nodeConfig.MemberlistAddress = netip.MustParseAddrPort("0.0.0.0:7946")
 	}
 
 	st, err := openStores()
@@ -44,7 +44,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Create a startup event and persist it before announcing readiness.
-	if err = journalview.RecordNodeStarted(ctx, logger, st.journal, views, nodeConfig.ID, nodeConfig.PeerAddress); err != nil {
+	if err = journalview.RecordNodeStarted(ctx, logger, st.journal, views, nodeConfig.ID, nodeConfig.MemberlistAddress); err != nil {
 		return fmt.Errorf("record node started: %w", err)
 	}
 
@@ -60,6 +60,12 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer shutdownPeerService(logger, peerService)
 	go peerdiscovery.ObservePeers(ctx, logger, nodeConfig.ID, peerService, st.journal, views)
+
+	stopMDNS, err := startMDNSAdvertise(ctx, logger, nodeConfig)
+	if err != nil {
+		return err
+	}
+	defer stopMDNS()
 
 	// Start the DNS server
 	logger.Info("DNS server starting")
@@ -116,16 +122,29 @@ func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, 
 	return addrs, nil
 }
 
+func startMDNSAdvertise(ctx context.Context, logger *zap.Logger, nodeConfig *node.NodeConfig) (func(), error) {
+	mdnsServer, err := peerdiscovery.MDNSAdvertise(ctx, nodeConfig)
+	if err != nil {
+		return nil, fmt.Errorf("mdns advertise: %w", err)
+	}
+	logger.Info("mDNS advertise started")
+	return func() {
+		if err := mdnsServer.Shutdown(); err != nil {
+			logger.Error("mdns advertise shutdown", zap.Error(err))
+		}
+	}, nil
+}
+
 func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []netip.AddrPort) (*peerdiscovery.MemberService, error) {
 	localNode := peerdiscovery.Node{
 		ID:      nodeConfig.ID,
-		Address: netip.MustParseAddrPort(nodeConfig.PeerAddress.String()),
+		Address: netip.MustParseAddrPort(nodeConfig.MemberlistAddress.String()),
 	}
 	peerService, err := peerdiscovery.Start(localNode, join)
 	if err != nil {
 		return nil, fmt.Errorf("start peer discovery: %w", err)
 	}
-	logger.Info("peer discovery started", zap.String("address", nodeConfig.PeerAddress.String()))
+	logger.Info("peer discovery started", zap.String("address", nodeConfig.MemberlistAddress.String()))
 
 	return peerService, nil
 }

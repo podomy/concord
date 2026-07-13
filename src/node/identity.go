@@ -16,8 +16,8 @@ import (
 )
 
 type NodeConfig struct {
-	PeerAddress netip.AddrPort `json:"peer_address"`
-	ID          uuid.UUID      `json:"id"`
+	MemberlistAddress netip.AddrPort `json:"memberlist_address"`
+	ID                uuid.UUID      `json:"id"`
 }
 
 // getNodeConfigPath returns the auto-determined path for the local node config.
