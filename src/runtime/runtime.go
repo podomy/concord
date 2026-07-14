@@ -139,11 +139,18 @@ func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []ne
 		ID:      nodeConfig.ID,
 		Address: netip.MustParseAddrPort(nodeConfig.MemberlistAddress.String()),
 	}
-	peerService, err := peerdiscovery.Start(logger, localNode, join)
+	peerService, err := peerdiscovery.Start(logger, localNode, join, nodeConfig.AdvertiseAddress)
 	if err != nil {
 		return nil, fmt.Errorf("start peer discovery: %w", err)
 	}
-	logger.Info("peer discovery started", zap.String("address", nodeConfig.MemberlistAddress.String()))
+	localAddr, err := peerService.LocalAddr()
+	if err != nil {
+		return nil, fmt.Errorf("get local address: %w", err)
+	}
+	logger.Info("peer discovery started",
+		zap.String("bind", nodeConfig.MemberlistAddress.String()),
+		zap.String("advertise", localAddr.String()),
+	)
 
 	return peerService, nil
 }

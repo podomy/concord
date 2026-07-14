@@ -16,8 +16,13 @@ import (
 )
 
 type NodeConfig struct {
+	// MemberlistAddress is the local bind address for gossip.
 	MemberlistAddress netip.AddrPort `json:"memberlist_address"`
-	ID                uuid.UUID      `json:"id"`
+	// AdvertiseAddress is an optional IP other peers should dial. The port
+	// always comes from MemberlistAddress (bind). Empty means the runtime
+	// picks one from the bind address or a non-loopback interface.
+	AdvertiseAddress netip.Addr `json:"advertise_address"`
+	ID               uuid.UUID  `json:"id"`
 }
 
 // getNodeConfigPath returns the auto-determined path for the local node config.
