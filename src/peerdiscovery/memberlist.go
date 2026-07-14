@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/memberlist"
+	"go.uber.org/zap"
 )
 
 // MemberService wraps memberlist membership tracking for Concord peer discovery.
@@ -20,20 +21,29 @@ type MemberService struct {
 //
 // The node ID is used as memberlist's node name so discovered members can be
 // mapped back to stable Concord identities. The node address is used as the
-// local bind endpoint for memberlist traffic.
+// local bind endpoint for memberlist traffic. Port 0 asks the OS for an
+// ephemeral port; use LocalAddr after Start to learn the bound endpoint.
 //
 // If join is non-empty, Start attempts to join those bootstrap addresses before
 // returning. If the join fails, the created memberlist is shut down before the
 // error is returned.
-func Start(node Node, join []netip.AddrPort) (*MemberService, error) {
+func Start(logger *zap.Logger, node Node, join []netip.AddrPort) (*MemberService, error) {
 	config := memberlist.DefaultLocalConfig()
 	config.Name = node.ID.String()
 	config.BindAddr = node.Address.Addr().String()
 	config.BindPort = int(node.Address.Port())
+	// Advertise on the bind address so peers can reach us (important for 127.0.0.1 tests).
+	if node.Address.Addr().IsValid() && !node.Address.Addr().IsUnspecified() {
+		config.AdvertiseAddr = node.Address.Addr().String()
+	}
+	// Route memberlist's stdlib logger through zap (JSON with the rest of the app).
+	if logger != nil {
+		config.Logger = zap.NewStdLog(logger.Named("memberlist"))
+	}
 
 	list, err := memberlist.Create(config)
 	if err != nil {
-		return nil, fmt.Errorf("memberlist create: %w", err)
+		return nil, fmt.Errorf("memberlist bind %s: %w", node.Address, err)
 	}
 
 	if len(join) > 0 {
@@ -51,6 +61,16 @@ func Start(node Node, join []netip.AddrPort) (*MemberService, error) {
 	}
 
 	return &memberService, nil
+}
+
+// LocalAddr returns the address memberlist is advertising for this node.
+func (m *MemberService) LocalAddr() (netip.AddrPort, error) {
+	n := m.list.LocalNode()
+	addr, ok := netip.AddrFromSlice(n.Addr)
+	if !ok {
+		return netip.AddrPort{}, fmt.Errorf("invalid local member address: %v", n.Addr)
+	}
+	return netip.AddrPortFrom(addr.Unmap(), n.Port), nil
 }
 
 // Join asks the running memberlist service to join existing peer addresses.

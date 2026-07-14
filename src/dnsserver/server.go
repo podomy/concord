@@ -8,6 +8,8 @@ package dnsserver
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -50,17 +52,17 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	switch r.Question[0].Qtype {
 	case dns.TypeSRV:
-		h.serveSRV(&msg, nodes, r.Question[0].Name)
+		h.populateSRV(&msg, nodes, r.Question[0].Name)
 	case dns.TypeA:
-		h.serveA(&msg, nodes, r.Question[0].Name)
+		h.populateA(&msg, nodes, r.Question[0].Name)
 	}
 
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
-// serveSRV populates msg with SRV records for all known members and
+// populateSRV fills msg with SRV records for all known members and
 // their corresponding A records in the additional section.
-func (h *handler) serveSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
 	if !strings.HasPrefix(name, peerdiscovery.DNSService) {
 		msg.Rcode = dns.RcodeNameError
 		return
@@ -79,8 +81,8 @@ func (h *handler) serveSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string
 	}
 }
 
-// serveA populates msg with A records for members matching the queried hostname.
-func (h *handler) serveA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+// populateA fills msg with A records for members matching the queried hostname.
+func (h *handler) populateA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
 	for _, node := range nodes {
 		target := node.ID.String() + tldConcord
 		if dns.Fqdn(name) == target {
@@ -92,23 +94,35 @@ func (h *handler) serveA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) 
 	}
 }
 
-// Start launches an embedded DNS server on port 8053 that serves Concord's
-// peer membership from the provided MemberService. It runs in a background
-// goroutine and returns immediately. Errors from ListenAndServe are logged.
-func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger) error {
-	srv := &dns.Server{Addr: ":" + peerdiscovery.DNSPort, Net: "udp", Handler: &handler{memberService: memberService}}
+// Start launches an embedded DNS server that serves Concord peer membership.
+// Empty addr binds to ":"+DNSPort. Bind is checked before return so a second
+// instance fails fast if the port is taken. The server runs until ctx is done.
+func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger, addr string) error {
+	if addr == "" {
+		addr = ":" + peerdiscovery.DNSPort
+	}
+
+	var lc net.ListenConfig
+	pc, err := lc.ListenPacket(ctx, "udp", addr)
+	if err != nil {
+		return fmt.Errorf("dns listen %s: %w", addr, err)
+	}
+
+	srv := &dns.Server{
+		PacketConn: pc,
+		Handler:    &handler{memberService: memberService},
+	}
 
 	// Graceful shutdown.
 	go func() {
 		<-ctx.Done()
-
 		if err := srv.Shutdown(); err != nil {
 			logger.Error("dns server shutdown", zap.Error(err))
 		}
 	}()
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
+		if err := srv.ActivateAndServe(); err != nil {
 			logger.Error("dns server", zap.Error(err))
 		}
 	}()

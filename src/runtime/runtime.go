@@ -67,12 +67,11 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer stopMDNS()
 
-	// Start the DNS server
-	logger.Info("DNS server starting")
-	err = dnsserver.Start(ctx, peerService, logger)
+	err = dnsserver.Start(ctx, peerService, logger, "")
 	if err != nil {
 		return fmt.Errorf("dns server start failed: %w", err)
 	}
+	logger.Info("DNS server started")
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
@@ -110,7 +109,6 @@ func setupViews(ctx context.Context, kv *kvstore.KVStore) ([]journalview.View, e
 }
 
 func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, error) {
-	logger.Info("mDNS resolver starting")
 	mdnsResolver := peerdiscovery.MDNSResolver{Timeout: 5 * time.Second}
 	dnsSrvResolver := peerdiscovery.DNSSRVResolver{Timeout: 5 * time.Second}
 
@@ -119,6 +117,7 @@ func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, 
 	if err != nil {
 		return nil, fmt.Errorf("resolve: %w", err)
 	}
+	logger.Info("peer resolvers finished", zap.Int("addresses", len(addrs)))
 	return addrs, nil
 }
 
@@ -140,7 +139,7 @@ func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []ne
 		ID:      nodeConfig.ID,
 		Address: netip.MustParseAddrPort(nodeConfig.MemberlistAddress.String()),
 	}
-	peerService, err := peerdiscovery.Start(localNode, join)
+	peerService, err := peerdiscovery.Start(logger, localNode, join)
 	if err != nil {
 		return nil, fmt.Errorf("start peer discovery: %w", err)
 	}

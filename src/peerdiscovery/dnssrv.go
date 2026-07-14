@@ -24,6 +24,9 @@ type DNSSRVResolver struct {
 	Bootstrap []netip.AddrPort
 	// Timeout for each DNS query made to a bootstrap peer.
 	Timeout time.Duration
+	// QueryPort is the UDP port of the peer's embedded DNS server.
+	// Empty means DNSPort (8053).
+	QueryPort string
 }
 
 // Resolve queries every bootstrap peer's DNS server for SRV records and
@@ -76,15 +79,19 @@ func (d *DNSSRVResolver) queryPeer(ctx context.Context, peer netip.AddrPort) ([]
 	}
 
 	m := new(dns.Msg)
-	m.SetQuestion(DNSService, dns.TypeSRV)
+	m.SetQuestion(dns.Fqdn(DNSService), dns.TypeSRV)
 	m.RecursionDesired = false
 
 	queryTimeout := d.Timeout
 	if queryTimeout == 0 {
 		queryTimeout = 5 * time.Second
 	}
+	dnsPort := d.QueryPort
+	if dnsPort == "" {
+		dnsPort = DNSPort
+	}
 	c := &dns.Client{Timeout: queryTimeout}
-	resp, _, err := c.Exchange(m, net.JoinHostPort(peer.Addr().String(), DNSPort))
+	resp, _, err := c.Exchange(m, net.JoinHostPort(peer.Addr().String(), dnsPort))
 	if err != nil {
 		return nil, fmt.Errorf("srv query to %s: %w", peer, err)
 	}
