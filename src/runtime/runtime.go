@@ -16,6 +16,7 @@ import (
 	"github.com/podomy/concord/src/kvstore"
 	"github.com/podomy/concord/src/node"
 	"github.com/podomy/concord/src/peerdiscovery"
+	"github.com/podomy/concord/src/transport"
 )
 
 // Run performs application startup, blocks for the process lifetime, and handles graceful shutdown.
@@ -48,10 +49,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return fmt.Errorf("record node started: %w", err)
 	}
 
-	addresses, err := startResolvers(ctx, logger)
-	if err != nil {
-		return fmt.Errorf("resolve peers: %w", err)
-	}
+	addresses := resolvePeersOrEmpty(ctx, logger)
 
 	peerService, err := startPeerService(logger, nodeConfig, addresses)
 	if err != nil {
@@ -73,10 +71,33 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	logger.Info("DNS server started")
 
+	err = startTransport(logger)
+	if err != nil {
+		return err
+	}
+
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
 	logger.Info("shutting down", zap.String("node_id", nodeConfig.ID.String()))
 
+	return nil
+}
+
+func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPort {
+	addresses, err := startResolvers(ctx, logger)
+	if err != nil {
+		// Soft-fail: discovery noise must not kill the node.
+		logger.Warn("peer resolve failed; continuing alone", zap.Error(err))
+		return nil
+	}
+	return addresses
+}
+
+func startTransport(logger *zap.Logger) error {
+	if _, err := transport.InitTransport(); err != nil {
+		return fmt.Errorf("http/2 server failed to start: %w", err)
+	}
+	logger.Info("https server started", zap.String("addr", ":"+transport.Port))
 	return nil
 }
 

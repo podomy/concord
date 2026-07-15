@@ -30,6 +30,10 @@ If your software needs one live global truth, Concord is the wrong place to
 run it. Cluster segmentation is expected. Local operation and later
 reconciliation are part of the model.
 
+## TODO
+
+- [] DNS state reconciliation between nodes + what happens when a bubble/segment reconnects. But the problem is connected, if we implement that, we have to implement reconcilliation for EVERYTHING at once. That is why this comes last.
+
 ## Documentation
 
 - [Commit message format](./COMMITS)
