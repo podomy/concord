@@ -11,6 +11,9 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
+
+	"github.com/podomy/concord/src/certs"
 	"github.com/podomy/concord/src/dnsserver"
 	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/kvstore"
@@ -71,7 +74,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	logger.Info("DNS server started")
 
-	err = startTransport(logger)
+	err = startTransport(ctx, logger, nodeConfig.ID)
 	if err != nil {
 		return err
 	}
@@ -93,8 +96,13 @@ func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPo
 	return addresses
 }
 
-func startTransport(logger *zap.Logger) error {
-	if _, err := transport.InitTransport(); err != nil {
+func startTransport(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID) error {
+	paths, err := certs.Ensure(nodeID)
+	if err != nil {
+		return fmt.Errorf("ensure certs: %w", err)
+	}
+
+	if err := transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key); err != nil {
 		return fmt.Errorf("http/2 server failed to start: %w", err)
 	}
 	logger.Info("https server started", zap.String("addr", ":"+transport.Port))
