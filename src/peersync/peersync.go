@@ -10,8 +10,8 @@ import (
 	"github.com/podomy/concord/src/transport"
 )
 
+// PeerSync pulls journal state from a peer over the node transport.
+// The concrete client lives in transport.Client (HTTPS/2 mTLS unary).
 type PeerSync interface {
 	Sync(ctx context.Context, peer netip.AddrPort, req transport.SyncRequest) (transport.SyncResponse, error)
 }
-
-// We must enforce tls 1.3 and http/2 only

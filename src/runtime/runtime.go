@@ -72,7 +72,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	logger.Info("DNS server started")
 
-	err = startTransport(ctx, logger, *nodeConfig)
+	_, err = startTransport(ctx, logger, *nodeConfig)
 	if err != nil {
 		return err
 	}
@@ -94,17 +94,24 @@ func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPo
 	return addresses
 }
 
-func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.NodeConfig) error {
+func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.NodeConfig) (*transport.Client, error) {
 	paths, err := certs.Ensure(nodeConfig.ID, nodeConfig.AdvertiseAddress)
 	if err != nil {
-		return fmt.Errorf("ensure certs: %w", err)
+		return nil, fmt.Errorf("ensure certs: %w", err)
 	}
 
 	if err := transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key); err != nil {
-		return fmt.Errorf("http/2 server failed to start: %w", err)
+		return nil, fmt.Errorf("http/2 server failed to start: %w", err)
 	}
+
+	client, err := transport.NewClient(paths.CA, paths.Cert, paths.Key)
+	if err != nil {
+		return nil, fmt.Errorf("new http client: %w", err)
+	}
+
 	logger.Info("https server started", zap.String("addr", ":"+transport.Port))
-	return nil
+
+	return client, nil
 }
 
 func closeStores(logger *zap.Logger, st *stores) {

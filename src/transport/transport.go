@@ -21,7 +21,7 @@ const (
 func InitTransport(caFile, certFile, keyFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /v1/sync", postSync)
+	mux.HandleFunc("POST "+SyncPath, postSync)
 
 	tlsConfig, err := loadTLSConfig(caFile, certFile, keyFile)
 	if err != nil {
