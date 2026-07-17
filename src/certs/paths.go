@@ -3,9 +3,17 @@
 
 // Package certs manages on-disk TLS material for Concord nodes.
 //
-// Same UserConfigDir/concord layout as node config, but under concord/certs/
-// with three files (ca.crt, node.crt, node.key). That is why we expose Dir()
-// and DefaultPaths() instead of a single file path.
+// Same UserConfigDir/concord layout as node config, under concord/certs/:
+//
+//	ca.crt  — fleet trust anchor (operator-provided; required before start)
+//	ca.key  — CA private key (operator-provided; used only to mint node certs)
+//	node.crt / node.key — this node's identity (auto-minted under the CA)
+//
+// Normal bootstrap never creates a CA. The operator supplies ca.crt and ca.key
+// (factory, flash drive, etc.). Ensure only mints node material when the CA
+// is already present. WriteCA is for provisioning tools, not the running node.
+//
+// Dir() and DefaultPaths() expose the directory and fixed file names.
 package certs
 
 import (
@@ -15,26 +23,27 @@ import (
 )
 
 const (
-	caFileName   = "ca.crt"
-	certFileName = "node.crt"
-	keyFileName  = "node.key"
+	caFileName    = "ca.crt"
+	caKeyFileName = "ca.key"
+	certFileName  = "node.crt"
+	keyFileName   = "node.key"
 )
 
-// Paths holds the on-disk locations for this node's TLS material.
+// Paths holds the on-disk locations for TLS material.
 //
-//	CA   - PEM certificate of the CA that signed Cert (trust anchor)
-//	Cert - this node's PEM certificate (presented in mTLS both ways)
-//	Key  - this node's PEM private key (pairs with Cert)
+//	CA    - PEM CA certificate (trust anchor)
+//	CAKey - PEM CA private key (sign node certs; not used by transport)
+//	Cert  - this node's PEM certificate
+//	Key   - this node's PEM private key
 type Paths struct {
-	CA   string
-	Cert string
-	Key  string
+	CA    string
+	CAKey string
+	Cert  string
+	Key   string
 }
 
 // Dir returns the auto-determined directory for Concord TLS material
 // (~/.config/concord/certs). The directory is created if missing (mode 0700).
-// Same UserConfigDir root as node config; certs use a subdirectory because
-// three files live there rather than one.
 func Dir() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -49,9 +58,8 @@ func Dir() (string, error) {
 	return certsDir, nil
 }
 
-// DefaultPaths returns the auto-determined paths for ca.crt, node.crt, and
-// node.key under Dir(). Paths are fixed by convention; callers cannot override
-// them (same idea as node.LoadOrCreateNodeConfig and its config path).
+// DefaultPaths returns fixed paths for ca.crt, ca.key, node.crt, and node.key
+// under Dir(). Callers cannot override them.
 func DefaultPaths() (Paths, error) {
 	dir, err := Dir()
 	if err != nil {
@@ -59,8 +67,9 @@ func DefaultPaths() (Paths, error) {
 	}
 
 	return Paths{
-		CA:   filepath.Join(dir, caFileName),
-		Cert: filepath.Join(dir, certFileName),
-		Key:  filepath.Join(dir, keyFileName),
+		CA:    filepath.Join(dir, caFileName),
+		CAKey: filepath.Join(dir, caKeyFileName),
+		Cert:  filepath.Join(dir, certFileName),
+		Key:   filepath.Join(dir, keyFileName),
 	}, nil
 }
