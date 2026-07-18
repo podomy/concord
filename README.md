@@ -33,6 +33,14 @@ reconciliation are part of the model.
 ## TODO
 
 - [] DNS state reconciliation between nodes + what happens when a bubble/segment reconnects. But the problem is connected, if we implement that, we have to implement reconcilliation for EVERYTHING at once. That is why this comes last.
+- [] Peer sync catch-up for long journals (not needed for current stub/mesh path; do after real journal pull/apply works):
+
+  | Piece | Role |
+  | --- | --- |
+  | Persist watermarks | Restart resumes mid-history, not from year 0 |
+  | Paging (`Limit`) | Already in pull loop — never one unbounded dump |
+  | Optional: snapshots | State as of T + events after T (later) |
+  | Idempotent apply | Replay after restart does not corrupt (event id) |
 
 ## Documentation
 

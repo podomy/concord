@@ -17,6 +17,7 @@ import (
 	"github.com/podomy/concord/src/kvstore"
 	"github.com/podomy/concord/src/node"
 	"github.com/podomy/concord/src/peerdiscovery"
+	"github.com/podomy/concord/src/peersync"
 	"github.com/podomy/concord/src/transport"
 )
 
@@ -72,10 +73,13 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	logger.Info("DNS server started")
 
-	_, err = startTransport(ctx, logger, *nodeConfig)
+	client, err := startTransport(ctx, logger, *nodeConfig)
 	if err != nil {
 		return err
 	}
+	// Reconciliation loop.
+	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client)
+	logger.Info("peer sync pull loop started")
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
