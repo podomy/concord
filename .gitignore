@@ -9,5 +9,8 @@ coverage.out
 # OS/editor noise
 .DS_Store
 
+# Editor configs
+.zed/
+
 # Temp files folder
 .temp

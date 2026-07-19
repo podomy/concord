@@ -67,11 +67,6 @@ reconciliation are part of the model.
 - [Commit message format](./COMMITS)
 - [Contributor license agreement](./CLA)
 
-## Supported IDEs
-
-We support [Zed](https://zed.dev/). We do not support any other IDEs at
-the moment.
-
 ## License
 
 Concord is distributed under the GNU Affero General Public License v3.0 or
