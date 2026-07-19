@@ -41,7 +41,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer closeStores(logger, st)
 
-	views, err := setupViews(ctx, st.kv)
+	eventsByID, views, err := setupViews(ctx, st.kv)
 	if err != nil {
 		return fmt.Errorf("setup views: %w", err)
 	}
@@ -77,8 +77,8 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	if err != nil {
 		return err
 	}
-	// Reconciliation loop.
-	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client)
+	// Reconciliation loop: pull peers and apply events into local journal/views.
+	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
 
 	// Block until the OS delivers a shutdown signal.
@@ -99,7 +99,14 @@ func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPo
 }
 
 func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.NodeConfig) (*transport.Client, error) {
-	paths, err := certs.Ensure(nodeConfig.ID, nodeConfig.AdvertiseAddress)
+	// Same IP resolution memberlist uses, so node cert IP SANs match how peers dial.
+	resolved := peerdiscovery.ResolveAdvertise(nodeConfig.MemberlistAddress, nodeConfig.AdvertiseAddress)
+	advertise := netip.Addr{}
+	if resolved.IsValid() {
+		advertise = resolved.Addr()
+	}
+
+	paths, err := certs.Ensure(nodeConfig.ID, advertise)
 	if err != nil {
 		return nil, fmt.Errorf("ensure certs: %w", err)
 	}
@@ -133,17 +140,17 @@ func shutdownPeerService(logger *zap.Logger, ps *peerdiscovery.MemberService) {
 	}
 }
 
-func setupViews(ctx context.Context, kv *kvstore.KVStore) ([]journalview.View, error) {
+func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsByID, []journalview.View, error) {
 	eventsByID := journalview.NewEventsByID(kv)
 	eventsByNode := journalview.NewEventsByNode(kv)
 	eventsByType := journalview.NewEventsByType(kv)
 	views := []journalview.View{eventsByID, eventsByNode, eventsByType}
 
 	if err := journalview.RebuildViews(ctx, views); err != nil {
-		return nil, fmt.Errorf("rebuild views: %w", err)
+		return nil, nil, fmt.Errorf("rebuild views: %w", err)
 	}
 
-	return views, nil
+	return eventsByID, views, nil
 }
 
 func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, error) {

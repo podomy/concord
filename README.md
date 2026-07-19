@@ -42,6 +42,17 @@ reconciliation are part of the model.
   | Optional: snapshots | State as of T + events after T (later) |
   | Idempotent apply | Replay after restart does not corrupt (event id) |
 
+- [ ] Extension friendliness (after real journal sync; core is solid but not plugin-first yet):
+
+  | Gap | Effect |
+  | --- | --- |
+  | Runtime is one hard-wired `Run()` | No registry of “start these services” |
+  | Sync handler stub inside `transport` | No pluggable sync backend / apply pipeline |
+  | Pull loop watermarks only in RAM | No store interface for durable cursors |
+  | Event types are free strings | No typed extension catalog |
+  | No SDK / extension API surface | External code cannot hang off lifecycle cleanly |
+  | Tight package coupling via runtime | Hard to ship optional modules |
+
 ## Documentation
 
 - [Commit message format](./COMMITS)

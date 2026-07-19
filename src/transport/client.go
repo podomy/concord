@@ -28,13 +28,10 @@ type Client struct {
 // NewClient builds a Client using the same TLS material as the transport server.
 // caFile, certFile, and keyFile are the paths from certs.Ensure.
 func NewClient(caFile, certFile, keyFile string) (*Client, error) {
-	tlsCfg, err := loadTLSConfig(caFile, certFile, keyFile)
+	tlsCfg, err := loadClientTLSConfig(caFile, certFile, keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("client tls: %w", err)
 	}
-	// Outbound dials only need leaf + roots; ClientAuth is a server field.
-	tlsCfg.ClientAuth = 0
-	tlsCfg.ClientCAs = nil
 
 	return &Client{
 		http: &http.Client{
@@ -58,9 +55,7 @@ func NewClient(caFile, certFile, keyFile string) (*Client, error) {
 //
 // This call does not push our journal to the peer; it only asks for theirs.
 // The peer responds with Events (after the watermark, up to limit) and
-// NextWatermark to store for the next Sync. Until real journal sync is wired,
-// the server stub returns Events empty and echoes the request watermark as
-// NextWatermark.
+// NextWatermark to store for the next Sync.
 func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, req SyncRequest) (SyncResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return SyncResponse{}, fmt.Errorf("context cancelled: %w", err)

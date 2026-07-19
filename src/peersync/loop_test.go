@@ -5,6 +5,7 @@ package peersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"sync"
@@ -14,9 +15,27 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/transport"
 )
+
+func mustEvent() journal.Event {
+	return journal.NewEvent(uuid.New(), "test.event", json.RawMessage(`{}`))
+}
+
+// testPullState builds pullState with in-memory journal/index for loop unit tests.
+func testPullState(syncer PeerSync, watermarks map[uuid.UUID]string) pullState {
+	j := &memJournal{}
+	return pullState{
+		syncer:     syncer,
+		journal:    j,
+		views:      nil,
+		byID:       &journalIndex{j: j},
+		port:       8443,
+		watermarks: watermarks,
+	}
+}
 
 // --- helpers / port ---
 
@@ -106,7 +125,7 @@ func TestSyncOneUsesTransportPortAndWatermark(t *testing.T) {
 		resp: transport.SyncResponse{NextWatermark: "mark-2", Events: nil},
 	}
 
-	ok := syncOne(context.Background(), zap.NewNop(), fake, member, 8443, watermarks)
+	ok := syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member)
 	if !ok {
 		t.Fatal("expected success")
 	}
@@ -143,7 +162,7 @@ func TestSyncOneEmptyNextWatermarkDoesNotClear(t *testing.T) {
 		resp: transport.SyncResponse{NextWatermark: ""},
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), fake, member, 8443, watermarks) {
+	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member) {
 		t.Fatal("expected success")
 	}
 	if watermarks[peerID] != "keep-me" {
@@ -164,7 +183,7 @@ func TestSyncOneFailureDoesNotAdvanceWatermark(t *testing.T) {
 	watermarks := map[uuid.UUID]string{peerID: "old"}
 	fake := &fakeSyncer{err: errors.New("dial failed")}
 
-	if syncOne(context.Background(), zap.NewNop(), fake, member, 8443, watermarks) {
+	if syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member) {
 		t.Fatal("expected failure")
 	}
 	if watermarks[peerID] != "old" {
@@ -185,7 +204,7 @@ func TestSyncOneMissingWatermarkSendsEmpty(t *testing.T) {
 	watermarks := map[uuid.UUID]string{}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "first"}}
 
-	syncOne(context.Background(), zap.NewNop(), fake, member, 8443, watermarks)
+	syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member)
 	if fake.calls[0].req.Watermark != "" {
 		t.Fatalf("first pull watermark = %q, want empty", fake.calls[0].req.Watermark)
 	}
@@ -214,14 +233,14 @@ func TestPullTickMeetThenPeriodicNoDoubleSync(t *testing.T) {
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "w1"}}
 	watermarks := map[uuid.UUID]string{}
 
-	previous := pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, watermarks)
+	previous := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), nil)
 	if len(fake.calls) != 1 {
 		t.Fatalf("meet tick calls = %d, want 1 (no double sync)", len(fake.calls))
 	}
 
 	// Still alive: periodic only.
 	fake.calls = nil
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, previous, watermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), previous)
 	if len(fake.calls) != 1 {
 		t.Fatalf("periodic tick calls = %d, want 1", len(fake.calls))
 	}
@@ -241,7 +260,7 @@ func TestPullTickSkipsDeadAndSelf(t *testing.T) {
 	}}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "x"}}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, map[uuid.UUID]string{})
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), nil)
 	if len(fake.calls) != 0 {
 		t.Fatalf("calls = %d, want 0", len(fake.calls))
 	}
@@ -263,7 +282,7 @@ func TestPullTickDeadToAliveIsMeet(t *testing.T) {
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "back"}}
 	watermarks := map[uuid.UUID]string{peerID: "before-death"}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, previous, watermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), previous)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d, want 1 meet pull", len(fake.calls))
 	}
@@ -283,7 +302,7 @@ func TestPullTickMembersErrorKeepsPrevious(t *testing.T) {
 	src := &fakeMembers{err: errors.New("memberlist down")}
 	fake := &fakeSyncer{}
 
-	got := pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, previous, map[uuid.UUID]string{})
+	got := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), previous)
 	if len(fake.calls) != 0 {
 		t.Fatal("should not sync on members error")
 	}
@@ -312,18 +331,18 @@ func TestPullTickPagingWatermarksAcrossTicks(t *testing.T) {
 	}}
 	watermarks := map[uuid.UUID]string{}
 
-	prev := pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, watermarks)
+	prev := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), nil)
 	if watermarks[peerID] != "page1" {
 		t.Fatalf("after tick1: %q", watermarks[peerID])
 	}
-	prev = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, prev, watermarks)
+	prev = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), prev)
 	if fake.calls[1].req.Watermark != "page1" {
 		t.Fatalf("tick2 sent watermark %q, want page1", fake.calls[1].req.Watermark)
 	}
 	if watermarks[peerID] != "page2" {
 		t.Fatalf("after tick2: %q", watermarks[peerID])
 	}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, prev, watermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), prev)
 	if fake.calls[2].req.Watermark != "page2" {
 		t.Fatalf("tick3 sent watermark %q, want page2", fake.calls[2].req.Watermark)
 	}
@@ -351,7 +370,7 @@ func TestPullTickPerPeerWatermarksIndependent(t *testing.T) {
 	}
 	watermarks := map[uuid.UUID]string{}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, watermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), nil)
 	if watermarks[a] != "wa" || watermarks[b] != "wb" {
 		t.Fatalf("watermarks = %v", watermarks)
 	}
@@ -377,7 +396,7 @@ func TestPullTickPeerDownThenUpResumesWatermark(t *testing.T) {
 	watermarks := map[uuid.UUID]string{}
 
 	// Successful page while peer is up.
-	prev := pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, watermarks)
+	prev := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), nil)
 	if watermarks[peerID] != "got-to-here" {
 		t.Fatalf("watermark after success: %q", watermarks[peerID])
 	}
@@ -385,7 +404,7 @@ func TestPullTickPeerDownThenUpResumesWatermark(t *testing.T) {
 	// Peer/server down: Sync fails, watermark must not move.
 	fake.err = errors.New("connection refused")
 	fake.calls = nil
-	prev = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, prev, watermarks)
+	prev = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), prev)
 	if len(fake.calls) != 1 {
 		t.Fatalf("expected a failed sync attempt, calls=%d", len(fake.calls))
 	}
@@ -397,7 +416,7 @@ func TestPullTickPeerDownThenUpResumesWatermark(t *testing.T) {
 	fake.err = nil
 	fake.resp = transport.SyncResponse{NextWatermark: "after-recovery"}
 	fake.calls = nil
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, prev, watermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, watermarks), prev)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls after recovery = %d", len(fake.calls))
 	}
@@ -427,7 +446,7 @@ func TestPullTickProcessRestartResyncsFromEmptyWatermark(t *testing.T) {
 
 	// "Old process" had advanced the cursor.
 	oldWatermarks := map[uuid.UUID]string{}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, oldWatermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, oldWatermarks), nil)
 	if oldWatermarks[peerID] != "progress" {
 		t.Fatalf("old process watermark: %q", oldWatermarks[peerID])
 	}
@@ -436,7 +455,7 @@ func TestPullTickProcessRestartResyncsFromEmptyWatermark(t *testing.T) {
 	fake.calls = nil
 	fake.resp = transport.SyncResponse{NextWatermark: "progress-again"}
 	newWatermarks := map[uuid.UUID]string{}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, fake, 8443, nil, newWatermarks)
+	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, newWatermarks), nil)
 
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d", len(fake.calls))
@@ -449,6 +468,52 @@ func TestPullTickProcessRestartResyncsFromEmptyWatermark(t *testing.T) {
 	}
 }
 
+// After Sync, events are applied; watermark advances only if apply succeeds.
+func TestSyncOneAppliesEventsBeforeWatermark(t *testing.T) {
+	t.Parallel()
+
+	peerID := uuid.New()
+	member := peerdiscovery.Node{
+		ID:      peerID,
+		Address: mustAddrPort("192.0.2.10:7946"),
+		State:   peerdiscovery.NodeStateAlive,
+	}
+	ev := mustEvent()
+	fake := &fakeSyncer{
+		resp: transport.SyncResponse{
+			NextWatermark: ev.ID.String(),
+			Events:        []journal.Event{ev},
+		},
+	}
+	watermarks := map[uuid.UUID]string{}
+	j := &memJournal{}
+	state := pullState{
+		syncer:     fake,
+		journal:    j,
+		byID:       &journalIndex{j: j},
+		port:       8443,
+		watermarks: watermarks,
+	}
+
+	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+		t.Fatal("expected success")
+	}
+	if len(j.events) != 1 || j.events[0].ID != ev.ID {
+		t.Fatalf("applied events = %v", j.events)
+	}
+	if watermarks[peerID] != ev.ID.String() {
+		t.Fatalf("watermark = %q", watermarks[peerID])
+	}
+
+	// Replay same page: idempotent, still one row.
+	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+		t.Fatal("expected success on replay")
+	}
+	if len(j.events) != 1 {
+		t.Fatalf("idempotent apply failed, len=%d", len(j.events))
+	}
+}
+
 func TestRunPullLoopStopsOnCancel(t *testing.T) {
 	t.Parallel()
 
@@ -458,7 +523,8 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunPullLoop(ctx, zap.NewNop(), uuid.New(), src, fake)
+		j := &memJournal{}
+		RunPullLoop(ctx, zap.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j})
 		close(done)
 	}()
 

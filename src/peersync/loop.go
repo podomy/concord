@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/src/journal"
+	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/transport"
 )
@@ -38,12 +40,14 @@ type MemberSource interface {
 //   - Periodic: every defaultPullInterval, Sync all still-alive peers
 //     (skipped if already synced this tick for a meet).
 //
-// Progress per peer is a watermark (opaque cursor, often last event id).
+// After each successful Sync, events are applied idempotently (skip known ids)
+// into the local journal and views. The watermark advances only if apply succeeds.
+//
 // Watermarks live only in process memory: a process restart starts again
 // from an empty watermark (full pull from the peer's start). Idempotent
 // apply on event id is what prevents duplicate journal rows after replay.
 //
-// Individual Sync failures are soft-fail (log and continue). The loop
+// Individual Sync/apply failures are soft-fail (log and continue). The loop
 // blocks until ctx is cancelled.
 func RunPullLoop(
 	ctx context.Context,
@@ -51,24 +55,43 @@ func RunPullLoop(
 	selfID uuid.UUID,
 	members MemberSource,
 	syncer PeerSync,
+	j journal.Journal,
+	views []journalview.View,
+	byID EventByID,
 ) {
-	// previous: last membership snapshot (for meet / re-alive detection).
 	previous := map[uuid.UUID]peerdiscovery.Node{}
-	// watermarks: peer ID → last successful NextWatermark from that peer.
 	watermarks := map[uuid.UUID]string{}
 	ticker := time.NewTicker(defaultPullInterval)
 	defer ticker.Stop()
 
 	port := parseTransportPort(transport.Port)
+	state := pullState{
+		syncer:     syncer,
+		journal:    j,
+		views:      views,
+		byID:       byID,
+		port:       port,
+		watermarks: watermarks,
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			previous = pullTick(ctx, logger, selfID, members, syncer, port, previous, watermarks)
+			previous = pullTick(ctx, logger, selfID, members, state, previous)
 		}
 	}
+}
+
+// pullState is the per-loop dependencies shared by meet/periodic/syncOne.
+type pullState struct {
+	syncer     PeerSync
+	journal    journal.Journal
+	views      []journalview.View
+	byID       EventByID
+	port       uint16
+	watermarks map[uuid.UUID]string
 }
 
 // pullTick runs one reconciliation pass: list members, meet pulls, periodic pulls.
@@ -79,10 +102,8 @@ func pullTick(
 	logger *zap.Logger,
 	selfID uuid.UUID,
 	members MemberSource,
-	syncer PeerSync,
-	port uint16,
+	state pullState,
 	previous map[uuid.UUID]peerdiscovery.Node,
-	watermarks map[uuid.UUID]string,
 ) map[uuid.UUID]peerdiscovery.Node {
 	list, err := members.Members()
 	if err != nil {
@@ -91,8 +112,8 @@ func pullTick(
 	}
 
 	current := membersExceptSelf(selfID, list)
-	synced := pullMeet(ctx, logger, syncer, port, previous, current, watermarks)
-	pullPeriodic(ctx, logger, syncer, port, current, synced, watermarks)
+	synced := pullMeet(ctx, logger, state, previous, current)
+	pullPeriodic(ctx, logger, state, current, synced)
 	return current
 }
 
@@ -113,17 +134,15 @@ func membersExceptSelf(selfID uuid.UUID, members []peerdiscovery.Node) map[uuid.
 func pullMeet(
 	ctx context.Context,
 	logger *zap.Logger,
-	syncer PeerSync,
-	port uint16,
+	state pullState,
 	previous, current map[uuid.UUID]peerdiscovery.Node,
-	watermarks map[uuid.UUID]string,
 ) map[uuid.UUID]struct{} {
 	synced := map[uuid.UUID]struct{}{}
 	for id, member := range current {
 		if !becameAlive(previous, id, member) {
 			continue
 		}
-		if syncOne(ctx, logger, syncer, member, port, watermarks) {
+		if syncOne(ctx, logger, state, member) {
 			synced[id] = struct{}{}
 		}
 	}
@@ -145,11 +164,9 @@ func becameAlive(previous map[uuid.UUID]peerdiscovery.Node, id uuid.UUID, member
 func pullPeriodic(
 	ctx context.Context,
 	logger *zap.Logger,
-	syncer PeerSync,
-	port uint16,
+	state pullState,
 	current map[uuid.UUID]peerdiscovery.Node,
 	syncedThisTick map[uuid.UUID]struct{},
-	watermarks map[uuid.UUID]string,
 ) {
 	for id, member := range current {
 		if member.State != peerdiscovery.NodeStateAlive {
@@ -158,30 +175,25 @@ func pullPeriodic(
 		if _, ok := syncedThisTick[id]; ok {
 			continue
 		}
-		syncOne(ctx, logger, syncer, member, port, watermarks)
+		syncOne(ctx, logger, state, member)
 	}
 }
 
-// syncOne pulls one page from member over the HTTPS transport port (not gossip).
-// On success, stores NextWatermark when non-empty. On failure, leaves the
-// watermark unchanged so the next attempt retries the same cursor.
+// syncOne pulls one page from member, applies events idempotently, then advances
+// the watermark only if apply succeeded.
 func syncOne(
 	ctx context.Context,
 	logger *zap.Logger,
-	syncer PeerSync,
+	state pullState,
 	member peerdiscovery.Node,
-	port uint16,
-	watermarks map[uuid.UUID]string,
 ) bool {
-	// Member.Address is the memberlist endpoint; Sync uses the same IP + transport port.
-	addr := netip.AddrPortFrom(member.Address.Addr(), port)
+	addr := netip.AddrPortFrom(member.Address.Addr(), state.port)
 	req := transport.SyncRequest{
-		// Missing map key → "" → peer starts from the beginning of its journal.
-		Watermark: watermarks[member.ID],
+		Watermark: state.watermarks[member.ID],
 		Limit:     defaultSyncLimit,
 	}
 
-	res, err := syncer.Sync(ctx, addr, req)
+	res, err := state.syncer.Sync(ctx, addr, req)
 	if err != nil {
 		logger.Warn("peer sync failed",
 			zap.String("peer_id", member.ID.String()),
@@ -191,15 +203,25 @@ func syncOne(
 		return false
 	}
 
-	// Only advance the cursor when the peer gives a new mark.
+	applied, err := ApplyEvents(ctx, state.journal, state.views, state.byID, res.Events)
+	if err != nil {
+		logger.Warn("peer sync apply failed",
+			zap.String("peer_id", member.ID.String()),
+			zap.String("addr", addr.String()),
+			zap.Error(err),
+		)
+		return false
+	}
+
 	if res.NextWatermark != "" {
-		watermarks[member.ID] = res.NextWatermark
+		state.watermarks[member.ID] = res.NextWatermark
 	}
 
 	logger.Info("peer sync ok",
 		zap.String("peer_id", member.ID.String()),
 		zap.String("addr", addr.String()),
 		zap.Int("events", len(res.Events)),
+		zap.Int("applied", applied),
 		zap.String("next_watermark", res.NextWatermark),
 	)
 	return true

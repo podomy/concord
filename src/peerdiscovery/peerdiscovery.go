@@ -141,7 +141,7 @@ func MDNSAdvertise(ctx context.Context, nodeConfig *node.NodeConfig) (*mdns.Serv
 // * DNSService (_concord._udp) is also used for DNS SRV record discovery.
 // Nodes query each other's embedded DNS servers to discover the full
 // memberlist, extending reach beyond the local network segment.
-const (
+var (
 	DNSService = "_concord._udp"
 	DNSPort    = "8053"
 )

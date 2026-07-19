@@ -14,9 +14,7 @@ import (
 )
 
 // Port is the HTTPS node-to-node transport listen port.
-const (
-	Port = "8443"
-)
+var Port = "8443"
 
 func InitTransport(caFile, certFile, keyFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
