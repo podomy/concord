@@ -19,12 +19,6 @@ Concord is designed for mathematical consistency. Each segment can keep
 operating from local knowledge, and when segments meet again their state
 is reconciled by explicit rules instead of a hidden central truth.
 
-## What Concord Is For
-
-- Machines that must keep working when the network goes away
-- Fleets split across partitions that reunite later
-- Environments with no reliable connection: space, sea, remote terrain, underground
-
 ## Kubernetes Compatibility
 
 **Concord is not standard Kubernetes.** It may support Kubernetes-like
@@ -72,7 +66,7 @@ run it.** Cluster segmentation is expected. Local operation and eventual consist
 
 ## Documentation
 
-- [Design](./DESIGN.md)
+- [Tradeoffs](./TRADEOFFS.md)
 - [Commit message format](./COMMITS)
 - [Contributor license agreement](./CLA)
 
