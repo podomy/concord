@@ -30,28 +30,3 @@ jobs:
         with:
           name: coverage
           path: coverage.out
-
-      - name: Measure binary
-        run: |
-          go build -o /tmp/concord .
-          echo "binary_size=$(stat -c%s /tmp/concord)" >> $GITHUB_OUTPUT
-        id: measure
-
-      - name: Run and measure RSS
-        run: |
-          /tmp/concord &
-          PID=$!
-          sleep 4
-          RSS=$(ps -p $PID -o rss= | tr -d ' ')
-          kill $PID 2>/dev/null
-          wait $PID 2>/dev/null
-          echo "rss_kb=$RSS" >> $GITHUB_OUTPUT
-        id: rss
-        continue-on-error: true
-
-      - name: Print metrics
-        run: |
-          SIZE_MB=$(( ${{ steps.measure.outputs.binary_size }} / 1048576 ))
-          RSS_MB=$(( ${{ steps.rss.outputs.rss_kb }} / 1024 ))
-          echo "Binary size: ${SIZE_MB} MB"
-          echo "Idle RSS: ${RSS_MB} MB"

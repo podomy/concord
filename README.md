@@ -9,6 +9,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/podomy/concord" alt="License"></a>
 </p>
 
+<p align="center">
+  <code>binary size 100 MB</code>&nbsp;&nbsp;&nbsp;<code>idle RSS 6 MB</code>
+</p>
+
 Concord is a runtime for machine fleets that lose their network and keep
 running. Built for space, sea, remote terrain, and underground. Places where
 clusters segment, operate locally, and reunite later.
