@@ -6,19 +6,17 @@ package ociregistry
 import (
 	"context"
 	"fmt"
-	"math"
-	"net/netip"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"zotregistry.dev/zot/v2/pkg/api"
 	"zotregistry.dev/zot/v2/pkg/api/config"
 )
 
+var Port = 5000
+
 type Registry struct {
 	controller *api.Controller
-	port       int
 }
 
 func rootDir() (string, error) {
@@ -35,7 +33,7 @@ func rootDir() (string, error) {
 	return appDir, nil
 }
 
-func New(port int) (*Registry, error) {
+func New() (*Registry, error) {
 	root, err := rootDir()
 	if err != nil {
 		return nil, err
@@ -44,13 +42,12 @@ func New(port int) (*Registry, error) {
 	cfg := config.New()
 	cfg.Storage.RootDirectory = root
 	cfg.HTTP.Address = "0.0.0.0"
-	cfg.HTTP.Port = strconv.Itoa(port)
+	cfg.HTTP.Port = fmt.Sprintf("%d", Port)
 	cfg.Log.Level = "error"
 	cfg.Extensions = nil
 
 	return &Registry{
 		controller: api.NewController(cfg),
-		port:       port,
 	}, nil
 }
 
@@ -75,12 +72,4 @@ func (r *Registry) Start(ctx context.Context) error {
 
 func (r *Registry) Stop() {
 	r.controller.Shutdown()
-}
-
-func (r *Registry) Addr() netip.AddrPort {
-	p := r.port
-	if p <= 0 || p > math.MaxUint16 {
-		p = r.controller.GetPort()
-	}
-	return netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(p))
 }
