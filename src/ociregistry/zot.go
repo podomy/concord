@@ -1,8 +1,12 @@
+// Copyright (C) 2026 Podomy.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package ociregistry
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -38,7 +42,7 @@ func New(port int) (*Registry, error) {
 	}
 
 	cfg := config.New()
-	cfg.Storage.StorageConfig.RootDirectory = root
+	cfg.Storage.RootDirectory = root
 	cfg.HTTP.Address = "0.0.0.0"
 	cfg.HTTP.Port = strconv.Itoa(port)
 	cfg.Log.Level = "error"
@@ -74,5 +78,9 @@ func (r *Registry) Stop() {
 }
 
 func (r *Registry) Addr() netip.AddrPort {
-	return netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(r.controller.GetPort()))
+	p := r.port
+	if p <= 0 || p > math.MaxUint16 {
+		p = r.controller.GetPort()
+	}
+	return netip.AddrPortFrom(netip.IPv4Unspecified(), uint16(p))
 }
