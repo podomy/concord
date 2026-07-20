@@ -78,6 +78,7 @@ reconciliation are part of the model.
 
 ## Documentation
 
+- [Design](./DESIGN.md)
 - [Commit message format](./COMMITS)
 - [Contributor license agreement](./CLA)
 

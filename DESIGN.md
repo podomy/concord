@@ -21,4 +21,5 @@
 - **Distributed transactions** No atomic multi-node commits.
 - **Resource migration** Workloads are assigned to a segment. If the segment
   dies, the workload is lost.
-- **Large meshes** A single mesh is bounded to hundreds of nodes.
+- **Large single meshes** A single memberlist mesh is bounded to hundreds of
+  nodes. Multi-segment hierarchy scales to thousands.
