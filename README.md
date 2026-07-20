@@ -10,7 +10,7 @@
 </p>
 
 Concord is a runtime for machine fleets that lose their network and keep
-running. Built for space, sea, remote terrain, and underground — places where
+running. Built for space, sea, remote terrain, and underground. Places where
 clusters segment, operate locally, and reunite later.
 
 Concord is designed for mathematical consistency. Each segment can keep
