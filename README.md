@@ -21,23 +21,17 @@ is reconciled by explicit rules instead of a hidden central truth.
 
 ## What Concord Is For
 
-- Machine fleets that cannot depend on continuous connectivity
-- Remote systems where communication degrades or disappears
-- Software that must keep running during cluster segmentation
-- Operators who need local operation and later reconciliation
-
-## Formal Verification
-
-- The design of important system parts is fully formally verified.
+- Machines that must keep working when the network goes away
+- Fleets split across partitions that reunite later
+- Environments with no reliable connection: space, sea, remote terrain, underground
 
 ## Kubernetes Compatibility
 
-Concord is not standard Kubernetes. It may support Kubernetes-like
+**Concord is not standard Kubernetes.** It may support Kubernetes-like
 deployment workflows, but it does not promise a coherent cluster
 network, a central control plane, or one always-current source of truth.
-If your software needs one live global truth, Concord is the wrong place to
-run it. Cluster segmentation is expected. Local operation and later
-reconciliation are part of the model.
+**If your software needs one live global truth, Concord is the wrong place to
+run it.** Cluster segmentation is expected. Local operation and eventual consistency are part of the model.
 
 ## TODO
 
@@ -58,23 +52,23 @@ reconciliation are part of the model.
 - [ ] DNS state reconciliation between nodes + what happens when a bubble/segment reconnects. But the problem is connected, if we implement that, we have to implement reconcilliation for EVERYTHING at once. That is why this comes last.
 - [ ] Peer sync catch-up for long journals (not needed for current stub/mesh path; do after real journal pull/apply works):
 
-  | Piece | Role |
-  | --- | --- |
-  | Persist watermarks | Restart resumes mid-history, not from year 0 |
-  | Paging (`Limit`) | Already in pull loop — never one unbounded dump |
-  | Optional: snapshots | State as of T + events after T (later) |
-  | Idempotent apply | Replay after restart does not corrupt (event id) |
+  | Piece               | Role                                             |
+  | ------------------- | ------------------------------------------------ |
+  | Persist watermarks  | Restart resumes mid-history, not from year 0     |
+  | Paging (`Limit`)    | Already in pull loop — never one unbounded dump  |
+  | Optional: snapshots | State as of T + events after T (later)           |
+  | Idempotent apply    | Replay after restart does not corrupt (event id) |
 
 - [ ] Extension friendliness (after real journal sync; core is solid but not plugin-first yet):
 
-  | Gap | Effect |
-  | --- | --- |
-  | Runtime is one hard-wired `Run()` | No registry of "start these services" |
-  | Sync handler stub inside `transport` | No pluggable sync backend / apply pipeline |
-  | Pull loop watermarks only in RAM | No store interface for durable cursors |
-  | Event types are free strings | No typed extension catalog |
-  | No SDK / extension API surface | External code cannot hang off lifecycle cleanly |
-  | Tight package coupling via runtime | Hard to ship optional modules |
+  | Gap                                  | Effect                                          |
+  | ------------------------------------ | ----------------------------------------------- |
+  | Runtime is one hard-wired `Run()`    | No registry of "start these services"           |
+  | Sync handler stub inside `transport` | No pluggable sync backend / apply pipeline      |
+  | Pull loop watermarks only in RAM     | No store interface for durable cursors          |
+  | Event types are free strings         | No typed extension catalog                      |
+  | No SDK / extension API surface       | External code cannot hang off lifecycle cleanly |
+  | Tight package coupling via runtime   | Hard to ship optional modules                   |
 
 ## Documentation
 
