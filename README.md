@@ -25,6 +25,10 @@ network, a central control plane, or one always-current source of truth.
 **If your software needs one live global truth, Concord is the wrong place to
 run it.** Cluster segmentation is expected. Local operation and eventual consistency are part of the model.
 
+Concord is a fleet brain, not a real-time controller. Motor loops, collision
+avoidance, and sensor fusion run at the edge, below Concord's reach. Concord
+coordinates the fleet; it does not pilot the machine.
+
 ### Documentation
 
 - [Roadmap](./TODO.md)
