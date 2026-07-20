@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"zotregistry.dev/zot/v2/pkg/api"
 	"zotregistry.dev/zot/v2/pkg/api/config"
@@ -30,6 +31,7 @@ var Port = 8444
 // Registry wraps a zot controller and manages its lifecycle.
 type Registry struct {
 	controller *api.Controller
+	stopOnce   sync.Once
 }
 
 // rootDir returns the on-disk storage directory for the local zot
@@ -91,6 +93,9 @@ func (r *Registry) Start(ctx context.Context) error {
 }
 
 // Stop shuts down the registry server and releases its resources.
+// Safe to call multiple times.
 func (r *Registry) Stop() {
-	r.controller.Shutdown()
+	r.stopOnce.Do(func() {
+		r.controller.Shutdown()
+	})
 }

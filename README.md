@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <code>binary size 100 MB</code>&nbsp;&nbsp;&nbsp;<code>idle RSS 6 MB</code>
+  <code>binary size 100 MB</code>&nbsp;&nbsp;&nbsp;<code>idle RSS 2 MB</code>
 </p>
 
 Concord is a runtime for machine fleets that lose their network and keep
