@@ -16,6 +16,7 @@ import (
 	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/kvstore"
 	"github.com/podomy/concord/src/node"
+	"github.com/podomy/concord/src/ociregistry"
 	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/peersync"
 	"github.com/podomy/concord/src/transport"
@@ -55,7 +56,6 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 
 	peerService, err := startPeerService(logger, nodeConfig, addresses)
 	if err != nil {
-		// error was wrapped inside the start peer service
 		return err
 	}
 	defer shutdownPeerService(logger, peerService)
@@ -80,6 +80,18 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	// Reconciliation loop: pull peers and apply events into local journal/views.
 	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
+
+	// Start OCI registry.
+	ocireg, err := ociregistry.New()
+	if err != nil {
+		return fmt.Errorf("oci registry new: %w", err)
+	}
+	err = ocireg.Start(ctx)
+	if err != nil {
+		return fmt.Errorf("oci registry start: %w", err)
+	}
+	defer ocireg.Stop()
+	logger.Info("oci registry started", zap.Int("port", ociregistry.Port))
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
