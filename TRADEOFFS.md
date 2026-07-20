@@ -1,6 +1,4 @@
-# Design
-
-## What Concord does well
+### What Concord does well
 
 - **Fully disconnected operation** Each node is autonomous. No central
   coordination needed.
@@ -11,7 +9,7 @@
 - **No SPOF** No coordinator, no single registry, no control plane.
 - **Simple ops** Join a node and it converges.
 
-## What Concord does not do
+### What Concord does not do
 
 - **Strong consistency** No read-your-writes or linearizability across nodes.
   Eventually consistent by design.

@@ -1,11 +1,9 @@
-# TODO
-
-## Mesh foundation (in progress)
+### Mesh foundation (in progress)
 
 - [ ] Wire libcontainer for workload isolation
 - [ ] Workload reconciliation from journal events (replay for state rebuild)
 
-## Future segments
+### Future segments
 
 - [ ] **Strong consistency within a segment** — Raft group (3-5 nodes) for linearizable operations: workload assignment, distributed locks. Cross-segment stays eventually consistent.
 - [ ] **Workload assignment to segment** — `Spec.SegmentID` tracks segment, not pinned node. Segment reassigns on node loss.
