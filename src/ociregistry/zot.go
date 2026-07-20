@@ -13,7 +13,7 @@ import (
 	"zotregistry.dev/zot/v2/pkg/api/config"
 )
 
-var Port = 5000
+var Port = 8444
 
 type Registry struct {
 	controller *api.Controller
