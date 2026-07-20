@@ -9,11 +9,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/podomy/concord" alt="License"></a>
 </p>
 
-Concord is a runtime and control layer for running software across machine
-fleets in environments with poor connectivity and conditions that degrade
-electronics and communication, such as space, remote terrain,
-underground sites, or the sea. Concord is built for clusters that segment,
-keep operating locally, and meet again later.
+Concord is a runtime for machine fleets that lose their network and keep
+running. Built for space, sea, remote terrain, and underground — places where
+clusters segment, operate locally, and reunite later.
 
 Concord is designed for mathematical consistency. Each segment can keep
 operating from local knowledge, and when segments meet again their state
