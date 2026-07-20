@@ -81,14 +81,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
 
-	// Start OCI registry.
-	ocireg, err := ociregistry.New()
+	ocireg, err := startOCIRegistry(ctx)
 	if err != nil {
-		return fmt.Errorf("oci registry new: %w", err)
-	}
-	err = ocireg.Start(ctx)
-	if err != nil {
-		return fmt.Errorf("oci registry start: %w", err)
+		return err
 	}
 	defer ocireg.Stop()
 	logger.Info("oci registry started", zap.Int("port", ociregistry.Port))
@@ -189,6 +184,17 @@ func startMDNSAdvertise(ctx context.Context, logger *zap.Logger, nodeConfig *nod
 			logger.Error("mdns advertise shutdown", zap.Error(err))
 		}
 	}, nil
+}
+
+func startOCIRegistry(ctx context.Context) (*ociregistry.Registry, error) {
+	ocireg, err := ociregistry.New()
+	if err != nil {
+		return nil, fmt.Errorf("oci registry new: %w", err)
+	}
+	if err := ocireg.Start(ctx); err != nil {
+		return nil, fmt.Errorf("oci registry start: %w", err)
+	}
+	return ocireg, nil
 }
 
 func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []netip.AddrPort) (*peerdiscovery.MemberService, error) {

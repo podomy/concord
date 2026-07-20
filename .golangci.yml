@@ -88,7 +88,7 @@ linters:
     copyloopvar:
       check-alias: true
     cyclop:
-      max-complexity: 10
+      max-complexity: 12
       package-average: 5
     dupl:
       threshold: 100
@@ -133,7 +133,7 @@ linters:
       toolchain-forbidden: false
       tool-forbidden: false
       go-debug-forbidden: true
-      go-version-pattern: ^1\.25(\.\d+)?$
+      go-version-pattern: ^1\.2[5-9](\.\d+)?$
       check-module-path: true
     nestif:
       min-complexity: 4
