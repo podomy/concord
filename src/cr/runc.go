@@ -39,21 +39,29 @@ func stateDirPath() (string, error) {
 // ~/.config/concord/cr/. Multiple containers share this state directory;
 // each is keyed by its unique ID.
 func NewRuntime() (*ContainerRuntime, error) {
-	dir, err := stateDirPath()
+	stateDir, err := stateDirPath()
 	if err != nil {
 		return nil, err
 	}
-	return &ContainerRuntime{stateDir: dir}, nil
+	return &ContainerRuntime{stateDir: stateDir}, nil
 }
 
 // Create sets up a new container with the given configs.Config but does not
 // start any process inside it. Call Start to run the init process.
 func (r *ContainerRuntime) Create(id string, cfg *configs.Config) (*libcontainer.Container, error) {
-	return libcontainer.Create(r.stateDir, id, cfg)
+	container, err := libcontainer.Create(r.stateDir, id, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("libcontainer create: %w", err)
+	}
+	return container, nil
 }
 
 // Start runs the init process inside the container. The container must have
 // been created with Create first.
 func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer.Process) error {
-	return ctr.Run(proc)
+	err := ctr.Run(proc)
+	if err != nil {
+		return fmt.Errorf("libcontainer run: %w", err)
+	}
+	return nil
 }
