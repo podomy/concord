@@ -16,7 +16,7 @@ import (
 	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/kvstore"
 	"github.com/podomy/concord/src/node"
-	"github.com/podomy/concord/src/ociregistry"
+	"github.com/podomy/concord/src/or"
 	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/peersync"
 	"github.com/podomy/concord/src/transport"
@@ -86,7 +86,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return err
 	}
 	defer ocireg.Stop()
-	logger.Info("oci registry started", zap.Int("port", ociregistry.Port))
+	logger.Info("oci registry started", zap.Int("port", or.Port))
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
@@ -186,8 +186,8 @@ func startMDNSAdvertise(ctx context.Context, logger *zap.Logger, nodeConfig *nod
 	}, nil
 }
 
-func startOCIRegistry(ctx context.Context) (*ociregistry.Registry, error) {
-	ocireg, err := ociregistry.New()
+func startOCIRegistry(ctx context.Context) (*or.Registry, error) {
+	ocireg, err := or.New()
 	if err != nil {
 		return nil, fmt.Errorf("oci registry new: %w", err)
 	}

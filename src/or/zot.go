@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Podomy.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package ociregistry wraps an embedded zot OCI distribution registry.
+// Package or wraps an embedded zot OCI distribution registry.
 //
 // Each Concord node runs a local zot instance so workloads can pull
 // container images from localhost. Images are reconciled between nodes
@@ -10,7 +10,7 @@
 //
 // The registry storage lives under the user config directory at
 // ~/.config/concord/zot/ and listens on the port defined by Port.
-package ociregistry
+package or
 
 import (
 	"context"
