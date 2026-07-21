@@ -8,6 +8,7 @@ require (
 	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/miekg/dns v1.1.72
+	github.com/opencontainers/runc v1.3.3
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 	zotregistry.dev/zot/v2 v2.1.18
@@ -115,7 +116,6 @@ require (
 	github.com/chai2010/gettext-go v1.0.3 // indirect
 	github.com/checkpoint-restore/go-criu/v6 v6.3.0 // indirect
 	github.com/cheggaaa/pb/v3 v3.1.7 // indirect
-	github.com/cilium/ebpf v0.17.3 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudevents/sdk-go/protocol/nats/v2 v2.16.2 // indirect
@@ -138,7 +138,6 @@ require (
 	github.com/containerd/typeurl/v2 v2.2.3 // indirect
 	github.com/coreos/go-oidc/v3 v3.18.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
-	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -343,7 +342,6 @@ require (
 	github.com/opencontainers/distribution-spec/specs-go v0.0.0-20250123160558-a139cc423184 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/opencontainers/runc v1.3.3 // indirect
 	github.com/opencontainers/runtime-spec v1.3.0 // indirect
 	github.com/opencontainers/selinux v1.13.1 // indirect
 	github.com/openvex/discovery v0.1.1-0.20240802171711-7c54efc57553 // indirect
@@ -425,7 +423,6 @@ require (
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	github.com/urfave/cli v1.22.17 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.34 // indirect
 	github.com/veraison/go-cose v1.3.0 // indirect

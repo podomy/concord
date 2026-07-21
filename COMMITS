@@ -24,6 +24,7 @@ Summary:
 
   Write in the imperative mood.
   Keep it short and specific.
+  Include enough context to understand the change without reading the diff.
   Do not end with a period.
 
 Examples:
