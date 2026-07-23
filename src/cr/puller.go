@@ -36,8 +36,8 @@ func NewImagePuller() *ImagePuller {
 // PullResult contains the extracted rootfs path and the image configuration
 // for use by the bundle builder.
 type PullResult struct {
-	RootFS string
 	Config *v1.ConfigFile
+	RootFS string
 }
 
 // Pull fetches the image, resolves the platform, and extracts layers

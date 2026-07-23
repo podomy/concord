@@ -9,6 +9,7 @@ require (
 	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/miekg/dns v1.1.72
+	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
@@ -338,7 +339,6 @@ require (
 	github.com/olekukonko/ll v0.1.7 // indirect
 	github.com/olekukonko/tablewriter v1.1.4 // indirect
 	github.com/open-policy-agent/opa v1.17.1 // indirect
-	github.com/opencontainers/cgroups v0.0.4 // indirect
 	github.com/opencontainers/distribution-spec/specs-go v0.0.0-20250123160558-a139cc423184 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
