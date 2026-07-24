@@ -34,7 +34,7 @@ import (
 const eventTypeWorkloadSpec = "workload.spec"
 
 // RunLoop watches for workload events and drives the container lifecycle.
-// It blocks until ctx is cancelled.
+// It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -43,11 +43,7 @@ func RunLoop(
 	runtime *cr.ContainerRuntime,
 	j journal.Journal,
 	eventsByType *journalview.EventsByType,
-) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context cancelled: %w", err)
-	}
-
+) {
 	running := map[uuid.UUID]*libcontainer.Container{}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -55,7 +51,7 @@ func RunLoop(
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("context cancelled: %w", ctx.Err())
+			return
 
 		case <-ticker.C:
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, eventsByType, running)
@@ -141,7 +137,7 @@ func startContainer(
 	}
 
 	proc := buildProcess(spec, pullResult)
-	if err := runtime.Start(ctr, proc); err != nil {
+	if err = runtime.Start(ctr, proc); err != nil {
 		logger.Error("start container", zap.Error(err))
 		return
 	}

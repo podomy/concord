@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/certs"
+	"github.com/podomy/concord/src/cr"
 	"github.com/podomy/concord/src/dnsserver"
 	"github.com/podomy/concord/src/journalview"
 	"github.com/podomy/concord/src/kvstore"
@@ -19,6 +20,7 @@ import (
 	"github.com/podomy/concord/src/or"
 	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/peersync"
+	"github.com/podomy/concord/src/reconciler"
 	"github.com/podomy/concord/src/transport"
 )
 
@@ -42,7 +44,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer closeStores(logger, st)
 
-	eventsByID, views, err := setupViews(ctx, st.kv)
+	eventsByID, eventsByType, views, err := setupViews(ctx, st.kv)
 	if err != nil {
 		return fmt.Errorf("setup views: %w", err)
 	}
@@ -81,12 +83,22 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
 
+	// Start the OCI registry
 	ocireg, err := startOCIRegistry(ctx)
 	if err != nil {
 		return err
 	}
 	defer ocireg.Stop()
 	logger.Info("oci registry started", zap.Int("port", or.Port))
+
+	// Start the workload reconciler loop.
+	puller := cr.NewImagePuller()
+	crRuntime, err := cr.NewRuntime()
+	if err != nil {
+		return fmt.Errorf("container runtime: %w", err)
+	}
+	go reconciler.RunLoop(ctx, logger, nodeConfig.ID, puller, crRuntime, st.journal, eventsByType)
+	logger.Info("workload reconciler started")
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
@@ -147,17 +159,17 @@ func shutdownPeerService(logger *zap.Logger, ps *peerdiscovery.MemberService) {
 	}
 }
 
-func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsByID, []journalview.View, error) {
+func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsByID, *journalview.EventsByType, []journalview.View, error) {
 	eventsByID := journalview.NewEventsByID(kv)
 	eventsByNode := journalview.NewEventsByNode(kv)
 	eventsByType := journalview.NewEventsByType(kv)
 	views := []journalview.View{eventsByID, eventsByNode, eventsByType}
 
 	if err := journalview.RebuildViews(ctx, views); err != nil {
-		return nil, nil, fmt.Errorf("rebuild views: %w", err)
+		return nil, nil, nil, fmt.Errorf("rebuild views: %w", err)
 	}
 
-	return eventsByID, views, nil
+	return eventsByID, eventsByType, views, nil
 }
 
 func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, error) {
