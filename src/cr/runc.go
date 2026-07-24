@@ -56,12 +56,13 @@ func (r *ContainerRuntime) Create(id string, cfg *configs.Config) (*libcontainer
 	return container, nil
 }
 
-// Start runs the init process inside the container. The container must have
-// been created with Create first.
+// Start runs the init process inside the container and returns once it is
+// running (non-blocking). The container must have been created with Create
+// first. Use ctr.Run instead to wait for the process to exit.
 func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer.Process) error {
-	err := ctr.Run(proc)
+	err := ctr.Start(proc)
 	if err != nil {
-		return fmt.Errorf("libcontainer run: %w", err)
+		return fmt.Errorf("libcontainer start: %w", err)
 	}
 	return nil
 }

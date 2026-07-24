@@ -23,9 +23,7 @@ import (
 //   - Resources (CPU, memory) from the spec are mapped to cgroup limits.
 //     MemoryMB is converted from megabytes to bytes for the kernel.
 //     CPUShares of 0 means no limit is set (kernel default applies).
-//
-//nolint:unused // wired in by the reconciler
-func bundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (*configs.Config, error) {
+func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (*configs.Config, error) {
 	err := ctx.Err()
 	if err != nil {
 		return nil, fmt.Errorf("context cancellation: %w", err)

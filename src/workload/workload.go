@@ -13,6 +13,7 @@ type Spec struct {
 	Resources Resources
 	ID        uuid.UUID
 	SegmentID uuid.UUID // which node must run this
+	Removed   bool
 }
 
 type Resources struct {
