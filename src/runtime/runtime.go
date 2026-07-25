@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/certs"
@@ -84,7 +85,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	logger.Info("peer sync pull loop started")
 
 	// Start the OCI registry
-	ocireg, err := startOCIRegistry(ctx)
+	ocireg, err := startOCIRegistry(ctx, nodeConfig.ID, peerService, logger)
 	if err != nil {
 		return err
 	}
@@ -198,12 +199,12 @@ func startMDNSAdvertise(ctx context.Context, logger *zap.Logger, nodeConfig *nod
 	}, nil
 }
 
-func startOCIRegistry(ctx context.Context) (*or.Registry, error) {
-	ocireg, err := or.New()
+func startOCIRegistry(ctx context.Context, nodeID uuid.UUID, peerService *peerdiscovery.MemberService, logger *zap.Logger) (*or.Registry, error) {
+	ocireg, err := or.New(nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("oci registry new: %w", err)
 	}
-	if err := ocireg.Start(ctx); err != nil {
+	if err := ocireg.Start(ctx, peerService, logger); err != nil {
 		return nil, fmt.Errorf("oci registry start: %w", err)
 	}
 	return ocireg, nil
