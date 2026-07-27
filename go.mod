@@ -11,6 +11,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
+	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 	zotregistry.dev/zot/v2 v2.1.18
@@ -426,7 +427,6 @@ require (
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.34 // indirect
 	github.com/veraison/go-cose v1.3.0 // indirect
-	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
