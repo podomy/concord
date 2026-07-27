@@ -35,7 +35,7 @@ coordinates the fleet; it does not pilot the machine.
 
 Please discuss your idea with the community before opening a PR. Create an RFC and propose it if the change is complex.
 
-https://groups.google.com/g/podomy
+[Community link, press here.](https://groups.google.com/g/podomy)
 
 See [CONTRIBUTING](./CONTRIBUTING) for details.
 
