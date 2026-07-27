@@ -1,0 +1,29 @@
+                            CONTRIBUTING
+Changes require an RFC (request for comments) before a PR. Post your proposal to
+the community:
+
+    https://groups.google.com/g/podomy
+
+This includes new subsystems, protocol changes, and architectural
+decisions. PRs opened without a prior group discussion will be redirected there
+before code review.
+
+Use GitHub Issues for bugs and actionable tasks. Tag issues with
+good-first-issue if they are suitable for newcomers.
+
+                         Review Expectations
+
+Small PR (bugfix)       3 business days
+Normal PR               7 days
+RFC                     7 days
+
+If maintainers cannot meet the window, they will say so. Silence is
+not a no.
+
+                          Getting Started
+
+1. Build        go build .
+2. Test         go test ./...
+3. Pick and issue or go over the code
+4. Send an RFC if the change is not small
+5. Submit a PR

@@ -35,10 +35,17 @@ run it.** Cluster segmentation is expected. Local operation and eventual consist
 
 ### Documentation
 
-- [Roadmap](./TODO.md)
-- [Tradeoffs](./TRADEOFFS.md)
 - [Commit message format](./COMMITS)
 - [Contributor license agreement](./CLA)
+- [Contributing](./CONTRIBUTING)
+
+### Contributing
+
+Please discuss your idea with the community before opening a PR. Create an RFC and propose it if the change is complex.
+
+https://groups.google.com/g/podomy
+
+See [CONTRIBUTING](./CONTRIBUTING) for details.
 
 ### License
 
