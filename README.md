@@ -35,7 +35,7 @@ coordinates the fleet; it does not pilot the machine.
 
 Discuss your change with the community before opening a PR
 
-[dev@podomy.com](mailto:dev@podomy.com)
+[dev@podomy.com](mailto:dev@podomy.com)&nbsp;&nbsp;&nbsp;[Archive](https://archive.podomy.com)
 
 You must subscribe to receive responses.
 
