@@ -33,9 +33,11 @@ coordinates the fleet; it does not pilot the machine.
 
 ### Contributing
 
-Please discuss your idea with the community before opening a PR. Create an RFC and propose it if the change is complex.
+Discuss your change with the community before opening a PR
 
-[Community link, press here.](https://groups.google.com/g/podomy)
+[dev@podomy.com](mailto:dev@podomy.com)
+
+You must subscribe to receive responses.
 
 See [CONTRIBUTING](./CONTRIBUTING) for details.
 
