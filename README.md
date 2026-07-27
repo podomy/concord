@@ -25,14 +25,6 @@ Concord is a fleet brain, not a real-time controller. Motor loops, collision
 avoidance, and sensor fusion run at the edge, below Concord's reach. Concord
 coordinates the fleet; it does not pilot the machine.
 
-### Kubernetes Compatibility
-
-**Concord is not standard Kubernetes.** It may support Kubernetes-like
-deployment workflows, but it does not promise a coherent cluster
-network, a central control plane, or one always-current source of truth.
-**If your software needs one live global truth, Concord is the wrong place to
-run it.** Cluster segmentation is expected. Local operation and eventual consistency are part of the model.
-
 ### Documentation
 
 - [Commit message format](./COMMITS)
