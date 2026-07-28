@@ -12,6 +12,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+const bridgeName = "cn0"
+
 // Invariants
 // 1. One bridge per node. cn0 exists as long as concord is running.
 // It has to be idempotent (create-if-not exists).
@@ -23,6 +25,9 @@ import (
 // 4. Port mapping is a one shot add/remove. A DNAT rule in iptables for each
 // HOSTPORT -> CONTAINERIP:CONTAINERPORT. Removed atomically on container stop.
 
+// CreateBridge ensures the cn0 bridge exists, is up, and has the subnet
+// address 10.0.0.1/16 assigned. It is idempotent, safe to call on every
+// startup.
 func CreateBridge(ctx context.Context) error {
 	err := ctx.Err()
 	if err != nil {
@@ -34,10 +39,14 @@ func CreateBridge(ctx context.Context) error {
 	mask := "/16"
 
 	// Create the bridge.
-	bridge := createBridge()
+	bridge := &netlink.Bridge{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: bridgeName,
+		},
+	}
 
 	// Idempotently create the link device for the bridge.
-	linkDevice, err := findOrCreateLinkDevice(ctx, bridge)
+	linkDevice, err := findOrCreateBridgeLinkDevice(ctx, bridge)
 	if err != nil {
 		return fmt.Errorf("find or create link device: %w", err)
 	}
@@ -62,17 +71,9 @@ func CreateBridge(ctx context.Context) error {
 	return nil
 }
 
-func createBridge() *netlink.Bridge {
-	bridge := &netlink.Bridge{
-		LinkAttrs: netlink.LinkAttrs{
-			Name: "cn0",
-		},
-	}
-
-	return bridge
-}
-
-func findOrCreateLinkDevice(ctx context.Context, bridge *netlink.Bridge) (netlink.Link, error) {
+// findOrCreateBridgeLinkDevice returns the existing cn0 link device or
+// creates it via netlink if it does not already exist.
+func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (netlink.Link, error) {
 	err := ctx.Err()
 	if err != nil {
 		return nil, fmt.Errorf("context cancellation: %w", err)

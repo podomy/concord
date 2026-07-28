@@ -137,7 +137,8 @@ func startContainer(
 	}
 
 	proc := buildProcess(spec, pullResult)
-	if err = runtime.Start(ctr, proc); err != nil {
+	_, err = runtime.Start(ctr, proc)
+	if err != nil {
 		logger.Error("start container", zap.Error(err))
 		return
 	}
