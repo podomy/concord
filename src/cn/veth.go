@@ -16,7 +16,7 @@ import (
 // network namespace.
 // 3. Veth names are deterministic. veth-<workload-id>a and veth-<workload-id>b.
 // a is the host side, b is the container side.
-// 4. IP assignment happens inside the container's namespace after veth is moved.
+// 4. IP assignment happens outside the container's namespace before veth is moved.
 // 5. Cleanup removes both ends. The kernel deletes the container end when its
 // namespace dies, but the host end must be explicitly removed.
 
@@ -29,10 +29,10 @@ func CreateVethPair(ctx context.Context, containerID string, namespacePID int) e
 		return fmt.Errorf("context cancellation: %w", err)
 	}
 
-	vethA := "veth-<" + containerID + ">a"
-	vethB := "veth-<" + containerID + ">b"
+	vethA := VethHostName(containerID, VethA)
+	vethB := VethHostName(containerID, VethB)
 
-	vethALink, err := setupVethLink(vethA, vethB, namespacePID, ctx)
+	vethALink, err := setupVethLink(ctx, vethA, vethB, namespacePID)
 	if err != nil {
 		return fmt.Errorf("setup veth link: %w", err)
 	}
@@ -98,7 +98,7 @@ func DeleteLink(linkName string) error {
 
 // setupVethLink create the veth pairs. It returns end A, and an error.
 // The end A goes to the host, the end B goes to the other namespace (i.e. container).
-func setupVethLink(vethA, vethB string, namespacePID int, ctx context.Context) (netlink.Link, error) {
+func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (netlink.Link, error) {
 	err := ctx.Err()
 	if err != nil {
 		return nil, fmt.Errorf("context cancellation: %w", err)
@@ -123,10 +123,37 @@ func setupVethLink(vethA, vethB string, namespacePID int, ctx context.Context) (
 		return nil, fmt.Errorf("link by name: %w", err)
 	}
 
+	// Set the address for the link device / interface before putting it into the
+	// namespace of the container.
+	addr, err := netlink.ParseAddr(AllocateIP())
+	if err != nil {
+		return nil, fmt.Errorf("netlink parse addr: %w", err)
+	}
+	err = netlink.AddrAdd(vethBLink, addr)
+	if err != nil {
+		return nil, fmt.Errorf("netlink addr add: %w", err)
+	}
+
+	err = netlink.LinkSetUp(vethBLink)
+	if err != nil {
+		return nil, fmt.Errorf("link set up B: %w", err)
+	}
+
 	err = netlink.LinkSetNsPid(vethBLink, namespacePID)
 	if err != nil {
 		return nil, fmt.Errorf("link set ns pid: %w", err)
 	}
 
 	return vethALink, nil
+}
+
+type VethEnd string
+
+const (
+	VethA VethEnd = "a"
+	VethB VethEnd = "b"
+)
+
+func VethHostName(containerID string, whichEnd VethEnd) string {
+	return "veth-<" + containerID + ">" + string(whichEnd)
 }

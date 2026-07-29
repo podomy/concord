@@ -8,7 +8,7 @@ Format:
 
 Types:
 
-  feat    A user-facing feature or new capability
+  feature    A user-facing feature or new capability
   fix     A bug fix
   chore   Maintenance, cleanup, tooling, or structure changes
   docs    Documentation-only changes

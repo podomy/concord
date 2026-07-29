@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/src/certs"
+	"github.com/podomy/concord/src/cn"
 	"github.com/podomy/concord/src/cr"
 	"github.com/podomy/concord/src/dnsserver"
 	"github.com/podomy/concord/src/journalview"
@@ -84,28 +85,47 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
 
-	// Start the OCI registry
-	ocireg, err := startOCIRegistry(ctx, nodeConfig.ID, peerService, logger)
+	// Start the workload infrastructure.
+	ocireg, err := startWorkloadInfrastructure(ctx, nodeConfig.ID, peerService, logger, st, eventsByType)
 	if err != nil {
-		return err
+		return fmt.Errorf("start workload infrastructure: %w", err)
 	}
 	defer ocireg.Stop()
-	logger.Info("oci registry started", zap.Int("port", or.Port))
 
-	// Start the workload reconciler loop.
-	puller := cr.NewImagePuller()
-	crRuntime, err := cr.NewRuntime()
+	// Create the network bridge.
+	err = cn.CreateBridge(ctx)
 	if err != nil {
-		return fmt.Errorf("container runtime: %w", err)
+		return fmt.Errorf("create bridge: %w", err)
 	}
-	go reconciler.RunLoop(ctx, logger, nodeConfig.ID, puller, crRuntime, st.journal, eventsByType)
-	logger.Info("workload reconciler started")
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
 	logger.Info("shutting down", zap.String("node_id", nodeConfig.ID.String()))
 
 	return nil
+}
+
+func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
+	peerService *peerdiscovery.MemberService, logger *zap.Logger,
+	st *stores, eventsByType *journalview.EventsByType,
+) (*or.Registry, error) {
+	// Start the OCI registry
+	ocireg, err := startOCIRegistry(ctx, nodeID, peerService, logger)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("oci registry started", zap.Int("port", or.Port))
+
+	// Start the workload reconciler loop.
+	puller := cr.NewImagePuller()
+	crRuntime, err := cr.NewRuntime()
+	if err != nil {
+		return nil, fmt.Errorf("container runtime: %w", err)
+	}
+	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, eventsByType)
+	logger.Info("workload reconciler started")
+
+	return ocireg, nil
 }
 
 func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPort {
@@ -131,7 +151,7 @@ func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.Nod
 		return nil, fmt.Errorf("ensure certs: %w", err)
 	}
 
-	if err := transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key); err != nil {
+	if err = transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key); err != nil {
 		return nil, fmt.Errorf("http/2 server failed to start: %w", err)
 	}
 

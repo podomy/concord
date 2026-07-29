@@ -25,6 +25,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/src/cn"
 	"github.com/podomy/concord/src/cr"
 	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/journalview"
@@ -87,6 +88,7 @@ func reconcileTick(
 			continue
 		}
 
+		// Cleanup happens here, we check if spec was removed on every tick.
 		if spec.Removed {
 			destroyContainer(ctx, logger, j, nodeID, spec, running)
 			continue
@@ -137,20 +139,21 @@ func startContainer(
 	}
 
 	proc := buildProcess(spec, pullResult)
-	_, err = runtime.Start(ctr, proc)
+	namespacePID, err := runtime.Start(ctr, proc)
 	if err != nil {
 		logger.Error("start container", zap.Error(err))
 		return
 	}
 
-	running[spec.ID] = ctr
-
-	pid, err := proc.Pid()
+	err = cn.CreateVethPair(ctx, spec.ID.String(), namespacePID)
 	if err != nil {
-		logger.Error("get pid", zap.Error(err))
+		logger.Error("create veth pair", zap.Error(err))
+		return
 	}
 
-	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, pid)
+	running[spec.ID] = ctr
+
+	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, namespacePID)
 }
 
 // destroyContainer stops and removes a container, then removes it from the running set.
@@ -168,6 +171,12 @@ func destroyContainer(
 	}
 
 	delete(running, spec.ID)
+
+	// Clean up the veth A end.
+	err := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA))
+	if err != nil {
+		logger.Error("delete veth A end", zap.Error(err))
+	}
 
 	if err := ctr.Destroy(); err != nil {
 		logger.Error("destroy container", zap.Error(err))

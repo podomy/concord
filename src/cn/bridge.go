@@ -7,12 +7,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
+	"sync"
 	"syscall"
 
 	"github.com/vishvananda/netlink"
 )
 
-const bridgeName = "cn0"
+const (
+	bridgeName = "cn0"
+)
+
+var (
+	nextContainerIP = netip.MustParseAddr("10.0.0.2")
+	ipMu            sync.Mutex
+)
 
 // Invariants
 // 1. One bridge per node. cn0 exists as long as concord is running.
@@ -91,4 +100,13 @@ func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (
 	}
 
 	return linkDevice, nil
+}
+
+// AllocateIP allocates an available IP address and returns that as a string + CIDR.
+func AllocateIP() string {
+	ipMu.Lock()
+	ip := nextContainerIP
+	nextContainerIP = nextContainerIP.Next()
+	ipMu.Unlock()
+	return ip.String() + "/16"
 }
