@@ -29,7 +29,7 @@ Summary:
 
 Examples:
 
-  feat(go): add command entrypoint
+  feature(go): add command entrypoint
   chore(go): update lint configuration
   chore(zed): update editor tooling
   docs(commits): document commit message format

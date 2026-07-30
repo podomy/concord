@@ -46,6 +46,8 @@ func RunLoop(
 	eventsByType *journalview.EventsByType,
 ) {
 	running := map[uuid.UUID]*libcontainer.Container{}
+	ipAndCIDRs := map[uuid.UUID]string{}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -55,7 +57,7 @@ func RunLoop(
 			return
 
 		case <-ticker.C:
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, eventsByType, running)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, eventsByType, running, ipAndCIDRs)
 		}
 	}
 }
@@ -70,6 +72,7 @@ func reconcileTick(
 	j journal.Journal,
 	eventsByType *journalview.EventsByType,
 	running map[uuid.UUID]*libcontainer.Container,
+	ipAndCIDRs map[uuid.UUID]string,
 ) {
 	events, err := eventsByType.List(ctx, eventTypeWorkloadSpec)
 	if err != nil {
@@ -90,7 +93,7 @@ func reconcileTick(
 
 		// Cleanup happens here, we check if spec was removed on every tick.
 		if spec.Removed {
-			destroyContainer(ctx, logger, j, nodeID, spec, running)
+			destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
 			continue
 		}
 
@@ -98,7 +101,7 @@ func reconcileTick(
 			continue
 		}
 
-		startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running)
+		startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
 	}
 }
 
@@ -113,6 +116,7 @@ func startContainer(
 	nodeID uuid.UUID,
 	spec workload.Spec,
 	running map[uuid.UUID]*libcontainer.Container,
+	ipAndCIDRs map[uuid.UUID]string,
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
@@ -145,10 +149,22 @@ func startContainer(
 		return
 	}
 
-	err = cn.CreateVethPair(ctx, spec.ID.String(), namespacePID)
+	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), namespacePID)
 	if err != nil {
 		logger.Error("create veth pair", zap.Error(err))
 		return
+	}
+
+	// Add the ipAndCIDRstring to the map to save it
+	ipAndCIDRs[spec.ID] = ipAndCIDRstring
+
+	// Port mapping.
+	if spec.HostPort > 0 {
+		err = cn.AddPortMapping(ctx, spec.HostPort, ipAndCIDRstring, spec.ContainerPort)
+		if err != nil {
+			logger.Error("add port mapping", zap.Error(err))
+			return
+		}
 	}
 
 	running[spec.ID] = ctr
@@ -164,6 +180,7 @@ func destroyContainer(
 	nodeID uuid.UUID,
 	spec workload.Spec,
 	running map[uuid.UUID]*libcontainer.Container,
+	ipAndCIDRs map[uuid.UUID]string,
 ) {
 	ctr, exists := running[spec.ID]
 	if !exists {
@@ -176,6 +193,18 @@ func destroyContainer(
 	err := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA))
 	if err != nil {
 		logger.Error("delete veth A end", zap.Error(err))
+	}
+
+	// Remove the port mappings the workload.
+	if spec.HostPort > 0 {
+		cidr, ok := ipAndCIDRs[spec.ID]
+		if ok {
+			err := cn.RemovePortMapping(ctx, spec.HostPort, cidr, spec.ContainerPort)
+			if err != nil {
+				logger.Error("remove port mapping", zap.Error(err))
+			}
+			delete(ipAndCIDRs, spec.ID)
+		}
 	}
 
 	if err := ctr.Destroy(); err != nil {

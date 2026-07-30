@@ -77,6 +77,13 @@ func CreateBridge(ctx context.Context) error {
 		return fmt.Errorf("netlink addr add: %w", err)
 	}
 
+	// NAT setup. Setup of the masquerade to rewrite source ip
+	// of the outgoing container packets to the ip of the host.
+	err = SetupMasquerade(ctx)
+	if err != nil {
+		return fmt.Errorf("setup masquerade: %w", err)
+	}
+
 	return nil
 }
 
@@ -102,7 +109,7 @@ func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (
 	return linkDevice, nil
 }
 
-// AllocateIP allocates an available IP address and returns that as a string + CIDR.
+// AllocateIP allocates an available IP address and returns that as a string of IP + CIDR.
 func AllocateIP() string {
 	ipMu.Lock()
 	ip := nextContainerIP

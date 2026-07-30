@@ -14,7 +14,7 @@ import (
 	"github.com/podomy/concord/src/workload"
 )
 
-// bundleBuilder produces a libcontainer Config from a pulled image.
+// BundleBuilder produces a libcontainer Config from a pulled image.
 //
 // Invariants:
 //   - The caller is responsible for constructing the libcontainer Process

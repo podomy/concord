@@ -6,14 +6,16 @@ package workload
 import "github.com/google/uuid"
 
 type Spec struct {
-	Image     string // OCI reference, e.g. "docker.io/nginx:latest"
-	Restart   RestartPolicy
-	Command   []string // entrypoint override
-	Env       map[string]string
-	Resources Resources
-	ID        uuid.UUID
-	SegmentID uuid.UUID // which node must run this
-	Removed   bool
+	Image         string // OCI reference, e.g. "docker.io/nginx:latest"
+	Restart       RestartPolicy
+	Command       []string // entrypoint override
+	Env           map[string]string
+	Resources     Resources
+	ID            uuid.UUID
+	SegmentID     uuid.UUID // which node must run this
+	Removed       bool
+	HostPort      uint16
+	ContainerPort uint16
 }
 
 type Resources struct {
