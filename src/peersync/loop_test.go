@@ -37,8 +37,6 @@ func testPullState(syncer PeerSync, watermarks map[uuid.UUID]string) pullState {
 	}
 }
 
-// --- helpers / port ---
-
 func TestParseTransportPort(t *testing.T) {
 	t.Parallel()
 
@@ -213,8 +211,6 @@ func TestSyncOneMissingWatermarkSendsEmpty(t *testing.T) {
 	}
 }
 
-// --- pullTick: strategy C, membership edges ---
-
 // Meet tick must Sync once only (not meet + periodic double pull).
 func TestPullTickMeetThenPeriodicNoDoubleSync(t *testing.T) {
 	t.Parallel()
@@ -311,8 +307,6 @@ func TestPullTickMembersErrorKeepsPrevious(t *testing.T) {
 	}
 }
 
-// --- paging and multi-peer watermarks ---
-
 // Each successful page advances the cursor; next tick sends the prior NextWatermark.
 func TestPullTickPagingWatermarksAcrossTicks(t *testing.T) {
 	t.Parallel()
@@ -375,8 +369,6 @@ func TestPullTickPerPeerWatermarksIndependent(t *testing.T) {
 		t.Fatalf("watermarks = %v", watermarks)
 	}
 }
-
-// peer/server down then back; process restart
 
 // Peer unreachable mid-sync: cursor stays; when peer returns, resume same watermark
 // (no skip ahead, no forced full reset while the process stays up).
@@ -535,8 +527,6 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 		t.Fatal("RunPullLoop did not stop")
 	}
 }
-
-// fakes
 
 type syncCall struct {
 	peer netip.AddrPort

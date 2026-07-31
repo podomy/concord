@@ -12,6 +12,12 @@ import (
 	"github.com/opencontainers/runc/libcontainer/configs"
 )
 
+// Runner a definition of an interface that is required to be a runner.
+type Runner interface {
+	Create(id string, cfg *configs.Config) (*libcontainer.Container, error)
+	Start(ctr *libcontainer.Container, proc *libcontainer.Process) (int, error)
+}
+
 // ContainerRuntime manages the lifecycle of libcontainer-backed workloads.
 // Each container gets a subdirectory under stateDir where libcontainer stores
 // its checkpoint data, FIFOs, and config state.

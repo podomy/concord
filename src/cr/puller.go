@@ -22,6 +22,11 @@ import (
 	"github.com/podomy/concord/src/or"
 )
 
+// Puller a definition of an interface that is required to be a puller.
+type Puller interface {
+	Pull(ctx context.Context, image, bundleDir string) (*PullResult, error)
+}
+
 // ImagePuller pulls OCI container images from the local zot registry
 // at localhost:8444 and extracts them into rootfs directories.
 type ImagePuller struct {

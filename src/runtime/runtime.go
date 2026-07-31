@@ -85,27 +85,27 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go peersync.RunPullLoop(ctx, logger, nodeConfig.ID, peerService, client, st.journal, views, eventsByID)
 	logger.Info("peer sync pull loop started")
 
-	// Start the workload infrastructure.
-	ocireg, err := startWorkloadInfrastructure(ctx, nodeConfig.ID, peerService, logger, st, eventsByType)
+	// Start the workload infrastructure and network.
+	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, eventsByType)
 	if err != nil {
-		return fmt.Errorf("start workload infrastructure: %w", err)
+		return fmt.Errorf("start workload and network: %w", err)
 	}
 	defer ocireg.Stop()
-
-	// Setup the network.
-	err = setupNetwork(ctx, logger)
-	if err != nil {
-		return fmt.Errorf("setup network: %w", err)
-	}
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
 	logger.Info("shutting down", zap.String("node_id", nodeConfig.ID.String()))
 
+	// Clean up the masquerade.
+	err = cn.TeardownMasquerade()
+	if err != nil {
+		return fmt.Errorf("teardown masquerade: %w", err)
+	}
+
 	return nil
 }
 
-func setupNetwork(ctx context.Context, logger *zap.Logger) error {
+func setupNetwork(ctx context.Context) error {
 	// Create the network bridge.
 	err := cn.CreateBridge(ctx)
 	if err != nil {
@@ -116,12 +116,6 @@ func setupNetwork(ctx context.Context, logger *zap.Logger) error {
 	if err != nil {
 		return fmt.Errorf("setup masquerade: %w", err)
 	}
-	go func() {
-		err := cn.TeardownMasquerade(ctx)
-		if err != nil {
-			logger.Error("teardown masquerade", zap.Error(err))
-		}
-	}()
 
 	return nil
 }
@@ -146,6 +140,21 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, eventsByType)
 	logger.Info("workload reconciler started")
 
+	return ocireg, nil
+}
+
+func startWorkloadAndNetwork(ctx context.Context, nodeID uuid.UUID,
+	peerService *peerdiscovery.MemberService, logger *zap.Logger,
+	st *stores, eventsByType *journalview.EventsByType,
+) (*or.Registry, error) {
+	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, eventsByType)
+	if err != nil {
+		return nil, fmt.Errorf("start workload infrastructure: %w", err)
+	}
+	err = setupNetwork(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("setup network: %w", err)
+	}
 	return ocireg, nil
 }
 

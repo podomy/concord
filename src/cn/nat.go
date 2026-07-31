@@ -52,12 +52,7 @@ func SetupMasquerade(ctx context.Context) error {
 // TeardownMasquerade removes the masquerade SNAT rule added by
 // SetupMasquerade. Safe to call even if the rule was already removed
 // or never added. Call on shutdown.
-func TeardownMasquerade(ctx context.Context) error {
-	err := ctx.Err()
-	if err != nil {
-		return fmt.Errorf("context cancellation: %w", err)
-	}
-
+func TeardownMasquerade() error {
 	ipt, err := iptables.New()
 	if err != nil {
 		return fmt.Errorf("teardown masquerade: %w", err)
