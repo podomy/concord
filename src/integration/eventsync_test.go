@@ -5,14 +5,7 @@ package integration_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
-	"math/big"
-	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -23,6 +16,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
+	"github.com/podomy/concord/src/certs"
 	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/journalreader"
 	"github.com/podomy/concord/src/journalview"
@@ -32,20 +26,18 @@ import (
 	"github.com/podomy/concord/src/transport"
 )
 
-// TestTwoNodeSmoke validates that two nodes discover each other via
+// TestTwoNodeEventSync validates that two nodes discover each other via
 // memberlist and sync a journal event from A to B through the pull loop.
 //
 // This test only exercises the event sync layer (peersync). Container
 // lifecycle, networking (bridge/veth/nat), and image pulling require
 // root privileges and a running zot registry, those belong in a
 // separate integration test.
-func TestTwoNodeSmoke(t *testing.T) {
+func TestTwoNodeEventSync(t *testing.T) {
 	dirA, dirB := t.TempDir(), t.TempDir()
 	idA, idB := uuid.New(), uuid.New()
 
-	caDER, caKey := provisionCA(t, dirA, dirB)
-	mintNode(t, idA, caDER, caKey, dirA, netip.Addr{})
-	mintNode(t, idB, caDER, caKey, dirB, netip.Addr{})
+	provisionNodes(t, idA, idB, dirA, dirB)
 
 	kvA := openKV(t, filepath.Join(dirA, "concord", "bbolt.db"))
 	jA := openJSONL(t, filepath.Join(dirA, "concord", "journal.jsonl"))
@@ -100,7 +92,7 @@ func TestTwoNodeSmoke(t *testing.T) {
 
 	time.Sleep(2 * time.Second) // let memberlist gossip propagate
 
-	testEvent := journal.NewEvent(idA, "smoke.test", json.RawMessage(`{}`))
+	testEvent := journal.NewEvent(idA, "sync.test", json.RawMessage(`{}`))
 	if err := journalview.RecordEvent(ctxA, jA, viewsA, testEvent); err != nil {
 		t.Fatalf("record event: %v", err)
 	}
@@ -109,90 +101,50 @@ func TestTwoNodeSmoke(t *testing.T) {
 	if got.NodeID != idA {
 		t.Fatalf("event node_id = %s, want %s", got.NodeID, idA)
 	}
-	if got.Type != "smoke.test" {
-		t.Fatalf("event type = %s, want smoke.test", got.Type)
+	if got.Type != "sync.test" {
+		t.Fatalf("event type = %s, want sync.test", got.Type)
 	}
-	t.Log("smoke test PASSED: event synced from A to B via pull loop")
+	t.Log("event sync test PASSED: event synced from A to B via pull loop")
 }
 
-func provisionCA(t *testing.T, dirs ...string) (caDER []byte, caKey *rsa.PrivateKey) {
+func provisionNodes(t *testing.T, idA, idB uuid.UUID, dirA, dirB string) {
 	t.Helper()
-	for _, dir := range dirs {
-		if err := os.MkdirAll(filepath.Join(dir, "concord", "certs"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+
+	// Provision CA and node A certs in dirA
+	t.Setenv("XDG_CONFIG_HOME", dirA)
+	if err := certs.WriteCA(); err != nil {
+		t.Fatalf("write CA: %v", err)
 	}
-	var err error
-	caKey, err = rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := certs.Ensure(idA, netip.Addr{}); err != nil {
+		t.Fatalf("ensure node A certs: %v", err)
 	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Concord CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
+
+	// Copy CA to dirB so node B shares the same CA trust root
+	certsDirB := filepath.Join(dirB, "concord", "certs")
+	if err := os.MkdirAll(certsDirB, 0o700); err != nil {
+		t.Fatalf("mkdir certs B: %v", err)
 	}
-	caDER, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create CA cert: %v", err)
+	certsDirA := filepath.Join(dirA, "concord", "certs")
+	copyFile(t, filepath.Join(certsDirA, "ca.crt"), filepath.Join(certsDirB, "ca.crt"))
+	copyFile(t, filepath.Join(certsDirA, "ca.key"), filepath.Join(certsDirB, "ca.key"))
+
+	// Ensure node B certs using the copied CA
+	t.Setenv("XDG_CONFIG_HOME", dirB)
+	if _, err := certs.Ensure(idB, netip.Addr{}); err != nil {
+		t.Fatalf("ensure node B certs: %v", err)
 	}
-	for _, dir := range dirs {
-		writePEM(t, filepath.Join(dir, "concord", "certs", "ca.crt"), "CERTIFICATE", caDER)
-		writePEM(t, filepath.Join(dir, "concord", "certs", "ca.key"), "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey))
-	}
-	return caDER, caKey
 }
 
-func mintNode(t *testing.T, id uuid.UUID, caDER []byte, caKey *rsa.PrivateKey, dir string, advertise netip.Addr) {
+func copyFile(t *testing.T, src, dst string) {
 	t.Helper()
-	caCert, err := x509.ParseCertificate(caDER)
+	// #nosec G304 - test helper with trusted temp dir paths.
+	data, err := os.ReadFile(src)
 	if err != nil {
-		t.Fatalf("parse CA cert: %v", err)
+		t.Fatalf("read %s: %v", src, err)
 	}
-	nodeKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate node key: %v", err)
-	}
-	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
-	if err != nil {
-		t.Fatalf("generate serial: %v", err)
-	}
-
-	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
-	if advertise.IsValid() {
-		ips = append(ips, advertise.AsSlice())
-	}
-	nodeDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "Concord Node: " + id.String()},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		DNSNames:     []string{id.String(), "localhost"},
-		IPAddresses:  ips,
-	}, caCert, &nodeKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create node cert: %v", err)
-	}
-	writePEM(t, filepath.Join(dir, "concord", "certs", "node.crt"), "CERTIFICATE", nodeDER)
-	writePEM(t, filepath.Join(dir, "concord", "certs", "node.key"), "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(nodeKey))
-}
-
-func writePEM(t *testing.T, path, blockType string, der []byte) {
-	t.Helper()
-	// #nosec G304 — test only, paths under t.TempDir.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
-	}
-	defer func() { _ = f.Close() }() //nolint:errcheck // best-effort
-	if err := pem.Encode(f, &pem.Block{Type: blockType, Bytes: der}); err != nil {
-		t.Fatalf("encode %s: %v", path, err)
+	// #nosec G703 - test helper with trusted temp dir paths.
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatalf("write %s: %v", dst, err)
 	}
 }
 

@@ -6,7 +6,6 @@ package journalview
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -14,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/src/journal"
-	"github.com/podomy/concord/src/kvstore"
 )
 
 func TestEventsByIDGet(t *testing.T) {
@@ -150,13 +148,6 @@ func TestEventsByIDListCancelledContext(t *testing.T) {
 	}
 }
 
-func cancelledContext() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	return ctx
-}
-
 func TestEventsByIDListMissingBucket(t *testing.T) {
 	t.Parallel()
 
@@ -171,24 +162,4 @@ func TestEventsByIDListMissingBucket(t *testing.T) {
 	if len(journalEvents) != 0 {
 		t.Fatalf("expected no events, got %d", len(journalEvents))
 	}
-}
-
-// This function sits really awkwardly here, I have no options
-// in my mind to place it somewhere better. It is used for the
-// tests in the journalview package.
-func testKVStore(t *testing.T) *kvstore.KVStore {
-	t.Helper()
-
-	kv, err := kvstore.OpenDBPath(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open db path: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := kv.Close(); err != nil {
-			t.Fatalf("test close db: %v", err)
-		}
-	})
-
-	return kv
 }

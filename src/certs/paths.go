@@ -5,9 +5,9 @@
 //
 // Same UserConfigDir/concord layout as node config, under concord/certs/:
 //
-//	ca.crt  — fleet trust anchor (operator-provided; required before start)
-//	ca.key  — CA private key (operator-provided; used only to mint node certs)
-//	node.crt / node.key — this node's identity (auto-minted under the CA)
+//	ca.crt  - fleet trust anchor (operator-provided; required before start)
+//	ca.key  - CA private key (operator-provided; used only to mint node certs)
+//	node.crt / node.key - this node's identity (auto-minted under the CA)
 //
 // Normal bootstrap never creates a CA. The operator supplies ca.crt and ca.key
 // (factory, flash drive, etc.). Ensure only mints node material when the CA

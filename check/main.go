@@ -13,7 +13,7 @@ import (
 )
 
 func run(ctx context.Context, name string, arg ...string) {
-	// #nosec G204 — hook runs fixed commands from the repo, not user input.
+	// #nosec G204 - hook runs fixed commands from the repo, not user input.
 	cmd := exec.CommandContext(ctx, arg[0], arg[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

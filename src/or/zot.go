@@ -5,7 +5,7 @@
 //
 // Each Concord node runs a local zot instance so workloads can pull
 // container images from localhost. Images are reconciled between nodes
-// via the OCI distribution protocol — when two nodes meet, they exchange
+// via the OCI distribution protocol - when two nodes meet, they exchange
 // manifests and blobs they do not yet have.
 //
 // The registry storage lives under the user config directory at

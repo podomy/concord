@@ -27,8 +27,7 @@ func TestEnsureFailsWithoutCA(t *testing.T) {
 }
 
 func TestEnsureMintsNodeAndReuses(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	provisionCA(t)
+	setupCA(t)
 
 	id := uuid.New()
 	paths, err := certs.Ensure(id, netip.Addr{})
@@ -50,8 +49,7 @@ func TestEnsureMintsNodeAndReuses(t *testing.T) {
 }
 
 func TestEnsureRemintsInvalidNodeKeepsCA(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	provisionCA(t)
+	setupCA(t)
 
 	id := uuid.New()
 	paths, err := certs.Ensure(id, netip.Addr{})
@@ -78,8 +76,7 @@ func TestEnsureRemintsInvalidNodeKeepsCA(t *testing.T) {
 }
 
 func TestEnsureSharedCATwoNodeIDs(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	provisionCA(t)
+	setupCA(t)
 
 	pathsA, err := certs.Ensure(uuid.New(), netip.Addr{})
 	if err != nil {
@@ -117,8 +114,7 @@ func TestEnsureSharedCATwoNodeIDs(t *testing.T) {
 }
 
 func TestEnsureAdvertiseIPInSANs(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	provisionCA(t)
+	setupCA(t)
 
 	id := uuid.New()
 	adv := netip.MustParseAddr("10.0.0.5")
@@ -136,8 +132,9 @@ func TestEnsureAdvertiseIPInSANs(t *testing.T) {
 	}
 }
 
-func provisionCA(t *testing.T) {
+func setupCA(t *testing.T) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if err := certs.WriteCA(); err != nil {
 		t.Fatalf("write ca: %v", err)
 	}

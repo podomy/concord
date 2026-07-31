@@ -112,7 +112,7 @@ func MDNSAdvertise(ctx context.Context, nodeConfig *node.NodeConfig) (*mdns.Serv
 	}
 
 	service, err := mdns.NewMDNSService(
-		nodeConfig.ID.String(), // unique name — use node ID string
+		nodeConfig.ID.String(), // unique name - use node ID string
 		DNSService,
 		"", // domain, empty = local
 		"", // hostname, empty = auto

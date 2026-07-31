@@ -24,6 +24,14 @@ func mustEvent() journal.Event {
 	return journal.NewEvent(uuid.New(), "test.event", json.RawMessage(`{}`))
 }
 
+func dummyNode(id uuid.UUID) peerdiscovery.Node {
+	return peerdiscovery.Node{
+		ID:      id,
+		Address: mustAddrPort("192.0.2.10:7946"),
+		State:   peerdiscovery.NodeStateAlive,
+	}
+}
+
 // testPullState builds pullState with in-memory journal/index for loop unit tests.
 func testPullState(syncer PeerSync, watermarks map[uuid.UUID]string) pullState {
 	j := &memJournal{}
@@ -113,18 +121,13 @@ func TestSyncOneUsesTransportPortAndWatermark(t *testing.T) {
 	t.Parallel()
 
 	peerID := uuid.New()
-	member := peerdiscovery.Node{
-		ID:      peerID,
-		Address: mustAddrPort("192.0.2.10:7946"),
-		State:   peerdiscovery.NodeStateAlive,
-	}
+	member := dummyNode(peerID)
 	watermarks := map[uuid.UUID]string{peerID: "mark-1"}
 	fake := &fakeSyncer{
 		resp: transport.SyncResponse{NextWatermark: "mark-2", Events: nil},
 	}
 
-	ok := syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member)
-	if !ok {
+	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member) {
 		t.Fatal("expected success")
 	}
 	if len(fake.calls) != 1 {
@@ -150,15 +153,9 @@ func TestSyncOneEmptyNextWatermarkDoesNotClear(t *testing.T) {
 	t.Parallel()
 
 	peerID := uuid.New()
-	member := peerdiscovery.Node{
-		ID:      peerID,
-		Address: mustAddrPort("192.0.2.10:7946"),
-		State:   peerdiscovery.NodeStateAlive,
-	}
+	member := dummyNode(peerID)
 	watermarks := map[uuid.UUID]string{peerID: "keep-me"}
-	fake := &fakeSyncer{
-		resp: transport.SyncResponse{NextWatermark: ""},
-	}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: ""}}
 
 	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, watermarks), member) {
 		t.Fatal("expected success")
@@ -173,11 +170,7 @@ func TestSyncOneFailureDoesNotAdvanceWatermark(t *testing.T) {
 	t.Parallel()
 
 	peerID := uuid.New()
-	member := peerdiscovery.Node{
-		ID:      peerID,
-		Address: mustAddrPort("192.0.2.10:7946"),
-		State:   peerdiscovery.NodeStateAlive,
-	}
+	member := dummyNode(peerID)
 	watermarks := map[uuid.UUID]string{peerID: "old"}
 	fake := &fakeSyncer{err: errors.New("dial failed")}
 
@@ -194,11 +187,7 @@ func TestSyncOneMissingWatermarkSendsEmpty(t *testing.T) {
 	t.Parallel()
 
 	peerID := uuid.New()
-	member := peerdiscovery.Node{
-		ID:      peerID,
-		Address: mustAddrPort("192.0.2.10:7946"),
-		State:   peerdiscovery.NodeStateAlive,
-	}
+	member := dummyNode(peerID)
 	watermarks := map[uuid.UUID]string{}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "first"}}
 
