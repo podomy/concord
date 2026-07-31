@@ -17,3 +17,6 @@ coverage.out
 
 # Binary
 concord
+
+# Local git hooks
+.githooks
