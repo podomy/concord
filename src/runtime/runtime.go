@@ -92,15 +92,36 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer ocireg.Stop()
 
-	// Create the network bridge.
-	err = cn.CreateBridge(ctx)
+	// Setup the network.
+	err = setupNetwork(ctx, logger)
 	if err != nil {
-		return fmt.Errorf("create bridge: %w", err)
+		return fmt.Errorf("setup network: %w", err)
 	}
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
 	logger.Info("shutting down", zap.String("node_id", nodeConfig.ID.String()))
+
+	return nil
+}
+
+func setupNetwork(ctx context.Context, logger *zap.Logger) error {
+	// Create the network bridge.
+	err := cn.CreateBridge(ctx)
+	if err != nil {
+		return fmt.Errorf("create bridge: %w", err)
+	}
+
+	err = cn.SetupMasquerade(ctx)
+	if err != nil {
+		return fmt.Errorf("setup masquerade: %w", err)
+	}
+	go func() {
+		err := cn.TeardownMasquerade(ctx)
+		if err != nil {
+			logger.Error("teardown masquerade", zap.Error(err))
+		}
+	}()
 
 	return nil
 }

@@ -14,3 +14,6 @@ coverage.out
 
 # Temp files folder
 .temp
+
+# Binary
+concord

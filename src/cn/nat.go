@@ -33,14 +33,12 @@ func SetupMasquerade(ctx context.Context) error {
 	//   -t nat            NAT table.
 	//   POSTROUTING       After routing, before the packet leaves.
 	//   -s 10.0.0.0/16    Only packets with a container subnet source.
-	//   -i cn0            Only packets arriving from the bridge interface.
 	//   ! -o cn0          NOT leaving through the bridge (skip container-to-container).
 	//   -j MASQUERADE     Rewrite source address to the host's external IP.
 	//
 	// The rule is idempotent AppendUnique skips it if it already exists.
 	err = ipt.AppendUnique("nat", "POSTROUTING",
 		"-s", "10.0.0.0/16",
-		"-i", "cn0",
 		"!", "-o", "cn0",
 		"-j", "MASQUERADE",
 	)
@@ -67,7 +65,6 @@ func TeardownMasquerade(ctx context.Context) error {
 
 	err = ipt.DeleteIfExists("nat", "POSTROUTING",
 		"-s", "10.0.0.0/16",
-		"-i", "cn0",
 		"!", "-o", "cn0",
 		"-j", "MASQUERADE",
 	)
