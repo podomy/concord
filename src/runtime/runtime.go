@@ -214,7 +214,8 @@ func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsBy
 	eventsByID := journalview.NewEventsByID(kv)
 	eventsByNode := journalview.NewEventsByNode(kv)
 	eventsByType := journalview.NewEventsByType(kv)
-	views := []journalview.View{eventsByID, eventsByNode, eventsByType}
+	workloads := journalview.NewWorkloads(kv)
+	views := []journalview.View{eventsByID, eventsByNode, eventsByType, workloads}
 
 	if err := journalview.RebuildViews(ctx, views); err != nil {
 		return nil, nil, nil, fmt.Errorf("rebuild views: %w", err)

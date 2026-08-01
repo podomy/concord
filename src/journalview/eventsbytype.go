@@ -21,21 +21,25 @@ import (
 
 const bucketNameEventsByType = "eventsbytype"
 
+// EventsByType maintains a view of journal events indexed by event type and event ID in key-value storage.
 type EventsByType struct {
 	kv *kvstore.KVStore
 }
 
+// EventsByTypeKey represents the lookup key for an event associated with an event type.
 type EventsByTypeKey struct {
 	EventType string    `json:"event_type"`
 	ID        uuid.UUID `json:"id"`
 }
 
+// NewEventsByType creates a new EventsByType view backed by the given KVStore.
 func NewEventsByType(kv *kvstore.KVStore) *EventsByType {
 	return &EventsByType{
 		kv: kv,
 	}
 }
 
+// putEvent marshals an event and stores it in the bucket keyed by event Type and ID.
 func (e *EventsByType) putEvent(b *bolt.Bucket, event journal.Event) error {
 	serializedEventType := []byte(event.Type)
 
@@ -65,6 +69,8 @@ func (e *EventsByType) putEvent(b *bolt.Bucket, event journal.Event) error {
 	return nil
 }
 
+// Apply updates the view by storing the given journal event indexed by its Type and ID.
+//
 //nolint:dupl // Projection methods intentionally keep bucket-specific logic local.
 func (e *EventsByType) Apply(ctx context.Context, event journal.Event) error {
 	if err := checkContext(ctx, "context cancelled"); err != nil {
@@ -88,6 +94,7 @@ func (e *EventsByType) Apply(ctx context.Context, event journal.Event) error {
 	return nil
 }
 
+// resetBucket deletes the existing eventsbytype bucket if present and creates a fresh one.
 func (e *EventsByType) resetBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
 	if err := tx.DeleteBucket([]byte(bucketNameEventsByType)); err != nil && !errors.Is(err, berrors.ErrBucketNotFound) {
 		return nil, fmt.Errorf("kv delete bucket: %w", err)
@@ -101,6 +108,7 @@ func (e *EventsByType) resetBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
 	return b, nil
 }
 
+// replayEvents reads events sequentially from the journal reader and puts them into the bucket.
 func (e *EventsByType) replayEvents(ctx context.Context, jr journalreader.Reader, b *bolt.Bucket) error {
 	for {
 		event, err := readEvent(ctx, jr)
@@ -117,6 +125,8 @@ func (e *EventsByType) replayEvents(ctx context.Context, jr journalreader.Reader
 	}
 }
 
+// Rebuild reconstructs the EventsByType view by resetting the storage bucket and replaying all journal events.
+//
 //nolint:dupl // Projection methods intentionally keep rebuild flow local to each view.
 func (e *EventsByType) Rebuild(ctx context.Context, jr journalreader.Reader) error {
 	if err := checkContext(ctx, "context cancelled"); err != nil {
@@ -140,6 +150,7 @@ func (e *EventsByType) Rebuild(ctx context.Context, jr journalreader.Reader) err
 	return nil
 }
 
+// Get retrieves a single journal event matching the specified event type and ID.
 func (e *EventsByType) Get(ctx context.Context, eventType string, id uuid.UUID) (*journal.Event, error) {
 	if err := checkContext(ctx, "context cancellation"); err != nil {
 		return nil, err
@@ -189,6 +200,8 @@ func (e *EventsByType) Get(ctx context.Context, eventType string, id uuid.UUID) 
 	return event, nil
 }
 
+// List retrieves all stored journal events of a given event type.
+//
 //nolint:dupl // Projection list methods intentionally keep bucket-specific cursor logic local.
 func (e *EventsByType) List(ctx context.Context, eventType string) ([]journal.Event, error) {
 	if err := checkContext(ctx, "context cancellation"); err != nil {

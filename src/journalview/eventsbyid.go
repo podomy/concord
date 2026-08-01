@@ -21,16 +21,19 @@ import (
 
 const bucketNameEventsByID = "eventsbyid"
 
+// EventsByID maintains a view of journal events indexed by event ID in key-value storage.
 type EventsByID struct {
 	kvStore *kvstore.KVStore
 }
 
+// NewEventsByID creates a new EventsByID view backed by the given KVStore.
 func NewEventsByID(kv *kvstore.KVStore) *EventsByID {
 	return &EventsByID{
 		kvStore: kv,
 	}
 }
 
+// putEvent marshals an event and stores it in the bucket keyed by its event ID.
 func (e *EventsByID) putEvent(b *bolt.Bucket, event journal.Event) error {
 	serializedEvent, err := json.Marshal(event)
 	if err != nil {
@@ -53,6 +56,8 @@ func (e *EventsByID) putEvent(b *bolt.Bucket, event journal.Event) error {
 	return nil
 }
 
+// Apply updates the view by storing the given journal event indexed by its ID.
+//
 //nolint:dupl // Projection methods intentionally keep bucket-specific logic local.
 func (e *EventsByID) Apply(ctx context.Context, event journal.Event) error {
 	if err := checkContext(ctx, "context cancelation"); err != nil {
@@ -75,6 +80,7 @@ func (e *EventsByID) Apply(ctx context.Context, event journal.Event) error {
 	return nil
 }
 
+// resetBucket deletes the existing eventsbyid bucket if present and creates a fresh one.
 func (e *EventsByID) resetBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
 	if err := tx.DeleteBucket([]byte(bucketNameEventsByID)); err != nil && !errors.Is(err, berrors.ErrBucketNotFound) {
 		return nil, fmt.Errorf("kv bucket deletion: %w", err)
@@ -88,6 +94,7 @@ func (e *EventsByID) resetBucket(tx *bolt.Tx) (*bolt.Bucket, error) {
 	return b, nil
 }
 
+// replayEvents reads events sequentially from the journal reader and puts them into the bucket.
 func (e *EventsByID) replayEvents(ctx context.Context, jr journalreader.Reader, b *bolt.Bucket) error {
 	for {
 		event, err := readEvent(ctx, jr)
@@ -104,6 +111,7 @@ func (e *EventsByID) replayEvents(ctx context.Context, jr journalreader.Reader, 
 	}
 }
 
+// readEvent reads the next event from the journal reader while respecting context cancellation.
 func readEvent(ctx context.Context, jr journalreader.Reader) (*journal.Event, error) {
 	if err := checkContext(ctx, "context cancelation during rebuild"); err != nil {
 		return nil, err
@@ -120,6 +128,8 @@ func readEvent(ctx context.Context, jr journalreader.Reader) (*journal.Event, er
 	return event, nil
 }
 
+// Rebuild reconstructs the EventsByID view by resetting the storage bucket and replaying all journal events.
+//
 //nolint:dupl // Projection methods intentionally keep rebuild flow local to each view.
 func (e *EventsByID) Rebuild(ctx context.Context, jr journalreader.Reader) error {
 	if err := checkContext(ctx, "context cancelation"); err != nil {
@@ -143,6 +153,7 @@ func (e *EventsByID) Rebuild(ctx context.Context, jr journalreader.Reader) error
 	return nil
 }
 
+// Get retrieves a single journal event by its unique ID.
 func (e *EventsByID) Get(ctx context.Context, id uuid.UUID) (*journal.Event, error) {
 	if err := checkContext(ctx, "context cancellation"); err != nil {
 		return nil, err
@@ -187,6 +198,7 @@ func (e *EventsByID) Get(ctx context.Context, id uuid.UUID) (*journal.Event, err
 	return event, nil
 }
 
+// List retrieves all stored journal events from the view.
 func (e *EventsByID) List(ctx context.Context) ([]journal.Event, error) {
 	if err := checkContext(ctx, "context cancellation"); err != nil {
 		return nil, err

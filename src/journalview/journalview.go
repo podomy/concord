@@ -11,6 +11,7 @@ import (
 	"github.com/podomy/concord/src/journalreader"
 )
 
+// checkContext checks if the context has been cancelled or timed out, returning a wrapped error if so.
 func checkContext(ctx context.Context, message string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%s: %w", message, err)
