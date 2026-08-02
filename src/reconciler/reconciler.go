@@ -44,9 +44,17 @@ func RunLoop(
 	runtime cr.Runner,
 	j journal.Journal,
 	eventsByType *journalview.EventsByType,
+	workloads *journalview.Workloads,
 ) {
 	running := map[uuid.UUID]*libcontainer.Container{}
 	ipAndCIDRs := map[uuid.UUID]string{}
+
+	// Once at startup rebuild state.
+	err := replayWorkloads()
+	if err != nil {
+		logger.Error("replay workloads", zap.Error(err))
+		return
+	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

@@ -64,11 +64,11 @@ func (m *mockRunner) Start(ctr *libcontainer.Container, proc *libcontainer.Proce
 }
 
 func TestReconcilerPullError(t *testing.T) {
-	puller, runner, vt, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, vt, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
+	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
 	puller.pullErr = errors.New("pull failed")
 
-	runTick(t, puller, runner, vt, running, cidrs)
+	runTick(t, puller, runner, eventsByType, running, cidrs)
 
 	if !puller.pullCalled {
 		t.Error("Pull was not called")
@@ -79,12 +79,12 @@ func TestReconcilerPullError(t *testing.T) {
 }
 
 func TestReconcilerCreateError(t *testing.T) {
-	puller, runner, vt, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, vt, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
+	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
 	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
 	runner.createErr = errors.New("create failed")
 
-	runTick(t, puller, runner, vt, running, cidrs)
+	runTick(t, puller, runner, eventsByType, running, cidrs)
 
 	if !runner.createCalled {
 		t.Error("Create was not called")
@@ -95,11 +95,11 @@ func TestReconcilerCreateError(t *testing.T) {
 }
 
 func TestReconcilerSkipsWrongNode(t *testing.T) {
-	_, _, vt, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, vt, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.New())
+	_, _, eventsByType, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.New())
 	puller, runner := &mockPuller{}, &mockRunner{}
 
-	runTick(t, puller, runner, vt, running, cidrs)
+	runTick(t, puller, runner, eventsByType, running, cidrs)
 
 	if puller.pullCalled {
 		t.Error("Puller was called for event belonging to another node")
@@ -107,12 +107,12 @@ func TestReconcilerSkipsWrongNode(t *testing.T) {
 }
 
 func TestReconcilerSkipsAlreadyRunning(t *testing.T) {
-	puller, runner, vt, running, cidrs := setupReconcilerTest(t)
+	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
 	spec := workload.Spec{Image: "nginx:latest", ID: uuid.New()}
-	writeSpecEvent(t, vt, spec, uuid.Nil)
+	writeSpecEvent(t, eventsByType, spec, uuid.Nil)
 	running[spec.ID] = nil
 
-	runTick(t, puller, runner, vt, running, cidrs)
+	runTick(t, puller, runner, eventsByType, running, cidrs)
 
 	if puller.pullCalled {
 		t.Error("Puller was called for already-running container")
@@ -137,9 +137,9 @@ func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.E
 		map[uuid.UUID]string{}
 }
 
-func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, vt *journalview.EventsByType, running map[uuid.UUID]*libcontainer.Container, cidrs map[uuid.UUID]string) {
+func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, eventsByType *journalview.EventsByType, running map[uuid.UUID]*libcontainer.Container, cidrs map[uuid.UUID]string) {
 	t.Helper()
-	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, vt, running, cidrs)
+	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, eventsByType, running, cidrs)
 }
 
 func writeSpecEvent(t *testing.T, vt *journalview.EventsByType, spec workload.Spec, nodeID uuid.UUID) {

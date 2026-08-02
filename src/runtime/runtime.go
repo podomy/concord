@@ -46,7 +46,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer closeStores(logger, st)
 
-	eventsByID, eventsByType, views, err := setupViews(ctx, st.kv)
+	eventsByID, eventsByType, workloads, views, err := setupViews(ctx, st.kv)
 	if err != nil {
 		return fmt.Errorf("setup views: %w", err)
 	}
@@ -86,7 +86,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	logger.Info("peer sync pull loop started")
 
 	// Start the workload infrastructure and network.
-	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, eventsByType)
+	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, eventsByType, workloads)
 	if err != nil {
 		return fmt.Errorf("start workload and network: %w", err)
 	}
@@ -123,6 +123,7 @@ func setupNetwork(ctx context.Context) error {
 func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
 	st *stores, eventsByType *journalview.EventsByType,
+	workloads *journalview.Workloads,
 ) (*or.Registry, error) {
 	// Start the OCI registry
 	ocireg, err := startOCIRegistry(ctx, nodeID, peerService, logger)
@@ -137,7 +138,7 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	if err != nil {
 		return nil, fmt.Errorf("container runtime: %w", err)
 	}
-	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, eventsByType)
+	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, eventsByType, workloads)
 	logger.Info("workload reconciler started")
 
 	return ocireg, nil
@@ -145,9 +146,9 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 
 func startWorkloadAndNetwork(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
-	st *stores, eventsByType *journalview.EventsByType,
+	st *stores, eventsByType *journalview.EventsByType, workloads *journalview.Workloads,
 ) (*or.Registry, error) {
-	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, eventsByType)
+	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, eventsByType, workloads)
 	if err != nil {
 		return nil, fmt.Errorf("start workload infrastructure: %w", err)
 	}
@@ -210,7 +211,7 @@ func shutdownPeerService(logger *zap.Logger, ps *peerdiscovery.MemberService) {
 	}
 }
 
-func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsByID, *journalview.EventsByType, []journalview.View, error) {
+func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsByID, *journalview.EventsByType, *journalview.Workloads, []journalview.View, error) {
 	eventsByID := journalview.NewEventsByID(kv)
 	eventsByNode := journalview.NewEventsByNode(kv)
 	eventsByType := journalview.NewEventsByType(kv)
@@ -218,10 +219,10 @@ func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsBy
 	views := []journalview.View{eventsByID, eventsByNode, eventsByType, workloads}
 
 	if err := journalview.RebuildViews(ctx, views); err != nil {
-		return nil, nil, nil, fmt.Errorf("rebuild views: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("rebuild views: %w", err)
 	}
 
-	return eventsByID, eventsByType, views, nil
+	return eventsByID, eventsByType, workloads, views, nil
 }
 
 func startResolvers(ctx context.Context, logger *zap.Logger) ([]netip.AddrPort, error) {
