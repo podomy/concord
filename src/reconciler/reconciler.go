@@ -85,23 +85,30 @@ func reconcileTick(
 			continue
 		}
 
-		var spec workload.Spec
-		if err := json.Unmarshal(event.Payload, &spec); err != nil {
-			logger.Error("unmarshal workload spec", zap.Error(err))
-			continue
+		switch event.Type {
+		case "workload.spec":
+			var spec workload.Spec
+			if err := json.Unmarshal(event.Payload, &spec); err != nil {
+				logger.Error("unmarshal workload spec", zap.Error(err))
+				continue
+			}
+
+			// Cleanup happens here, we check if spec was removed on every tick.
+			if spec.Removed {
+				destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
+				continue
+			}
+
+			if _, exists := running[spec.ID]; exists {
+				continue
+			}
+
+			startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
+		default:
+			// No other event types are reconciled by this loop at the moment.
+			// We only have the workload.spec.
 		}
 
-		// Cleanup happens here, we check if spec was removed on every tick.
-		if spec.Removed {
-			destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
-			continue
-		}
-
-		if _, exists := running[spec.ID]; exists {
-			continue
-		}
-
-		startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
 	}
 }
 
