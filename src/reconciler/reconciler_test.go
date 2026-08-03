@@ -64,11 +64,11 @@ func (m *mockRunner) Start(ctr *libcontainer.Container, proc *libcontainer.Proce
 }
 
 func TestReconcilerPullError(t *testing.T) {
-	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, workloads, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
 	puller.pullErr = errors.New("pull failed")
 
-	runTick(t, puller, runner, eventsByType, running, cidrs)
+	runTick(t, puller, runner, workloads, running, cidrs)
 
 	if !puller.pullCalled {
 		t.Error("Pull was not called")
@@ -79,12 +79,12 @@ func TestReconcilerPullError(t *testing.T) {
 }
 
 func TestReconcilerCreateError(t *testing.T) {
-	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, workloads, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.Nil)
 	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
 	runner.createErr = errors.New("create failed")
 
-	runTick(t, puller, runner, eventsByType, running, cidrs)
+	runTick(t, puller, runner, workloads, running, cidrs)
 
 	if !runner.createCalled {
 		t.Error("Create was not called")
@@ -95,11 +95,11 @@ func TestReconcilerCreateError(t *testing.T) {
 }
 
 func TestReconcilerSkipsWrongNode(t *testing.T) {
-	_, _, eventsByType, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, eventsByType, workload.Spec{Image: "nginx:latest", ID: uuid.New()}, uuid.New())
+	_, _, workloads, running, cidrs := setupReconcilerTest(t)
+	writeSpecEvent(t, workloads, workload.Spec{Image: "nginx:latest", ID: uuid.New(), SegmentID: uuid.New()}, uuid.New())
 	puller, runner := &mockPuller{}, &mockRunner{}
 
-	runTick(t, puller, runner, eventsByType, running, cidrs)
+	runTick(t, puller, runner, workloads, running, cidrs)
 
 	if puller.pullCalled {
 		t.Error("Puller was called for event belonging to another node")
@@ -107,19 +107,19 @@ func TestReconcilerSkipsWrongNode(t *testing.T) {
 }
 
 func TestReconcilerSkipsAlreadyRunning(t *testing.T) {
-	puller, runner, eventsByType, running, cidrs := setupReconcilerTest(t)
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
 	spec := workload.Spec{Image: "nginx:latest", ID: uuid.New()}
-	writeSpecEvent(t, eventsByType, spec, uuid.Nil)
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
 	running[spec.ID] = nil
 
-	runTick(t, puller, runner, eventsByType, running, cidrs)
+	runTick(t, puller, runner, workloads, running, cidrs)
 
 	if puller.pullCalled {
 		t.Error("Puller was called for already-running container")
 	}
 }
 
-func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.EventsByType, map[uuid.UUID]*libcontainer.Container, map[uuid.UUID]string) {
+func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.Workloads, map[uuid.UUID]*libcontainer.Container, map[uuid.UUID]string) {
 	t.Helper()
 	kv, err := kvstore.OpenDBPath(filepath.Join(t.TempDir(), "bbolt.db"))
 	if err != nil {
@@ -132,23 +132,44 @@ func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.E
 	})
 	return &mockPuller{pullResult: &cr.PullResult{}},
 		&mockRunner{},
-		journalview.NewEventsByType(kv),
+		journalview.NewWorkloads(kv),
 		map[uuid.UUID]*libcontainer.Container{},
 		map[uuid.UUID]string{}
 }
 
-func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, eventsByType *journalview.EventsByType, running map[uuid.UUID]*libcontainer.Container, cidrs map[uuid.UUID]string) {
+func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, workloads *journalview.Workloads, running map[uuid.UUID]*libcontainer.Container, cidrs map[uuid.UUID]string) {
 	t.Helper()
-	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, eventsByType, running, cidrs)
+	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs)
 }
 
-func writeSpecEvent(t *testing.T, vt *journalview.EventsByType, spec workload.Spec, nodeID uuid.UUID) {
+func writeSpecEvent(t *testing.T, workloads *journalview.Workloads, spec workload.Spec, nodeID uuid.UUID) {
 	t.Helper()
 	payload, err := json.Marshal(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vt.Apply(t.Context(), journal.NewEvent(nodeID, "workload.spec", payload)); err != nil {
+	if err := workloads.Apply(t.Context(), journal.NewEvent(nodeID, "workload.spec", payload)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcilerDoesNotStartTombstonedWorkload verifies removed specs are not started.
+func TestReconcilerDoesNotStartTombstonedWorkload(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+
+	spec := workload.Spec{
+		ID:        uuid.New(),
+		Image:     "nginx:latest",
+		SegmentID: uuid.Nil,
+	}
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
+
+	spec.Removed = true
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
+
+	runTick(t, puller, runner, workloads, running, cidrs)
+
+	if puller.pullCalled {
+		t.Fatal("puller was called for a tombstoned workload")
 	}
 }

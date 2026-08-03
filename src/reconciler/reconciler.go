@@ -32,8 +32,6 @@ import (
 	"github.com/podomy/concord/src/workload"
 )
 
-const eventTypeWorkloadSpec = "workload.spec"
-
 // RunLoop watches for workload events and drives the container lifecycle.
 // It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
@@ -43,18 +41,10 @@ func RunLoop(
 	puller cr.Puller,
 	runtime cr.Runner,
 	j journal.Journal,
-	eventsByType *journalview.EventsByType,
 	workloads *journalview.Workloads,
 ) {
 	running := map[uuid.UUID]*libcontainer.Container{}
 	ipAndCIDRs := map[uuid.UUID]string{}
-
-	// Once at startup rebuild state.
-	err := replayWorkloads()
-	if err != nil {
-		logger.Error("replay workloads", zap.Error(err))
-		return
-	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -65,7 +55,7 @@ func RunLoop(
 			return
 
 		case <-ticker.C:
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, eventsByType, running, ipAndCIDRs)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs)
 		}
 	}
 }
@@ -78,45 +68,32 @@ func reconcileTick(
 	puller cr.Puller,
 	runtime cr.Runner,
 	j journal.Journal,
-	eventsByType *journalview.EventsByType,
+	workloads *journalview.Workloads,
 	running map[uuid.UUID]*libcontainer.Container,
 	ipAndCIDRs map[uuid.UUID]string,
 ) {
-	events, err := eventsByType.List(ctx, eventTypeWorkloadSpec)
+	workloadSpecs, err := workloads.List(ctx)
 	if err != nil {
-		logger.Error("list workload events", zap.Error(err))
+		logger.Error("list workloads", zap.Error(err))
 		return
 	}
 
-	for _, event := range events {
-		if event.NodeID != nodeID {
+	for _, spec := range workloadSpecs {
+		if spec.SegmentID != nodeID {
 			continue
 		}
 
-		switch event.Type {
-		case "workload.spec":
-			var spec workload.Spec
-			if err := json.Unmarshal(event.Payload, &spec); err != nil {
-				logger.Error("unmarshal workload spec", zap.Error(err))
-				continue
-			}
-
-			// Cleanup happens here, we check if spec was removed on every tick.
-			if spec.Removed {
-				destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
-				continue
-			}
-
-			if _, exists := running[spec.ID]; exists {
-				continue
-			}
-
-			startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
-		default:
-			// No other event types are reconciled by this loop at the moment.
-			// We only have the workload.spec.
+		// Cleanup happens here, we check if spec was removed on every tick.
+		if spec.Removed {
+			destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
+			continue
 		}
 
+		if _, exists := running[spec.ID]; exists {
+			continue
+		}
+
+		startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
 	}
 }
 

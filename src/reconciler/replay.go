@@ -1,8 +1,0 @@
-// Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
-package reconciler
-
-func replayWorkloads() error {
-	return nil
-}
