@@ -15,7 +15,7 @@ import (
 // Runner a definition of an interface that is required to be a runner.
 type Runner interface {
 	Create(id string, cfg *configs.Config) (*libcontainer.Container, error)
-	Start(ctr *libcontainer.Container, proc *libcontainer.Process) (int, error)
+	Start(ctr *libcontainer.Container, proc *libcontainer.Process) (ProcessHandle, error)
 }
 
 // ContainerRuntime manages the lifecycle of libcontainer-backed workloads.
@@ -66,19 +66,20 @@ func (r *ContainerRuntime) Create(id string, cfg *configs.Config) (*libcontainer
 // running (non-blocking). The container must have been created with Create
 // first. Use ctr.Run instead to wait for the process to exit.
 // It returns container namespace pid.
-func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer.Process) (int, error) {
+func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer.Process) (ProcessHandle, error) {
 	err := ctr.Start(proc)
 	if err != nil {
-		return -1, fmt.Errorf("libcontainer start: %w", err)
+		return nil, fmt.Errorf("libcontainer start: %w", err)
 	}
 
 	// State of the container
 	state, err := ctr.State()
 	if err != nil {
-		return -1, fmt.Errorf("getting container state: %w", err)
+		return nil, fmt.Errorf("getting container state: %w", err)
 	}
 
 	namespacePID := state.InitProcessPid
+	processHandle := NewProcess(proc, namespacePID)
 
-	return namespacePID, nil
+	return processHandle, nil
 }

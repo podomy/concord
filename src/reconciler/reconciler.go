@@ -135,13 +135,13 @@ func startContainer(
 	}
 
 	proc := buildProcess(spec, pullResult)
-	namespacePID, err := runtime.Start(ctr, proc)
+	processHandle, err := runtime.Start(ctr, proc)
 	if err != nil {
 		logger.Error("start container", zap.Error(err))
 		return
 	}
 
-	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), namespacePID)
+	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), processHandle.NamespacePID())
 	if err != nil {
 		logger.Error("create veth pair", zap.Error(err))
 		return
@@ -161,7 +161,7 @@ func startContainer(
 
 	running[spec.ID] = ctr
 
-	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, namespacePID)
+	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, processHandle.NamespacePID())
 }
 
 // destroyContainer stops and removes a container, then removes it from the running set.

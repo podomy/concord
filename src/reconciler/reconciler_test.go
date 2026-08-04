@@ -58,9 +58,12 @@ func (m *mockRunner) Create(id string, config *configs.Config) (*libcontainer.Co
 	return nil, errors.New("container creation not mockable in unit tests") //nolint:wrapcheck // plain error, no wrap target
 }
 
-func (m *mockRunner) Start(ctr *libcontainer.Container, proc *libcontainer.Process) (int, error) {
+func (m *mockRunner) Start(ctr *libcontainer.Container, proc *libcontainer.Process) (cr.ProcessHandle, error) {
 	m.startCalled = true
-	return m.startPID, m.startErr
+
+	processHandle := cr.NewProcess(proc, m.startPID)
+
+	return processHandle, m.startErr
 }
 
 func TestReconcilerPullError(t *testing.T) {
