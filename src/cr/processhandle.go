@@ -10,8 +10,8 @@ import (
 	"github.com/opencontainers/runc/libcontainer"
 )
 
-// Exit represents the outcome of process execution.
-type Exit struct {
+// ExitStatus represents the outcome of process execution.
+type ExitStatus struct {
 	Err  error
 	Code int
 }
@@ -20,13 +20,13 @@ type Exit struct {
 type ProcessHandle interface {
 	NamespacePID() int
 	Signal(os.Signal) error
-	Exited() <-chan Exit
+	Exited() <-chan ExitStatus
 }
 
 // Process implements ProcessHandle for libcontainer process management.
 type Process struct {
 	process      *libcontainer.Process
-	exited       chan Exit
+	exited       chan ExitStatus
 	namespacePID int
 }
 
@@ -35,7 +35,7 @@ func NewProcess(process *libcontainer.Process, namespacePID int) *Process {
 	p := &Process{
 		process:      process,
 		namespacePID: namespacePID,
-		exited:       make(chan Exit, 1),
+		exited:       make(chan ExitStatus, 1),
 	}
 
 	go p.waitForExit()
@@ -62,7 +62,7 @@ func (p *Process) Signal(signal os.Signal) error {
 func (p *Process) waitForExit() {
 	state, err := p.process.Wait()
 	if err != nil {
-		p.exited <- Exit{
+		p.exited <- ExitStatus{
 			Err:  fmt.Errorf("process wait failure: %w", err),
 			Code: -1,
 		}
@@ -74,13 +74,13 @@ func (p *Process) waitForExit() {
 		code = state.ExitCode()
 	}
 
-	p.exited <- Exit{
+	p.exited <- ExitStatus{
 		Err:  nil,
 		Code: code,
 	}
 }
 
 // Exited returns a channel that receives process exit notification.
-func (p *Process) Exited() <-chan Exit {
+func (p *Process) Exited() <-chan ExitStatus {
 	return p.exited
 }

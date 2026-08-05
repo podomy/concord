@@ -183,7 +183,7 @@ func TestReconcilerDoesNotStartTombstonedWorkload(t *testing.T) {
 
 type mockProcessHandle struct {
 	signals    []os.Signal
-	exitedChan chan cr.Exit
+	exitedChan chan cr.ExitStatus
 }
 
 func (m *mockProcessHandle) NamespacePID() int { return 1234 }
@@ -191,11 +191,11 @@ func (m *mockProcessHandle) Signal(sig os.Signal) error {
 	m.signals = append(m.signals, sig)
 	return nil
 }
-func (m *mockProcessHandle) Exited() <-chan cr.Exit { return m.exitedChan }
+func (m *mockProcessHandle) Exited() <-chan cr.ExitStatus { return m.exitedChan }
 
 func TestReconcilerDestroyContainerAsync(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New()}
-	exitedChan := make(chan cr.Exit, 1)
+	exitedChan := make(chan cr.ExitStatus, 1)
 	proc := &mockProcessHandle{exitedChan: exitedChan}
 	entry := &ContainerAndProcess{
 		Spec:          spec,
@@ -216,12 +216,12 @@ func TestReconcilerDestroyContainerAsync(t *testing.T) {
 	}
 
 	// Send exit notification
-	exitedChan <- cr.Exit{Code: 0}
+	exitedChan <- cr.ExitStatus{Code: 0}
 
 	select {
 	case ev := <-exitEvents:
-		if ev.ID != spec.ID {
-			t.Errorf("expected event for spec %v, got %v", spec.ID, ev.ID)
+		if ev.WorkloadID != spec.ID {
+			t.Errorf("expected event for spec %v, got %v", spec.ID, ev.WorkloadID)
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for exit event")
@@ -237,10 +237,10 @@ func TestReconcilerHandleExitEvent(t *testing.T) {
 	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
 	cidrs := map[uuid.UUID]string{}
 
-	handleExitEvent(t.Context(), zaptest.NewLogger(t), &mockJournal{}, uuid.Nil, spec.ID, cr.Exit{Code: 0}, running, cidrs)
+	handleExitEvent(t.Context(), zaptest.NewLogger(t), &mockJournal{}, uuid.Nil, spec.ID, cr.ExitStatus{Code: 0}, running, cidrs)
 
-	if _, exists := running[spec.ID]; exists {
-		t.Error("expected running entry to be removed after handleExitEvent")
+	if entry.ExitStatus == nil {
+		t.Error("expected entry.ExitStatus to be non-nil after handleExitEvent")
 	}
 }
 
@@ -253,5 +253,38 @@ func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
 	}
 	if timeout := stopTimeout(specCustom); timeout != 15*time.Second {
 		t.Errorf("expected custom timeout 15s, got %v", timeout)
+	}
+}
+
+func TestReconcilerTickRestartPolicies(t *testing.T) {
+	// Test RestartNever: exited workload should not be restarted
+	specNever := workload.Spec{ID: uuid.New(), Restart: workload.RestartNever}
+	entryNever := &ContainerAndProcess{Spec: specNever, ExitStatus: &cr.ExitStatus{Code: 0}}
+	runningNever := map[uuid.UUID]*ContainerAndProcess{specNever.ID: entryNever}
+
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil)
+	if _, exists := runningNever[specNever.ID]; !exists {
+		t.Error("expected RestartNever workload entry to be retained in running map")
+	}
+
+	// Test RestartOnFailure with clean exit (0): should not restart
+	specOnFailClean := workload.Spec{ID: uuid.New(), Restart: workload.RestartOnFailure}
+	entryOnFailClean := &ContainerAndProcess{Spec: specOnFailClean, ExitStatus: &cr.ExitStatus{Code: 0}}
+	runningOnFailClean := map[uuid.UUID]*ContainerAndProcess{specOnFailClean.ID: entryOnFailClean}
+
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil)
+	if _, exists := runningOnFailClean[specOnFailClean.ID]; !exists {
+		t.Error("expected RestartOnFailure with clean exit to be retained in running map")
+	}
+
+	// Test RestartAlways: exited workload entry should be cleared and restarted
+	specAlways := workload.Spec{ID: uuid.New(), Restart: workload.RestartAlways}
+	entryAlways := &ContainerAndProcess{Spec: specAlways, ExitStatus: &cr.ExitStatus{Code: 0}}
+	runningAlways := map[uuid.UUID]*ContainerAndProcess{specAlways.ID: entryAlways}
+	pullerAlways := &mockPuller{pullResult: &cr.PullResult{}}
+
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil)
+	if !pullerAlways.pullCalled {
+		t.Error("expected RestartAlways workload to trigger startContainer on tick")
 	}
 }

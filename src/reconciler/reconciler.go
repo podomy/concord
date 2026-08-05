@@ -33,20 +33,23 @@ import (
 	"github.com/podomy/concord/src/workload"
 )
 
-// ContainerAndProcess holds container state, process handle, and stopping status.
+// ContainerAndProcess holds container state, process handle, stopping status, and exit status.
 // Spec is stored so handleExitEvent can access port mappings, veth interfaces, and
 // workload metadata during asynchronous container teardown.
 type ContainerAndProcess struct {
 	*libcontainer.Container
 	cr.ProcessHandle
-	Spec     workload.Spec
-	Stopping bool
+	Spec       workload.Spec
+	Stopping   bool
+	ExitStatus *cr.ExitStatus
 }
 
-// ExitEvent represents a process exit notification sent to the main loop for cleanup.
+// ExitEvent carries a process exit status paired with its workload ID to the main loop channel.
 type ExitEvent struct {
-	Exit cr.Exit
-	ID   uuid.UUID
+	// WorkloadID identifies the specific workload spec associated with the exited process.
+	WorkloadID uuid.UUID
+	// ExitStatus contains the exit code and error outcome of the process execution.
+	ExitStatus cr.ExitStatus
 }
 
 // RunLoop watches for workload events and drives the container lifecycle.
@@ -74,7 +77,7 @@ func RunLoop(
 			return
 
 		case ev := <-exitEvents:
-			handleExitEvent(ctx, logger, j, nodeID, ev.ID, ev.Exit, running, ipAndCIDRs)
+			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs)
 
 		case <-ticker.C:
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents)
@@ -106,7 +109,26 @@ func reconcileTick(
 	}
 }
 
-// reconcileWorkloadSpec checks a single workload spec and triggers destruction or startup.
+// reconcileRemovedSpec handles cleanup for specs that have been marked as removed.
+func reconcileRemovedSpec(
+	ctx context.Context,
+	logger *zap.Logger,
+	spec workload.Spec,
+	running map[uuid.UUID]*ContainerAndProcess,
+	entry *ContainerAndProcess,
+) {
+	if entry == nil {
+		return
+	}
+	if !entry.Stopping && entry.ExitStatus == nil {
+		destroyContainer(ctx, logger, spec, running)
+	}
+	if entry.ExitStatus != nil {
+		delete(running, spec.ID)
+	}
+}
+
+// reconcileWorkloadSpec checks a single workload spec and drives container creation, restart, or removal.
 func reconcileWorkloadSpec(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -125,18 +147,28 @@ func reconcileWorkloadSpec(
 
 	entry, exists := running[spec.ID]
 
-	// Cleanup happens here, we check if spec was removed on every tick.
+	// 1. Spec was removed -> stop process if running, or purge entry if exited
 	if spec.Removed {
-		if exists && entry != nil && !entry.Stopping {
-			destroyContainer(ctx, logger, spec, running)
+		if exists {
+			reconcileRemovedSpec(ctx, logger, spec, running, entry)
 		}
 		return
 	}
 
-	if exists {
+	// 2. Workload is actively running -> nothing to do
+	if exists && (entry == nil || entry.ExitStatus == nil) {
 		return
 	}
 
+	// 3. Workload previously exited -> evaluate restart policy
+	if exists && entry != nil && entry.ExitStatus != nil {
+		if !shouldRestartWorkload(spec.Restart, *entry.ExitStatus) {
+			return // Restart policy dictates no restart; retain exited status entry
+		}
+		delete(running, spec.ID) // Policy allows restart; clear old entry for new container start
+	}
+
+	// 4. Start new container instance
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents)
 }
 
@@ -257,10 +289,10 @@ func monitorProcessExit(
 	exitEvents chan<- ExitEvent,
 ) {
 	select {
-	case exit := <-proc.Exited():
+	case exitStatus := <-proc.Exited():
 		if exitEvents != nil {
 			select {
-			case exitEvents <- ExitEvent{ID: id, Exit: exit}:
+			case exitEvents <- ExitEvent{WorkloadID: id, ExitStatus: exitStatus}:
 			case <-ctx.Done():
 			}
 		}
@@ -315,35 +347,41 @@ func destroyContainer(
 	}()
 }
 
-// handleExitEvent processes container process exit events in the main event loop,
-// performing network and container cleanup and recording the stopped instance state.
-func handleExitEvent(
+// shouldRestartWorkload determines if a workload should be restarted based on its restart policy and exit status.
+func shouldRestartWorkload(policy workload.RestartPolicy, status cr.ExitStatus) bool {
+	switch policy {
+	case workload.RestartAlways:
+		return true
+	case workload.RestartOnFailure:
+		return status.Code != 0 || status.Err != nil
+	case workload.RestartNever:
+		return false
+	default:
+		return false
+	}
+}
+
+// logProcessExit logs process exit status at appropriate log levels.
+func logProcessExit(logger *zap.Logger, id uuid.UUID, status cr.ExitStatus) {
+	if status.Err != nil {
+		logger.Error("process exit error", zap.String("id", id.String()), zap.Int("code", status.Code), zap.Error(status.Err))
+	} else {
+		logger.Info("process exited cleanly", zap.String("id", id.String()), zap.Int("code", status.Code))
+	}
+}
+
+// cleanupContainerResources tears down network veth links, port mappings, and container resources.
+func cleanupContainerResources(
 	ctx context.Context,
 	logger *zap.Logger,
-	j journal.Journal,
-	nodeID uuid.UUID,
-	id uuid.UUID,
-	exit cr.Exit,
-	running map[uuid.UUID]*ContainerAndProcess,
+	entry *ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 ) {
-	entry, exists := running[id]
-	if !exists || entry == nil {
-		return
-	}
-
-	if exit.Err != nil {
-		logger.Error("process exit error", zap.String("id", id.String()), zap.Int("code", exit.Code), zap.Error(exit.Err))
-	} else {
-		logger.Info("process exited cleanly", zap.String("id", id.String()), zap.Int("code", exit.Code))
-	}
-
-	// Clean up network veth link
+	id := entry.Spec.ID
 	if err := cn.DeleteLink(cn.VethHostName(id.String(), cn.VethA)); err != nil {
 		logger.Error("delete veth A end", zap.Error(err))
 	}
 
-	// Clean up port mapping if configured
 	if entry.Spec.HostPort > 0 {
 		if cidr, ok := ipAndCIDRs[id]; ok {
 			if err := cn.RemovePortMapping(ctx, entry.Spec.HostPort, cidr, entry.Spec.ContainerPort); err != nil {
@@ -353,14 +391,35 @@ func handleExitEvent(
 		}
 	}
 
-	// Clean up container
 	if entry.Container != nil {
 		if err := entry.Destroy(); err != nil {
 			logger.Error("destroy container", zap.Error(err))
 		}
 	}
+}
 
-	delete(running, id)
+// handleExitEvent processes container process exit events in the main event loop,
+// performing network and container cleanup and recording the stopped instance state.
+func handleExitEvent(
+	ctx context.Context,
+	logger *zap.Logger,
+	j journal.Journal,
+	nodeID uuid.UUID,
+	id uuid.UUID,
+	status cr.ExitStatus,
+	running map[uuid.UUID]*ContainerAndProcess,
+	ipAndCIDRs map[uuid.UUID]string,
+) {
+	entry, exists := running[id]
+	if !exists || entry == nil {
+		return
+	}
+
+	logProcessExit(logger, id, status)
+	cleanupContainerResources(ctx, logger, entry, ipAndCIDRs)
+
+	entry.ExitStatus = &status
+
 	recordInstanceEvent(ctx, logger, j, entry.Spec, nodeID, workload.StateStopped, 0)
 }
 
