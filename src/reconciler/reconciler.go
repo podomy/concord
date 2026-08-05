@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,22 @@ import (
 	"github.com/podomy/concord/src/workload"
 )
 
+// ContainerAndProcess holds container state, process handle, and stopping status.
+// Spec is stored so handleExitEvent can access port mappings, veth interfaces, and
+// workload metadata during asynchronous container teardown.
+type ContainerAndProcess struct {
+	*libcontainer.Container
+	cr.ProcessHandle
+	Spec     workload.Spec
+	Stopping bool
+}
+
+// ExitEvent represents a process exit notification sent to the main loop for cleanup.
+type ExitEvent struct {
+	Exit cr.Exit
+	ID   uuid.UUID
+}
+
 // RunLoop watches for workload events and drives the container lifecycle.
 // It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
@@ -43,19 +60,24 @@ func RunLoop(
 	j journal.Journal,
 	workloads *journalview.Workloads,
 ) {
-	running := map[uuid.UUID]*libcontainer.Container{}
+	running := map[uuid.UUID]*ContainerAndProcess{}
 	ipAndCIDRs := map[uuid.UUID]string{}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	exitEvents := make(chan ExitEvent, 100)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
+		case ev := <-exitEvents:
+			handleExitEvent(ctx, logger, j, nodeID, ev.ID, ev.Exit, running, ipAndCIDRs)
+
 		case <-ticker.C:
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents)
 		}
 	}
 }
@@ -68,32 +90,99 @@ func reconcileTick(
 	puller cr.Puller,
 	runtime cr.Runner,
 	j journal.Journal,
-	workloads *journalview.Workloads,
-	running map[uuid.UUID]*libcontainer.Container,
+	workloadsView *journalview.Workloads,
+	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
+	exitEvents chan<- ExitEvent,
 ) {
-	workloadSpecs, err := workloads.List(ctx)
+	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
 		logger.Error("list workloads", zap.Error(err))
 		return
 	}
 
 	for _, spec := range workloadSpecs {
-		if spec.SegmentID != nodeID {
-			continue
-		}
+		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents)
+	}
+}
 
-		// Cleanup happens here, we check if spec was removed on every tick.
-		if spec.Removed {
-			destroyContainer(ctx, logger, j, nodeID, spec, running, ipAndCIDRs)
-			continue
-		}
+// reconcileWorkloadSpec checks a single workload spec and triggers destruction or startup.
+func reconcileWorkloadSpec(
+	ctx context.Context,
+	logger *zap.Logger,
+	nodeID uuid.UUID,
+	puller cr.Puller,
+	runtime cr.Runner,
+	j journal.Journal,
+	spec workload.Spec,
+	running map[uuid.UUID]*ContainerAndProcess,
+	ipAndCIDRs map[uuid.UUID]string,
+	exitEvents chan<- ExitEvent,
+) {
+	if spec.SegmentID != nodeID {
+		return
+	}
 
-		if _, exists := running[spec.ID]; exists {
-			continue
-		}
+	entry, exists := running[spec.ID]
 
-		startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs)
+	// Cleanup happens here, we check if spec was removed on every tick.
+	if spec.Removed {
+		if exists && entry != nil && !entry.Stopping {
+			destroyContainer(ctx, logger, spec, running)
+		}
+		return
+	}
+
+	if exists {
+		return
+	}
+
+	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents)
+}
+
+// setupContainerNetwork configures veth pairs and host port mappings for a started container process.
+// If network setup fails, it performs anti-leak cleanup by killing the process and destroying container resources.
+func setupContainerNetwork(
+	ctx context.Context,
+	logger *zap.Logger,
+	ctr *libcontainer.Container,
+	processHandle cr.ProcessHandle,
+	spec workload.Spec,
+	ipAndCIDRs map[uuid.UUID]string,
+) error {
+	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), processHandle.NamespacePID())
+	if err != nil {
+		logger.Error("create veth pair", zap.Error(err))
+		cleanupContainerStartFailure(logger, ctr, processHandle)
+		return fmt.Errorf("create veth pair: %w", err)
+	}
+
+	ipAndCIDRs[spec.ID] = ipAndCIDRstring
+
+	if spec.HostPort == 0 {
+		return nil
+	}
+
+	err = cn.AddPortMapping(ctx, spec.HostPort, ipAndCIDRstring, spec.ContainerPort)
+	if err != nil {
+		logger.Error("add port mapping", zap.Error(err))
+		if linkErr := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA)); linkErr != nil {
+			logger.Error("delete veth link on port mapping failure", zap.Error(linkErr))
+		}
+		delete(ipAndCIDRs, spec.ID)
+		cleanupContainerStartFailure(logger, ctr, processHandle)
+		return fmt.Errorf("add port mapping: %w", err)
+	}
+
+	return nil
+}
+
+func cleanupContainerStartFailure(logger *zap.Logger, ctr *libcontainer.Container, processHandle cr.ProcessHandle) {
+	if sigErr := processHandle.Signal(syscall.SIGKILL); sigErr != nil {
+		logger.Error("kill process on network setup failure", zap.Error(sigErr))
+	}
+	if destroyErr := ctr.Destroy(); destroyErr != nil {
+		logger.Error("destroy container on network setup failure", zap.Error(destroyErr))
 	}
 }
 
@@ -107,8 +196,9 @@ func startContainer(
 	j journal.Journal,
 	nodeID uuid.UUID,
 	spec workload.Spec,
-	running map[uuid.UUID]*libcontainer.Container,
+	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
+	exitEvents chan<- ExitEvent,
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
@@ -141,69 +231,137 @@ func startContainer(
 		return
 	}
 
-	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), processHandle.NamespacePID())
-	if err != nil {
-		logger.Error("create veth pair", zap.Error(err))
+	if err := setupContainerNetwork(ctx, logger, ctr, processHandle, spec, ipAndCIDRs); err != nil {
 		return
 	}
 
-	// Add the ipAndCIDRstring to the map to save it
-	ipAndCIDRs[spec.ID] = ipAndCIDRstring
-
-	// Port mapping.
-	if spec.HostPort > 0 {
-		err = cn.AddPortMapping(ctx, spec.HostPort, ipAndCIDRstring, spec.ContainerPort)
-		if err != nil {
-			logger.Error("add port mapping", zap.Error(err))
-			return
-		}
+	containerAndProcess := ContainerAndProcess{
+		Container:     ctr,
+		ProcessHandle: processHandle,
+		Spec:          spec,
 	}
+	running[spec.ID] = &containerAndProcess
 
-	running[spec.ID] = ctr
+	// Spawn background exit monitor so both natural process exits and forced shutdowns
+	// forward process termination events back to the main loop via exitEvents channel.
+	go monitorProcessExit(ctx, spec.ID, processHandle, exitEvents)
 
 	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, processHandle.NamespacePID())
 }
 
-// destroyContainer stops and removes a container, then removes it from the running set.
+// monitorProcessExit waits on ProcessHandle.Exited() and forwards the exit status to exitEvents.
+func monitorProcessExit(
+	ctx context.Context,
+	id uuid.UUID,
+	proc cr.ProcessHandle,
+	exitEvents chan<- ExitEvent,
+) {
+	select {
+	case exit := <-proc.Exited():
+		if exitEvents != nil {
+			select {
+			case exitEvents <- ExitEvent{ID: id, Exit: exit}:
+			case <-ctx.Done():
+			}
+		}
+	case <-ctx.Done():
+	}
+}
+
+// stopTimeout returns the graceful shutdown timeout duration for a workload spec.
+// If StopTimeoutSeconds is <= 0, it defaults to 60 seconds.
+func stopTimeout(spec workload.Spec) time.Duration {
+	if spec.StopTimeoutSeconds > 0 {
+		return time.Duration(spec.StopTimeoutSeconds) * time.Second
+	}
+	return 60 * time.Second
+}
+
+// destroyContainer initiates asynchronous shutdown of a container by sending SIGTERM.
+// If SIGTERM times out after stopTimeout(spec), a SIGKILL fallback is sent.
 func destroyContainer(
+	ctx context.Context,
+	logger *zap.Logger,
+	spec workload.Spec,
+	running map[uuid.UUID]*ContainerAndProcess,
+) {
+	entry, exists := running[spec.ID]
+	if !exists || entry == nil || entry.Stopping {
+		return
+	}
+
+	entry.Stopping = true
+	if err := entry.ProcessHandle.Signal(syscall.SIGTERM); err != nil {
+		logger.Error("SIGTERM failed", zap.String("id", spec.ID.String()), zap.Error(err))
+	}
+
+	proc := entry.ProcessHandle
+	id := spec.ID
+	timeout := stopTimeout(spec)
+
+	// Launch background fallback timer for SIGKILL escalation if SIGTERM times out.
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+			logger.Warn("process SIGTERM timed out, sending SIGKILL", zap.String("id", id.String()))
+			if err := proc.Signal(syscall.SIGKILL); err != nil {
+				logger.Error("SIGKILL failed", zap.String("id", id.String()), zap.Error(err))
+			}
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// handleExitEvent processes container process exit events in the main event loop,
+// performing network and container cleanup and recording the stopped instance state.
+func handleExitEvent(
 	ctx context.Context,
 	logger *zap.Logger,
 	j journal.Journal,
 	nodeID uuid.UUID,
-	spec workload.Spec,
-	running map[uuid.UUID]*libcontainer.Container,
+	id uuid.UUID,
+	exit cr.Exit,
+	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 ) {
-	ctr, exists := running[spec.ID]
-	if !exists {
+	entry, exists := running[id]
+	if !exists || entry == nil {
 		return
 	}
 
-	delete(running, spec.ID)
+	if exit.Err != nil {
+		logger.Error("process exit error", zap.String("id", id.String()), zap.Int("code", exit.Code), zap.Error(exit.Err))
+	} else {
+		logger.Info("process exited cleanly", zap.String("id", id.String()), zap.Int("code", exit.Code))
+	}
 
-	// Clean up the veth A end.
-	err := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA))
-	if err != nil {
+	// Clean up network veth link
+	if err := cn.DeleteLink(cn.VethHostName(id.String(), cn.VethA)); err != nil {
 		logger.Error("delete veth A end", zap.Error(err))
 	}
 
-	// Remove the port mappings the workload.
-	if spec.HostPort > 0 {
-		cidr, ok := ipAndCIDRs[spec.ID]
-		if ok {
-			err := cn.RemovePortMapping(ctx, spec.HostPort, cidr, spec.ContainerPort)
-			if err != nil {
+	// Clean up port mapping if configured
+	if entry.Spec.HostPort > 0 {
+		if cidr, ok := ipAndCIDRs[id]; ok {
+			if err := cn.RemovePortMapping(ctx, entry.Spec.HostPort, cidr, entry.Spec.ContainerPort); err != nil {
 				logger.Error("remove port mapping", zap.Error(err))
 			}
-			delete(ipAndCIDRs, spec.ID)
+			delete(ipAndCIDRs, id)
 		}
 	}
 
-	if err := ctr.Destroy(); err != nil {
-		logger.Error("destroy container", zap.Error(err))
+	// Clean up container
+	if entry.Container != nil {
+		if err := entry.Destroy(); err != nil {
+			logger.Error("destroy container", zap.Error(err))
+		}
 	}
 
-	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateStopped, 0)
+	delete(running, id)
+	recordInstanceEvent(ctx, logger, j, entry.Spec, nodeID, workload.StateStopped, 0)
 }
 
 // buildProcess constructs a libcontainer Process from the spec and image config.

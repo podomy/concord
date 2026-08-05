@@ -64,8 +64,8 @@ func (r *ContainerRuntime) Create(id string, cfg *configs.Config) (*libcontainer
 
 // Start runs the init process inside the container and returns once it is
 // running (non-blocking). The container must have been created with Create
-// first. Use ctr.Run instead to wait for the process to exit.
-// It returns container namespace pid.
+// first. Use ProcessHandle.Exited() to wait for the process to exit.
+// It returns a ProcessHandle containing the process execution state and namespace PID.
 func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer.Process) (ProcessHandle, error) {
 	err := ctr.Start(proc)
 	if err != nil {

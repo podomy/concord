@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/opencontainers/runc/libcontainer"
@@ -122,7 +125,7 @@ func TestReconcilerSkipsAlreadyRunning(t *testing.T) {
 	}
 }
 
-func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.Workloads, map[uuid.UUID]*libcontainer.Container, map[uuid.UUID]string) {
+func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.Workloads, map[uuid.UUID]*ContainerAndProcess, map[uuid.UUID]string) {
 	t.Helper()
 	kv, err := kvstore.OpenDBPath(filepath.Join(t.TempDir(), "bbolt.db"))
 	if err != nil {
@@ -136,13 +139,14 @@ func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.W
 	return &mockPuller{pullResult: &cr.PullResult{}},
 		&mockRunner{},
 		journalview.NewWorkloads(kv),
-		map[uuid.UUID]*libcontainer.Container{},
+		map[uuid.UUID]*ContainerAndProcess{},
 		map[uuid.UUID]string{}
 }
 
-func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, workloads *journalview.Workloads, running map[uuid.UUID]*libcontainer.Container, cidrs map[uuid.UUID]string) {
+func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, workloads *journalview.Workloads, running map[uuid.UUID]*ContainerAndProcess, cidrs map[uuid.UUID]string) {
 	t.Helper()
-	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs)
+	exitEvents := make(chan ExitEvent, 100)
+	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, exitEvents)
 }
 
 func writeSpecEvent(t *testing.T, workloads *journalview.Workloads, spec workload.Spec, nodeID uuid.UUID) {
@@ -174,5 +178,80 @@ func TestReconcilerDoesNotStartTombstonedWorkload(t *testing.T) {
 
 	if puller.pullCalled {
 		t.Fatal("puller was called for a tombstoned workload")
+	}
+}
+
+type mockProcessHandle struct {
+	signals    []os.Signal
+	exitedChan chan cr.Exit
+}
+
+func (m *mockProcessHandle) NamespacePID() int { return 1234 }
+func (m *mockProcessHandle) Signal(sig os.Signal) error {
+	m.signals = append(m.signals, sig)
+	return nil
+}
+func (m *mockProcessHandle) Exited() <-chan cr.Exit { return m.exitedChan }
+
+func TestReconcilerDestroyContainerAsync(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New()}
+	exitedChan := make(chan cr.Exit, 1)
+	proc := &mockProcessHandle{exitedChan: exitedChan}
+	entry := &ContainerAndProcess{
+		Spec:          spec,
+		ProcessHandle: proc,
+	}
+	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
+	exitEvents := make(chan ExitEvent, 1)
+
+	go monitorProcessExit(t.Context(), spec.ID, proc, exitEvents)
+
+	destroyContainer(t.Context(), zaptest.NewLogger(t), spec, running)
+
+	if !entry.Stopping {
+		t.Error("expected entry.Stopping to be true")
+	}
+	if len(proc.signals) != 1 || proc.signals[0] != syscall.SIGTERM {
+		t.Errorf("expected SIGTERM signal, got %v", proc.signals)
+	}
+
+	// Send exit notification
+	exitedChan <- cr.Exit{Code: 0}
+
+	select {
+	case ev := <-exitEvents:
+		if ev.ID != spec.ID {
+			t.Errorf("expected event for spec %v, got %v", spec.ID, ev.ID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for exit event")
+	}
+}
+
+func TestReconcilerHandleExitEvent(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New()}
+	entry := &ContainerAndProcess{
+		Spec:     spec,
+		Stopping: true,
+	}
+	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
+	cidrs := map[uuid.UUID]string{}
+
+	handleExitEvent(t.Context(), zaptest.NewLogger(t), &mockJournal{}, uuid.Nil, spec.ID, cr.Exit{Code: 0}, running, cidrs)
+
+	if _, exists := running[spec.ID]; exists {
+		t.Error("expected running entry to be removed after handleExitEvent")
+	}
+}
+
+func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
+	specDefault := workload.Spec{ID: uuid.New()}
+	specCustom := workload.Spec{ID: uuid.New(), StopTimeoutSeconds: 15}
+
+	if timeout := stopTimeout(specDefault); timeout != 60*time.Second {
+		t.Errorf("expected default timeout 60s, got %v", timeout)
+	}
+	if timeout := stopTimeout(specCustom); timeout != 15*time.Second {
+		t.Errorf("expected custom timeout 15s, got %v", timeout)
 	}
 }

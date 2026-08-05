@@ -16,6 +16,9 @@ type Spec struct {
 	Removed       bool
 	HostPort      uint16
 	ContainerPort uint16
+	// StopTimeoutSeconds specifies the maximum time (in seconds) allowed for graceful
+	// process shutdown via SIGTERM before falling back to SIGKILL. Defaults to 60 seconds if <= 0.
+	StopTimeoutSeconds int
 }
 
 type Resources struct {
