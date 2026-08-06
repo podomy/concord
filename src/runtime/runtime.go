@@ -86,7 +86,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	logger.Info("peer sync pull loop started")
 
 	// Start the workload infrastructure and network.
-	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, workloads)
+	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, workloads, views)
 	if err != nil {
 		return fmt.Errorf("start workload and network: %w", err)
 	}
@@ -122,7 +122,7 @@ func setupNetwork(ctx context.Context) error {
 
 func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
-	st *stores, workloads *journalview.Workloads,
+	st *stores, workloads *journalview.Workloads, views []journalview.View,
 ) (*or.Registry, error) {
 	// Start the OCI registry
 	ocireg, err := startOCIRegistry(ctx, nodeID, peerService, logger)
@@ -137,7 +137,7 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	if err != nil {
 		return nil, fmt.Errorf("container runtime: %w", err)
 	}
-	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, workloads)
+	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, workloads, views)
 	logger.Info("workload reconciler started")
 
 	return ocireg, nil
@@ -145,9 +145,9 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 
 func startWorkloadAndNetwork(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
-	st *stores, workloads *journalview.Workloads,
+	st *stores, workloads *journalview.Workloads, views []journalview.View,
 ) (*or.Registry, error) {
-	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, workloads)
+	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, workloads, views)
 	if err != nil {
 		return nil, fmt.Errorf("start workload infrastructure: %w", err)
 	}

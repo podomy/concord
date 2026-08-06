@@ -39,17 +39,17 @@ import (
 type ContainerAndProcess struct {
 	*libcontainer.Container
 	cr.ProcessHandle
+	ExitStatus *cr.ExitStatus
 	Spec       workload.Spec
 	Stopping   bool
-	ExitStatus *cr.ExitStatus
 }
 
 // ExitEvent carries a process exit status paired with its workload ID to the main loop channel.
 type ExitEvent struct {
-	// WorkloadID identifies the specific workload spec associated with the exited process.
-	WorkloadID uuid.UUID
 	// ExitStatus contains the exit code and error outcome of the process execution.
 	ExitStatus cr.ExitStatus
+	// WorkloadID identifies the specific workload spec associated with the exited process.
+	WorkloadID uuid.UUID
 }
 
 // RunLoop watches for workload events and drives the container lifecycle.
@@ -62,6 +62,7 @@ func RunLoop(
 	runtime cr.Runner,
 	j journal.Journal,
 	workloads *journalview.Workloads,
+	views []journalview.View,
 ) {
 	running := map[uuid.UUID]*ContainerAndProcess{}
 	ipAndCIDRs := map[uuid.UUID]string{}
@@ -81,6 +82,36 @@ func RunLoop(
 
 		case <-ticker.C:
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents)
+			runHealthChecks(ctx, logger, running, j, views, nodeID)
+		}
+	}
+}
+
+func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+	for _, entry := range running {
+		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
+			continue
+		}
+		healthy := cr.CheckHealth(ctx, logger, entry.Spec)
+		// Check liveness.
+		if healthy {
+			continue
+		}
+
+		// Check readiness and resources.
+		switch entry.Spec.HealthAction {
+		case workload.HealthActionRestart:
+			logger.Warn("restarting unhealthy workload")
+			destroyContainer(ctx, logger, entry.Spec, running)
+		case workload.HealthActionSignal:
+			logger.Warn("signaling unhealthy workload")
+			// Emmitting a journal event.
+			event := journal.NewEvent(nodeID, "workload.unhealthy", json.RawMessage{})
+			err := journalview.RecordEvent(ctx, j, views, event)
+			if err != nil {
+				logger.Error("record event failed", zap.Error(err))
+				continue
+			}
 		}
 	}
 }

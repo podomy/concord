@@ -19,7 +19,16 @@ type Spec struct {
 	// StopTimeoutSeconds specifies the maximum time (in seconds) allowed for graceful
 	// process shutdown via SIGTERM before falling back to SIGKILL. Defaults to 60 seconds if <= 0.
 	StopTimeoutSeconds int
+	HealthAction       HealthAction
+	HealthPath         string // HTTP path for health check endpoint (defaults to "/health")
 }
+
+type HealthAction int
+
+const (
+	HealthActionRestart = iota
+	HealthActionSignal
+)
 
 type Resources struct {
 	CPUShares uint64 // relative weight (default 1024)
