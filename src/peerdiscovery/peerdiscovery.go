@@ -33,9 +33,16 @@ const (
 // change over time; the ID is the durable identity. State is memberlist's
 // current liveness observation for the node.
 type Node struct {
-	ID      uuid.UUID
-	Address netip.AddrPort
-	State   NodeState
+	State    NodeState
+	Address  netip.AddrPort
+	Metadata NodeMetadata
+	ID       uuid.UUID
+}
+
+type NodeMetadata struct {
+	CPUMHz    float64 `json:"cpu_mhz"`
+	MemoryMB  uint64  `json:"memory_mb"`
+	Workloads int     `json:"workload_count"`
 }
 
 // Resolver discovers candidate peer addresses for bootstrapping memberlist

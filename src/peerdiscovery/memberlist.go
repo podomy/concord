@@ -4,18 +4,23 @@
 package peerdiscovery
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/memberlist"
 	"go.uber.org/zap"
+
+	nodepackage "github.com/podomy/concord/src/node"
 )
 
 // MemberService wraps memberlist membership tracking for Concord peer discovery.
 type MemberService struct {
-	list *memberlist.Memberlist
+	list     *memberlist.Memberlist
+	delegate *nodeMetadataDelegate
 }
 
 // Start creates a memberlist-backed peer discovery service for node.
@@ -51,6 +56,27 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 		config.Logger = zap.NewStdLog(logger.Named("memberlist"))
 	}
 
+	cpuMHz, err := nodepackage.GetCPUFreqMHz()
+	if err != nil {
+		return nil, fmt.Errorf("get cpu freq: %w", err)
+	}
+
+	memoryMB, err := nodepackage.GetTotalMemoryMB()
+	if err != nil {
+		return nil, fmt.Errorf("get total memory mb: %w", err)
+	}
+
+	delegate := &nodeMetadataDelegate{}
+	delegate.meta = func() NodeMetadata {
+		return NodeMetadata{
+			CPUMHz:    cpuMHz,
+			MemoryMB:  memoryMB,
+			Workloads: int(delegate.workloads.Load()),
+		}
+	}
+
+	config.Delegate = delegate
+
 	list, err := memberlist.Create(config)
 	if err != nil {
 		return nil, fmt.Errorf("memberlist bind %s: %w", node.Address, err)
@@ -71,10 +97,20 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 	}
 
 	memberService := MemberService{
-		list: list,
+		list:     list,
+		delegate: delegate,
 	}
 
 	return &memberService, nil
+}
+
+// SetWorkloadCount updates the count of active local workloads reported in node gossip metadata.
+func (m *MemberService) SetWorkloadCount(n int) {
+	if m == nil || m.delegate == nil {
+		return
+	}
+	// #nosec G115 -- workload count n fits safely within int32 range
+	m.delegate.workloads.Store(int32(n))
 }
 
 // ResolveAdvertise picks the address other peers should dial when contacting
@@ -210,10 +246,18 @@ func (m *MemberService) Members() ([]Node, error) {
 			return nil, fmt.Errorf("invalid member address: %v", member.Addr)
 		}
 
+		var meta NodeMetadata
+		if len(member.Meta) > 0 {
+			if err := json.Unmarshal(member.Meta, &meta); err != nil {
+				return nil, fmt.Errorf("unmarshal member metadata: %w", err)
+			}
+		}
+
 		out = append(out, Node{
-			ID:      id,
-			Address: netip.AddrPortFrom(addr, member.Port),
-			State:   memberState(member.State),
+			ID:       id,
+			Address:  netip.AddrPortFrom(addr, member.Port),
+			State:    memberState(member.State),
+			Metadata: meta,
 		})
 	}
 
@@ -256,3 +300,23 @@ func memberState(state memberlist.NodeStateType) NodeState {
 		return NodeStateUnknown
 	}
 }
+
+// Adding metadata to the memberlist gossip
+type nodeMetadataDelegate struct {
+	meta      func() NodeMetadata
+	workloads atomic.Int32
+}
+
+func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
+	bytes, err := json.Marshal(d.meta())
+	if err != nil {
+		return nil
+	}
+	return bytes
+}
+
+// Empty stubs to satisfy the interface of memberlist lib.
+func (d *nodeMetadataDelegate) NotifyMsg([]byte)                {}
+func (d *nodeMetadataDelegate) GetBroadcasts(int, int) [][]byte { return nil }
+func (d *nodeMetadataDelegate) LocalState(bool) []byte          { return nil }
+func (d *nodeMetadataDelegate) MergeRemoteState([]byte, bool)   {}

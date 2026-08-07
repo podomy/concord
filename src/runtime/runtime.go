@@ -137,7 +137,7 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	if err != nil {
 		return nil, fmt.Errorf("container runtime: %w", err)
 	}
-	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, workloads, views)
+	go reconciler.RunLoop(ctx, logger, nodeID, puller, crRuntime, st.journal, workloads, views, peerService)
 	logger.Info("workload reconciler started")
 
 	return ocireg, nil

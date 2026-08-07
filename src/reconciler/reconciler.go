@@ -30,6 +30,7 @@ import (
 	"github.com/podomy/concord/src/cr"
 	"github.com/podomy/concord/src/journal"
 	"github.com/podomy/concord/src/journalview"
+	"github.com/podomy/concord/src/peerdiscovery"
 	"github.com/podomy/concord/src/workload"
 )
 
@@ -63,6 +64,7 @@ func RunLoop(
 	j journal.Journal,
 	workloads *journalview.Workloads,
 	views []journalview.View,
+	peerService *peerdiscovery.MemberService,
 ) {
 	running := map[uuid.UUID]*ContainerAndProcess{}
 	ipAndCIDRs := map[uuid.UUID]string{}
@@ -78,10 +80,10 @@ func RunLoop(
 			return
 
 		case ev := <-exitEvents:
-			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs)
+			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs, peerService)
 
 		case <-ticker.C:
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService)
 			runHealthChecks(ctx, logger, running, j, views, nodeID)
 		}
 	}
@@ -128,6 +130,7 @@ func reconcileTick(
 	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
+	peerService *peerdiscovery.MemberService,
 ) {
 	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
@@ -136,7 +139,7 @@ func reconcileTick(
 	}
 
 	for _, spec := range workloadSpecs {
-		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents)
+		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService)
 	}
 }
 
@@ -147,6 +150,7 @@ func reconcileRemovedSpec(
 	spec workload.Spec,
 	running map[uuid.UUID]*ContainerAndProcess,
 	entry *ContainerAndProcess,
+	peerService *peerdiscovery.MemberService,
 ) {
 	if entry == nil {
 		return
@@ -156,6 +160,7 @@ func reconcileRemovedSpec(
 	}
 	if entry.ExitStatus != nil {
 		delete(running, spec.ID)
+		peerService.SetWorkloadCount(countRunning(running))
 	}
 }
 
@@ -171,6 +176,7 @@ func reconcileWorkloadSpec(
 	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
+	peerService *peerdiscovery.MemberService,
 ) {
 	if spec.SegmentID != nodeID {
 		return
@@ -181,7 +187,7 @@ func reconcileWorkloadSpec(
 	// 1. Spec was removed -> stop process if running, or purge entry if exited
 	if spec.Removed {
 		if exists {
-			reconcileRemovedSpec(ctx, logger, spec, running, entry)
+			reconcileRemovedSpec(ctx, logger, spec, running, entry, peerService)
 		}
 		return
 	}
@@ -197,10 +203,11 @@ func reconcileWorkloadSpec(
 			return // Restart policy dictates no restart; retain exited status entry
 		}
 		delete(running, spec.ID) // Policy allows restart; clear old entry for new container start
+		peerService.SetWorkloadCount(countRunning(running))
 	}
 
 	// 4. Start new container instance
-	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents)
+	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService)
 }
 
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.
@@ -262,6 +269,7 @@ func startContainer(
 	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
+	peerService *peerdiscovery.MemberService,
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
@@ -304,6 +312,7 @@ func startContainer(
 		Spec:          spec,
 	}
 	running[spec.ID] = &containerAndProcess
+	peerService.SetWorkloadCount(countRunning(running))
 
 	// Spawn background exit monitor so both natural process exits and forced shutdowns
 	// forward process termination events back to the main loop via exitEvents channel.
@@ -440,6 +449,7 @@ func handleExitEvent(
 	status cr.ExitStatus,
 	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
+	peerService *peerdiscovery.MemberService,
 ) {
 	entry, exists := running[id]
 	if !exists || entry == nil {
@@ -452,6 +462,18 @@ func handleExitEvent(
 	entry.ExitStatus = &status
 
 	recordInstanceEvent(ctx, logger, j, entry.Spec, nodeID, workload.StateStopped, 0)
+	peerService.SetWorkloadCount(countRunning(running))
+}
+
+// countRunning returns the number of active, non-exited workloads in the running map.
+func countRunning(running map[uuid.UUID]*ContainerAndProcess) int {
+	count := 0
+	for _, entry := range running {
+		if entry != nil && entry.ExitStatus == nil {
+			count++
+		}
+	}
+	return count
 }
 
 // buildProcess constructs a libcontainer Process from the spec and image config.
