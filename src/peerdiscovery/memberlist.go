@@ -301,12 +301,16 @@ func memberState(state memberlist.NodeStateType) NodeState {
 	}
 }
 
-// Adding metadata to the memberlist gossip
+// nodeMetadataDelegate implements memberlist.Delegate to serialize and gossip
+// local node metadata (CPU, Memory, and active container workload counts)
+// across cluster peers.
 type nodeMetadataDelegate struct {
 	meta      func() NodeMetadata
 	workloads atomic.Int32
 }
 
+// NodeMeta produces JSON-serialized metadata for this node to be included
+// in memberlist ping and gossip packets.
 func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	bytes, err := json.Marshal(d.meta())
 	if err != nil {
@@ -315,8 +319,14 @@ func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	return bytes
 }
 
-// Empty stubs to satisfy the interface of memberlist lib.
-func (d *nodeMetadataDelegate) NotifyMsg([]byte)                {}
+// NotifyMsg receives user-data messages from cluster peers (unused by Concord).
+func (d *nodeMetadataDelegate) NotifyMsg([]byte) {}
+
+// GetBroadcasts returns user broadcast messages to piggyback on gossip rounds (unused by Concord).
 func (d *nodeMetadataDelegate) GetBroadcasts(int, int) [][]byte { return nil }
-func (d *nodeMetadataDelegate) LocalState(bool) []byte          { return nil }
-func (d *nodeMetadataDelegate) MergeRemoteState([]byte, bool)   {}
+
+// LocalState returns arbitrary local state for full push/pull state sync (unused by Concord).
+func (d *nodeMetadataDelegate) LocalState(bool) []byte { return nil }
+
+// MergeRemoteState processes full push/pull state sync received from peers (unused by Concord).
+func (d *nodeMetadataDelegate) MergeRemoteState([]byte, bool) {}

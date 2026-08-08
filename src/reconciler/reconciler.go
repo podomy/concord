@@ -83,6 +83,10 @@ func RunLoop(
 			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs, peerService)
 
 		case <-ticker.C:
+			if isLeader(nodeID, peerService) {
+				scheduleWorkloads(ctx, logger, j, workloads, peerService, nodeID, views)
+			}
+
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService)
 			runHealthChecks(ctx, logger, running, j, views, nodeID)
 		}

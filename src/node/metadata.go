@@ -13,14 +13,18 @@ import (
 )
 
 var (
+	// ErrMemTotalNotFound indicates that the MemTotal line could not be found in /proc/meminfo.
 	ErrMemTotalNotFound = errors.New("memTotal field not found in /proc/meminfo")
-	ErrNoCPUMHzFound    = errors.New("no 'cpu MHz' entries found in /proc/cpuinfo")
+	// ErrNoCPUMHzFound indicates that no cpu MHz entries were found in /proc/cpuinfo.
+	ErrNoCPUMHzFound = errors.New("no 'cpu MHz' entries found in /proc/cpuinfo")
 )
 
+// GetTotalMemoryMB reads /proc/meminfo from the host procfs and returns
+// total physical system memory converted from KiB to MiB.
 func GetTotalMemoryMB() (uint64, error) {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("open meminfo: %w", err)
 	}
 	defer file.Close() //nolint:errcheck // best-effort file cleanup on read
 
@@ -52,15 +56,19 @@ func GetTotalMemoryMB() (uint64, error) {
 	return 0, ErrMemTotalNotFound //nolint:wrapcheck // sentinel error
 }
 
+// GetCPUFreqMHz reads the aggregate CPU frequency in MHz across all active
+// CPU cores listed in /proc/cpuinfo.
 func GetCPUFreqMHz() (float64, error) {
-	khz, err := readProcCPU()
+	mhz, err := readProcCPU()
 	if err != nil {
-		return 0, fmt.Errorf("read sys max freq: %w", err)
+		return 0, fmt.Errorf("read sys cpu freq: %w", err)
 	}
 
-	return khz, nil
+	return mhz, nil
 }
 
+// readProcCPU parses /proc/cpuinfo to compute the aggregate clock frequency in MHz
+// across all CPU cores present on the system.
 func readProcCPU() (float64, error) {
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
