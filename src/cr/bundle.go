@@ -48,7 +48,7 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 	namespaces.Add(configs.NEWUTS, "")
 	namespaces.Add(configs.NEWIPC, "")
 
-	// Proc for the processes
+	// Proc for the processes.
 	mountProc := configs.Mount{
 		Device:      "proc",
 		Destination: "/proc",
@@ -56,14 +56,14 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 		Flags:       syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_RDONLY,
 	}
 
-	// Shm for the ram access
+	// Shm for the ram access.
 	mountTmpfs := configs.Mount{
 		Device:      "tmpfs",
 		Destination: "/dev/shm",
 		Source:      "tmpfs",
 	}
 
-	// Pseudo terminal access
+	// Pseudo terminal access.
 	mountPts := configs.Mount{
 		Device:      "devpts",
 		Destination: "/dev/pts",
@@ -71,7 +71,7 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 		Data:        "newinstance,ptmxmode=0666",
 	}
 
-	// Proc for the device tree
+	// Proc for the device tree.
 	mountSys := configs.Mount{
 		Device:      "sysfs",
 		Destination: "/sys",

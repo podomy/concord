@@ -107,9 +107,9 @@ func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (
 
 	link := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{
-			Name: vethA, // host side
+			Name: vethA, // host side.
 		},
-		PeerName: vethB, // container side
+		PeerName: vethB, // container side.
 	}
 
 	vethALink, err := findOrCreateVethLinkDevice(ctx, link)

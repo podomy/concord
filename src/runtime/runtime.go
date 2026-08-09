@@ -34,14 +34,14 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return fmt.Errorf("load node config: %w", err)
 	}
 
-	// The ip address and port
+	// The ip address and port.
 	if !nodeConfig.MemberlistAddress.IsValid() {
 		nodeConfig.MemberlistAddress = netip.MustParseAddrPort("0.0.0.0:7946")
 	}
 
 	st, err := openStores()
 	if err != nil {
-		// error was wrapped inside open stores
+		// error was wrapped inside open stores.
 		return err
 	}
 	defer closeStores(logger, st)
@@ -124,7 +124,7 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
 	st *stores, workloads *journalview.Workloads, views []journalview.View,
 ) (*or.Registry, error) {
-	// Start the OCI registry
+	// Start the OCI registry.
 	ocireg, err := startOCIRegistry(ctx, nodeID, peerService, logger)
 	if err != nil {
 		return nil, err

@@ -40,9 +40,11 @@ import (
 type ContainerAndProcess struct {
 	*libcontainer.Container
 	cr.ProcessHandle
-	ExitStatus *cr.ExitStatus
-	Spec       workload.Spec
-	Stopping   bool
+	restartAfter time.Time
+	ExitStatus   *cr.ExitStatus
+	Spec         workload.Spec
+	Stopping     bool
+	restartCount int
 }
 
 // ExitEvent carries a process exit status paired with its workload ID to the main loop channel.
@@ -73,6 +75,13 @@ func RunLoop(
 	defer ticker.Stop()
 
 	exitEvents := make(chan ExitEvent, 100)
+
+	// On restart or full shutdown of concord we pickup the containers that were running.
+	stateDir, err := cr.StateDirPath()
+	if err != nil {
+		logger.Error("State dir path", zap.Error(err))
+	}
+	adoptContainers(ctx, logger, nodeID, running, workloads, stateDir, exitEvents)
 
 	for {
 		select {
@@ -188,7 +197,7 @@ func reconcileWorkloadSpec(
 
 	entry, exists := running[spec.ID]
 
-	// 1. Spec was removed -> stop process if running, or purge entry if exited
+	// 1. Spec was removed -> stop process if running, or purge entry if exited.
 	if spec.Removed {
 		if exists {
 			reconcileRemovedSpec(ctx, logger, spec, running, entry, peerService)
@@ -196,21 +205,26 @@ func reconcileWorkloadSpec(
 		return
 	}
 
-	// 2. Workload is actively running -> nothing to do
+	// 2. Workload is actively running -> nothing to do.
 	if exists && (entry == nil || entry.ExitStatus == nil) {
 		return
 	}
 
-	// 3. Workload previously exited -> evaluate restart policy
+	// 3. Workload previously exited -> evaluate restart policy.
 	if exists && entry != nil && entry.ExitStatus != nil {
 		if !shouldRestartWorkload(spec.Restart, *entry.ExitStatus) {
-			return // Restart policy dictates no restart; retain exited status entry
+			return // Restart policy dictates no restart; retain exited status entry.
 		}
-		delete(running, spec.ID) // Policy allows restart; clear old entry for new container start
+		if entry.restartAfter.After(time.Now()) {
+			// We are still cooling down, can't restart now.
+			return
+		}
+
+		delete(running, spec.ID) // Policy allows restart; clear old entry for new container start.
 		peerService.SetWorkloadCount(countRunning(running))
 	}
 
-	// 4. Start new container instance
+	// 4. Start new container instance.
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService)
 }
 
@@ -431,9 +445,9 @@ func cleanupContainerResources(
 			if err := cn.RemovePortMapping(ctx, entry.Spec.HostPort, cidr, entry.Spec.ContainerPort); err != nil {
 				logger.Error("remove port mapping", zap.Error(err))
 			}
-			delete(ipAndCIDRs, id)
 		}
 	}
+	delete(ipAndCIDRs, id)
 
 	if entry.Container != nil {
 		if err := entry.Destroy(); err != nil {
@@ -464,6 +478,8 @@ func handleExitEvent(
 	cleanupContainerResources(ctx, logger, entry, ipAndCIDRs)
 
 	entry.ExitStatus = &status
+	entry.restartCount++
+	entry.restartAfter = time.Now().Add(backOff(entry.restartCount))
 
 	recordInstanceEvent(ctx, logger, j, entry.Spec, nodeID, workload.StateStopped, 0)
 	peerService.SetWorkloadCount(countRunning(running))
@@ -539,4 +555,60 @@ func bundleDirPath(specID uuid.UUID) (string, error) {
 	}
 
 	return filepath.Join(dir, "concord", "bundles", specID.String()), nil
+}
+
+// backOff computes an exponential backoff duration based on restart attempts, capped at 60s.
+func backOff(restartCount int) time.Duration {
+	maxBackoff := time.Second * 60
+
+	duration := time.Duration(restartCount*2) * time.Second
+
+	if duration > maxBackoff {
+		return maxBackoff
+	}
+
+	return duration
+}
+
+// adoptContainers inspects the state directory on startup and re-attaches running containers.
+func adoptContainers(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID,
+	running map[uuid.UUID]*ContainerAndProcess, workloadsView *journalview.Workloads,
+	stateDir string, exitEvents chan<- ExitEvent,
+) {
+	specs, err := workloadsView.List(ctx)
+	if err != nil {
+		logger.Error("workloads view list", zap.Error(err))
+		return
+	}
+
+	for _, spec := range specs {
+		if spec.Removed || spec.SegmentID != nodeID {
+			continue
+		}
+
+		ctr, err := libcontainer.Load(stateDir, spec.ID.String())
+		if err != nil {
+			logger.Error("libcontainer load", zap.Error(err))
+			continue
+		}
+
+		status, err := ctr.Status()
+		if err != nil || status != libcontainer.Running {
+			continue
+		}
+
+		state, err := ctr.State()
+		if err != nil {
+			logger.Error("container state", zap.Error(err))
+			continue
+		}
+
+		proc := cr.AdoptProcess(state.InitProcessPid)
+		running[spec.ID] = &ContainerAndProcess{
+			Container:     ctr,
+			ProcessHandle: proc,
+			Spec:          spec,
+		}
+		go monitorProcessExit(ctx, spec.ID, proc, exitEvents)
+	}
 }

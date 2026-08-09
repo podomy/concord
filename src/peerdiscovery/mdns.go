@@ -27,7 +27,7 @@ func (m *MDNSResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	default:
 	}
 
-	// Browse the local network for the concord nodes
+	// Browse the local network for the concord nodes.
 	serviceEntries, err := m.mdnsBrowse(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("browsing the local network: %w", err)

@@ -43,7 +43,7 @@ func GetTotalMemoryMB() (uint64, error) {
 				return 0, fmt.Errorf("parse uint: %w", err)
 			}
 
-			// KiB -> MiB
+			// KiB -> MiB.
 			memoryMB := valKiB / 1024
 			return memoryMB, nil
 		}
@@ -83,7 +83,7 @@ func readProcCPU() (float64, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Looking for lines that start with "cpu MHz"
+		// Looking for lines that start with "cpu MHz".
 		if strings.HasPrefix(line, "cpu MHz") {
 			parts := strings.Split(line, ":")
 			if len(parts) < 2 {
@@ -93,7 +93,7 @@ func readProcCPU() (float64, error) {
 			mhzVal := strings.TrimSpace(parts[1])
 			mhz, err := strconv.ParseFloat(mhzVal, 64)
 			if err != nil {
-				// skip malformed lines
+				// skip malformed lines.
 				continue
 			}
 

@@ -28,7 +28,7 @@ var (
 // It has to be idempotent (create-if-not exists).
 // 2. One veth pair per container. Created on container start, destroyed on stopping.
 // Bridge attachment though needs a manual cleanup.
-// 3. IP assignment is deterministic per workload. A container gets the same
+// 3. IP assignment is deterministic per workload. A container gets the same.
 // 10.0.0.x IP every time from the bridge's subnet. Rely on the veth's host-side
 // MAC as a persistent identifier since workloads persist by identity.
 // 4. Port mapping is a one shot add/remove. A DNAT rule in iptables for each
@@ -98,7 +98,7 @@ func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (
 	// Search for the interface first, if it exists do not add it.
 	linkDevice, errLinkByName := netlink.LinkByName(bridge.Name)
 	if errLinkByName != nil {
-		// Add the interface to the system
+		// Add the interface to the system.
 		errLinkAdd := netlink.LinkAdd(bridge)
 		if errLinkAdd != nil {
 			return nil, fmt.Errorf("netlink link add: %w", errLinkAdd)

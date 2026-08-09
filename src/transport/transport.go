@@ -28,7 +28,7 @@ func InitTransport(caFile, certFile, keyFile string) (*http.Server, error) {
 
 	srv := &http.Server{
 		Addr: ":" + Port,
-		// middleware
+		// middleware.
 		Handler:           chain(mux, requireHTTP2),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

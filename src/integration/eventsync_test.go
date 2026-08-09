@@ -50,7 +50,7 @@ func TestTwoNodeEventSync(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	t.Setenv("XDG_CONFIG_HOME", dirA)
 
-	// Node A
+	// Node A.
 	ctxA, cancelA := context.WithCancel(t.Context())
 	t.Cleanup(cancelA)
 
@@ -72,7 +72,7 @@ func TestTwoNodeEventSync(t *testing.T) {
 		t.Fatalf("A record started: %v", err)
 	}
 
-	// Node B
+	// Node B.
 	ctxB, cancelB := context.WithCancel(t.Context())
 	t.Cleanup(cancelB)
 
@@ -90,7 +90,7 @@ func TestTwoNodeEventSync(t *testing.T) {
 
 	go peersync.RunPullLoop(ctxB, logger, idB, peerB, clientB, jB, viewsB, eventsByIDB)
 
-	time.Sleep(2 * time.Second) // let memberlist gossip propagate
+	time.Sleep(2 * time.Second) // let memberlist gossip propagate.
 
 	testEvent := journal.NewEvent(idA, "sync.test", json.RawMessage(`{}`))
 	if err := journalview.RecordEvent(ctxA, jA, viewsA, testEvent); err != nil {
@@ -110,7 +110,7 @@ func TestTwoNodeEventSync(t *testing.T) {
 func provisionNodes(t *testing.T, idA, idB uuid.UUID, dirA, dirB string) {
 	t.Helper()
 
-	// Provision CA and node A certs in dirA
+	// Provision CA and node A certs in dirA.
 	t.Setenv("XDG_CONFIG_HOME", dirA)
 	if err := certs.WriteCA(); err != nil {
 		t.Fatalf("write CA: %v", err)
@@ -119,7 +119,7 @@ func provisionNodes(t *testing.T, idA, idB uuid.UUID, dirA, dirB string) {
 		t.Fatalf("ensure node A certs: %v", err)
 	}
 
-	// Copy CA to dirB so node B shares the same CA trust root
+	// Copy CA to dirB so node B shares the same CA trust root.
 	certsDirB := filepath.Join(dirB, "concord", "certs")
 	if err := os.MkdirAll(certsDirB, 0o700); err != nil {
 		t.Fatalf("mkdir certs B: %v", err)
@@ -128,7 +128,7 @@ func provisionNodes(t *testing.T, idA, idB uuid.UUID, dirA, dirB string) {
 	copyFile(t, filepath.Join(certsDirA, "ca.crt"), filepath.Join(certsDirB, "ca.crt"))
 	copyFile(t, filepath.Join(certsDirA, "ca.key"), filepath.Join(certsDirB, "ca.key"))
 
-	// Ensure node B certs using the copied CA
+	// Ensure node B certs using the copied CA.
 	t.Setenv("XDG_CONFIG_HOME", dirB)
 	if _, err := certs.Ensure(idB, netip.Addr{}); err != nil {
 		t.Fatalf("ensure node B certs: %v", err)

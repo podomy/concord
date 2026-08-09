@@ -57,7 +57,7 @@ func TestSetWorkloadCount(t *testing.T) {
 		}
 	}
 
-	// Test nil MemberService does not panic
+	// Test nil MemberService does not panic.
 	var nilService *MemberService
 	nilService.SetWorkloadCount(10)
 }

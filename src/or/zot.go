@@ -112,10 +112,10 @@ func (r *Registry) reloadSyncConfig(nodes []peerdiscovery.Node) {
 	cfg := baseConfig()
 	cfg.Storage.RootDirectory = rootDirPath()
 
-	// Build registry list for sync extension (other nodes' zot instances)
+	// Build registry list for sync extension (other nodes' zot instances).
 	var registryConfigs []synccfg.RegistryConfig
 	for _, node := range nodes {
-		// Skip ourselves
+		// Skip ourselves.
 		if node.ID == r.nodeID {
 			continue
 		}
@@ -134,7 +134,7 @@ func (r *Registry) reloadSyncConfig(nodes []peerdiscovery.Node) {
 		}
 	}
 
-	// Load the new config into the running controller
+	// Load the new config into the running controller.
 	r.controller.LoadNewConfig(cfg)
 }
 
@@ -166,7 +166,7 @@ func (r *Registry) monitorPeers(ctx context.Context, memberService *peerdiscover
 			previousNodes = currentNodes
 		}
 
-		// Wait for the ticker
+		// Wait for the ticker.
 		<-ticker.C
 	}
 }

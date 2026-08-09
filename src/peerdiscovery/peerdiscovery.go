@@ -85,7 +85,7 @@ func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	// resolvers will be stored here.
 	addresses := make(map[netip.AddrPort]struct{}, 0)
 
-	// We fail only if all of the resolvers fail
+	// We fail only if all of the resolvers fail.
 	var errs []error
 	for _, resolver := range m.resolvers {
 		tempAddresses, err := resolver.Resolve(ctx)
@@ -119,13 +119,13 @@ func MDNSAdvertise(ctx context.Context, nodeConfig *node.NodeConfig) (*mdns.Serv
 	}
 
 	service, err := mdns.NewMDNSService(
-		nodeConfig.ID.String(), // unique name - use node ID string
+		nodeConfig.ID.String(), // unique name - use node ID string.
 		DNSService,
-		"", // domain, empty = local
-		"", // hostname, empty = auto
+		"", // domain, empty = local.
+		"", // hostname, empty = auto.
 		int(nodeConfig.MemberlistAddress.Port()),
-		nil, // IPs, nil = all interfaces
-		nil, // TXT records optional
+		nil, // IPs, nil = all interfaces.
+		nil, // TXT records optional.
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mdns service creation: %w", err)

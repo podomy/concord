@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Integration test for the container networking layer. Requires root.
-// Run with: sudo go test ./src/cn/ -v
+// Run with: sudo go test ./src/cn/ -v.
 package cn
 
 import (

@@ -88,7 +88,7 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, req SyncRequest)
 		}
 	}()
 
-	limited := io.LimitReader(httpResp.Body, 1<<20) // 1 MiB
+	limited := io.LimitReader(httpResp.Body, 1<<20) // 1 MiB.
 	if httpResp.StatusCode != http.StatusOK {
 		msg, readErr := io.ReadAll(limited)
 		if readErr != nil {

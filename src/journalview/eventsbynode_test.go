@@ -129,7 +129,7 @@ func TestEventsByNodeList(t *testing.T) {
 	}
 
 	// This is the journal list we expect after doing view.List
-	// it won't contain the event3
+	// it won't contain the event3.
 	expectedJournalEvents := []journal.Event{}
 	expectedJournalEvents = append(expectedJournalEvents, event1)
 	expectedJournalEvents = append(expectedJournalEvents, event2)

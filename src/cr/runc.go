@@ -27,7 +27,7 @@ type ContainerRuntime struct {
 
 // stateDirPath returns the directory libcontainer uses to store container
 // state. It lives under the user config directory at ~/.config/concord/cr/.
-func stateDirPath() (string, error) {
+func StateDirPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("get user config directory: %w", err)
@@ -45,7 +45,7 @@ func stateDirPath() (string, error) {
 // ~/.config/concord/cr/. Multiple containers share this state directory;
 // each is keyed by its unique ID.
 func NewRuntime() (*ContainerRuntime, error) {
-	stateDir, err := stateDirPath()
+	stateDir, err := StateDirPath()
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (r *ContainerRuntime) Start(ctr *libcontainer.Container, proc *libcontainer
 		return nil, fmt.Errorf("libcontainer start: %w", err)
 	}
 
-	// State of the container
+	// State of the container.
 	state, err := ctr.State()
 	if err != nil {
 		return nil, fmt.Errorf("getting container state: %w", err)

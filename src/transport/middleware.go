@@ -20,7 +20,7 @@ func requireHTTP2(next http.Handler) http.Handler {
 }
 
 func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
-	// apply in reverse so chain(h, A, B, C) => A(B(C(h)))
+	// apply in reverse so chain(h, A, B, C) => A(B(C(h))).
 	for _, mw := range slices.Backward(mws) {
 		h = mw(h)
 	}

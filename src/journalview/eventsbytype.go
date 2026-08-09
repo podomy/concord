@@ -52,7 +52,7 @@ func (e *EventsByType) putEvent(b *bolt.Bucket, event journal.Event) error {
 	key = append(key, serializedEventType...)
 	// a separator, while UUID is a fixed 16 byte type,
 	// the string can be arbitrarily large, we need something
-	// to know when it ends
+	// to know when it ends.
 	key = append(key, 0)
 	key = append(key, serializedID...)
 
@@ -165,7 +165,7 @@ func (e *EventsByType) Get(ctx context.Context, eventType string, id uuid.UUID) 
 	key := make([]byte, 0, len(serializedType)+len(serializedID))
 	key = append(key, serializedType...)
 	// separator for the string type, because it can be
-	// arbitrarily large
+	// arbitrarily large.
 	key = append(key, 0)
 	key = append(key, serializedID...)
 
@@ -213,7 +213,7 @@ func (e *EventsByType) List(ctx context.Context, eventType string) ([]journal.Ev
 	prefix := make([]byte, 0, len(serializedType)+1)
 	prefix = append(prefix, serializedType...)
 	// separator for the string type, because it can be
-	// arbitrarily large
+	// arbitrarily large.
 	prefix = append(prefix, 0)
 
 	kv := e.kv.DB()

@@ -215,7 +215,7 @@ func TestReconcilerDestroyContainerAsync(t *testing.T) {
 		t.Errorf("expected SIGTERM signal, got %v", proc.signals)
 	}
 
-	// Send exit notification
+	// Send exit notification.
 	exitedChan <- cr.ExitStatus{Code: 0}
 
 	select {
@@ -257,7 +257,7 @@ func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
 }
 
 func TestReconcilerTickRestartPolicies(t *testing.T) {
-	// Test RestartNever: exited workload should not be restarted
+	// Test RestartNever: exited workload should not be restarted.
 	specNever := workload.Spec{ID: uuid.New(), Restart: workload.RestartNever}
 	entryNever := &ContainerAndProcess{Spec: specNever, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningNever := map[uuid.UUID]*ContainerAndProcess{specNever.ID: entryNever}
@@ -267,7 +267,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 		t.Error("expected RestartNever workload entry to be retained in running map")
 	}
 
-	// Test RestartOnFailure with clean exit (0): should not restart
+	// Test RestartOnFailure with clean exit (0): should not restart.
 	specOnFailClean := workload.Spec{ID: uuid.New(), Restart: workload.RestartOnFailure}
 	entryOnFailClean := &ContainerAndProcess{Spec: specOnFailClean, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningOnFailClean := map[uuid.UUID]*ContainerAndProcess{specOnFailClean.ID: entryOnFailClean}
@@ -277,7 +277,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 		t.Error("expected RestartOnFailure with clean exit to be retained in running map")
 	}
 
-	// Test RestartAlways: exited workload entry should be cleared and restarted
+	// Test RestartAlways: exited workload entry should be cleared and restarted.
 	specAlways := workload.Spec{ID: uuid.New(), Restart: workload.RestartAlways}
 	entryAlways := &ContainerAndProcess{Spec: specAlways, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningAlways := map[uuid.UUID]*ContainerAndProcess{specAlways.ID: entryAlways}

@@ -31,7 +31,7 @@ type SyncResponse struct {
 }
 
 func postSync(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB cap
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB cap.
 
 	var req SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

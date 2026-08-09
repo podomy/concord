@@ -6,13 +6,13 @@ package workload
 import "github.com/google/uuid"
 
 type Spec struct {
-	Image         string // OCI reference, e.g. "docker.io/nginx:latest"
+	Image         string // OCI reference, e.g. "docker.io/nginx:latest".
 	Restart       RestartPolicy
-	Command       []string // entrypoint override
+	Command       []string // entrypoint override.
 	Env           map[string]string
 	Resources     Resources
 	ID            uuid.UUID
-	SegmentID     uuid.UUID // which node must run this
+	SegmentID     uuid.UUID // which node must run this.
 	Removed       bool
 	HostPort      uint16
 	ContainerPort uint16
@@ -20,7 +20,7 @@ type Spec struct {
 	// process shutdown via SIGTERM before falling back to SIGKILL. Defaults to 60 seconds if <= 0.
 	StopTimeoutSeconds int
 	HealthAction       HealthAction
-	HealthPath         string // HTTP path for health check endpoint (defaults to "/health")
+	HealthPath         string // HTTP path for health check endpoint (defaults to "/health").
 }
 
 type HealthAction int
@@ -31,8 +31,8 @@ const (
 )
 
 type Resources struct {
-	CPUShares uint64 // relative weight (default 1024)
-	MemoryMB  int64  // max memory, 0 = unlimited
+	CPUShares uint64 // relative weight (default 1024).
+	MemoryMB  int64  // max memory, 0 = unlimited.
 }
 
 type RestartPolicy string

@@ -114,7 +114,7 @@ func TestBecameAlive(t *testing.T) {
 	}
 }
 
-// syncOne: port, watermark cursor, failure
+// syncOne: port, watermark cursor, failure.
 
 // Gossip memberlist port must not be used for Sync; transport port is.
 func TestSyncOneUsesTransportPortAndWatermark(t *testing.T) {

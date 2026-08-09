@@ -44,7 +44,7 @@ func loadClientTLSConfig(caFile, certFile, keyFile string) (*tls.Config, error) 
 		RootCAs:                pool,
 		Certificates:           []tls.Certificate{cert},
 		InsecureSkipVerify:     true, //nolint:gosec // hostname skipped; VerifyConnection enforces CA
-		SessionTicketsDisabled: true, // avoid resume bypassing custom verify
+		SessionTicketsDisabled: true, // avoid resume bypassing custom verify.
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			return verifyPeerCertAgainstPool(cs.PeerCertificates, pool)
 		},

@@ -19,7 +19,7 @@ func Init() (*zap.Logger, func() error, error) {
 		return nil, nil, fmt.Errorf("initialize logger: %w", err)
 	}
 
-	// a slightly modified function for emptying the log buffer before exiting
+	// a slightly modified function for emptying the log buffer before exiting.
 	syncLogs := func() error {
 		err := logger.Sync()
 		if err == nil {
@@ -28,7 +28,7 @@ func Init() (*zap.Logger, func() error, error) {
 
 		// we suppress an error of "invalid argument"
 		// it just means the output cannot be fsynced
-		// it is noise during normal terminal use
+		// it is noise during normal terminal use.
 		if errors.Is(err, syscall.EINVAL) {
 			return nil
 		}
