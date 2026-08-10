@@ -286,15 +286,6 @@ func syncSingleTunnel(
 		return fmt.Errorf("link set up %s: %w", ifName, err)
 	}
 
-	// Attach the WireGuard link device to the cn0 bridge if present.
-	bridgeLink, bridgeErr := netlink.LinkByName(bridgeName)
-	if bridgeErr == nil {
-		masterErr := netlink.LinkSetMaster(link, bridgeLink)
-		if masterErr != nil {
-			logger.Debug("link set master notice", zap.String("link", ifName), zap.Error(masterErr))
-		}
-	}
-
 	// Configure WireGuard device crypto keys, remote UDP endpoint, keepalives, and kernel routes.
 	return configureWGTunnelDevice(logger, wgClient, ifName, link, privKey, peerPubKey, peer.Address.Addr(), listenPort, peerIdx)
 }
