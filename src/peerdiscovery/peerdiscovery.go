@@ -39,10 +39,12 @@ type Node struct {
 	ID       uuid.UUID
 }
 
+// NodeMetadata carries dynamic metrics and networking capabilities gossiped across the cluster.
 type NodeMetadata struct {
-	CPUMHz    float64 `json:"cpu_mhz"`
-	MemoryMB  uint64  `json:"memory_mb"`
-	Workloads int     `json:"workload_count"`
+	WireGuardPublicKey string  `json:"wireguard_public_key"`
+	CPUMHz             float64 `json:"cpu_mhz"`
+	MemoryMB           uint64  `json:"memory_mb"`
+	Workloads          int     `json:"workload_count"`
 }
 
 // Resolver discovers candidate peer addresses for bootstrapping memberlist

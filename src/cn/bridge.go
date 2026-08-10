@@ -19,7 +19,7 @@ const (
 )
 
 var (
-	nextContainerIP = netip.MustParseAddr("10.0.0.2")
+	nextContainerIP = netip.MustParseAddr("10.0.0.0")
 	ipMu            sync.Mutex
 )
 
@@ -107,6 +107,14 @@ func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (
 	}
 
 	return linkDevice, nil
+}
+
+// SetNodeSubnet configures the base container IP allocation pool for this node
+// using its deterministic cluster-wide subnet index (10.0.<index>.2 onwards).
+func SetNodeSubnet(index int) {
+	ipMu.Lock()
+	nextContainerIP = netip.MustParseAddr(fmt.Sprintf("10.0.%d.2", index))
+	ipMu.Unlock()
 }
 
 // AllocateIP allocates an available IP address and returns that as a string of IP + CIDR.

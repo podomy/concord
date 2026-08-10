@@ -69,9 +69,10 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 	delegate := &nodeMetadataDelegate{}
 	delegate.meta = func() NodeMetadata {
 		return NodeMetadata{
-			CPUMHz:    cpuMHz,
-			MemoryMB:  memoryMB,
-			Workloads: int(delegate.workloads.Load()),
+			WireGuardPublicKey: node.Metadata.WireGuardPublicKey,
+			CPUMHz:             cpuMHz,
+			MemoryMB:           memoryMB,
+			Workloads:          int(delegate.workloads.Load()),
 		}
 	}
 

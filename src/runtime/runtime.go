@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,14 +30,9 @@ import (
 // Run performs application startup, blocks for the process lifetime, and handles graceful shutdown.
 func Run(ctx context.Context, logger *zap.Logger) error {
 	// Load persistent identity for this node, creating one if none exists.
-	nodeConfig, err := node.LoadOrCreateNodeConfig()
+	nodeConfig, err := initNodeConfig()
 	if err != nil {
-		return fmt.Errorf("load node config: %w", err)
-	}
-
-	// The ip address and port.
-	if !nodeConfig.MemberlistAddress.IsValid() {
-		nodeConfig.MemberlistAddress = netip.MustParseAddrPort("0.0.0.0:7946")
+		return err
 	}
 
 	st, err := openStores()
@@ -52,13 +48,20 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Create a startup event and persist it before announcing readiness.
-	if err = journalview.RecordNodeStarted(ctx, logger, st.journal, views, nodeConfig.ID, nodeConfig.MemberlistAddress); err != nil {
+	err = journalview.RecordNodeStarted(ctx, logger, st.journal, views, nodeConfig.ID, nodeConfig.MemberlistAddress)
+	if err != nil {
 		return fmt.Errorf("record node started: %w", err)
+	}
+
+	// Ensure WireGuard key material for overlay mesh.
+	wgKey, err := cn.EnsureWGKeys()
+	if err != nil {
+		return fmt.Errorf("ensure wireguard keys: %w", err)
 	}
 
 	addresses := resolvePeersOrEmpty(ctx, logger)
 
-	peerService, err := startPeerService(logger, nodeConfig, addresses)
+	peerService, err := startPeerService(logger, nodeConfig, addresses, wgKey.Public)
 	if err != nil {
 		return err
 	}
@@ -86,7 +89,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	logger.Info("peer sync pull loop started")
 
 	// Start the workload infrastructure and network.
-	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, workloads, views)
+	ocireg, err := startWorkloadAndNetwork(ctx, nodeConfig.ID, peerService, logger, st, workloads, views, wgKey)
 	if err != nil {
 		return fmt.Errorf("start workload and network: %w", err)
 	}
@@ -96,13 +99,34 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	<-ctx.Done()
 	logger.Info("shutting down", zap.String("node_id", nodeConfig.ID.String()))
 
+	// Clean up wireguard tunnels and network masquerade.
+	teardownNetworking(logger)
+	return nil
+}
+
+func initNodeConfig() (*node.NodeConfig, error) {
+	nodeConfig, err := node.LoadOrCreateNodeConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load node config: %w", err)
+	}
+	// Fallback to the standard memberlist gossip port on all interfaces if no bind address is configured.
+	if !nodeConfig.MemberlistAddress.IsValid() {
+		nodeConfig.MemberlistAddress = netip.MustParseAddrPort("0.0.0.0:7946")
+	}
+	return nodeConfig, nil
+}
+
+func teardownNetworking(logger *zap.Logger) {
+	// Clean up wireguard tunnels.
+	err := cn.TeardownAllTunnels(logger)
+	if err != nil {
+		logger.Warn("teardown wireguard tunnels failed", zap.Error(err))
+	}
 	// Clean up the masquerade.
 	err = cn.TeardownMasquerade()
 	if err != nil {
-		return fmt.Errorf("teardown masquerade: %w", err)
+		logger.Warn("teardown masquerade failed", zap.Error(err))
 	}
-
-	return nil
 }
 
 func setupNetwork(ctx context.Context) error {
@@ -146,16 +170,53 @@ func startWorkloadInfrastructure(ctx context.Context, nodeID uuid.UUID,
 func startWorkloadAndNetwork(ctx context.Context, nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService, logger *zap.Logger,
 	st *stores, workloads *journalview.Workloads, views []journalview.View,
+	wgKey cn.Key,
 ) (*or.Registry, error) {
 	ocireg, err := startWorkloadInfrastructure(ctx, nodeID, peerService, logger, st, workloads, views)
 	if err != nil {
 		return nil, fmt.Errorf("start workload infrastructure: %w", err)
 	}
+
+	// Set node subnet.
+	idx, err := nodeIndex(ctx, nodeID, peerService)
+	if err == nil {
+		cn.SetNodeSubnet(idx)
+	}
+
 	err = setupNetwork(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("setup network: %w", err)
 	}
+
+	// Start WireGuard tunnel manager loop.
+	go cn.RunTunnelManager(ctx, logger, peerService, nodeID, wgKey, cn.DefaultWGPort)
+
 	return ocireg, nil
+}
+
+func nodeIndex(ctx context.Context, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) (int, error) {
+	err := ctx.Err()
+	if err != nil {
+		return 0, fmt.Errorf("context cancelation: %w", err)
+	}
+
+	members, err := peerService.Members()
+	if err != nil {
+		return 0, fmt.Errorf("peerservice members: %w", err)
+	}
+
+	// Sort the members in ascending order.
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].ID.String() < members[j].ID.String()
+	})
+
+	// Find ourselves in the list and then return the index.
+	for i, m := range members {
+		if m.ID == nodeID {
+			return i, nil
+		}
+	}
+	return 0, nil
 }
 
 func resolvePeersOrEmpty(ctx context.Context, logger *zap.Logger) []netip.AddrPort {
@@ -181,7 +242,8 @@ func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.Nod
 		return nil, fmt.Errorf("ensure certs: %w", err)
 	}
 
-	if err = transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key); err != nil {
+	err = transport.Start(ctx, logger, paths.CA, paths.Cert, paths.Key)
+	if err != nil {
 		return nil, fmt.Errorf("http/2 server failed to start: %w", err)
 	}
 
@@ -196,16 +258,19 @@ func startTransport(ctx context.Context, logger *zap.Logger, nodeConfig node.Nod
 }
 
 func closeStores(logger *zap.Logger, st *stores) {
-	if err := st.kv.Close(); err != nil {
+	err := st.kv.Close()
+	if err != nil {
 		logger.Error("close kv store", zap.Error(err))
 	}
-	if err := st.journal.Close(); err != nil {
+	err = st.journal.Close()
+	if err != nil {
 		logger.Error("close journal", zap.Error(err))
 	}
 }
 
 func shutdownPeerService(logger *zap.Logger, ps *peerdiscovery.MemberService) {
-	if err := ps.Shutdown(); err != nil {
+	err := ps.Shutdown()
+	if err != nil {
 		logger.Error("shutdown peer service", zap.Error(err))
 	}
 }
@@ -217,7 +282,8 @@ func setupViews(ctx context.Context, kv *kvstore.KVStore) (*journalview.EventsBy
 	workloads := journalview.NewWorkloads(kv)
 	views := []journalview.View{eventsByID, eventsByNode, eventsByType, workloads}
 
-	if err := journalview.RebuildViews(ctx, views); err != nil {
+	err := journalview.RebuildViews(ctx, views)
+	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("rebuild views: %w", err)
 	}
 
@@ -244,7 +310,8 @@ func startMDNSAdvertise(ctx context.Context, logger *zap.Logger, nodeConfig *nod
 	}
 	logger.Info("mDNS advertise started")
 	return func() {
-		if err := mdnsServer.Shutdown(); err != nil {
+		err := mdnsServer.Shutdown()
+		if err != nil {
 			logger.Error("mdns advertise shutdown", zap.Error(err))
 		}
 	}, nil
@@ -255,16 +322,20 @@ func startOCIRegistry(ctx context.Context, nodeID uuid.UUID, peerService *peerdi
 	if err != nil {
 		return nil, fmt.Errorf("oci registry new: %w", err)
 	}
-	if err := ocireg.Start(ctx, peerService, logger); err != nil {
+	err = ocireg.Start(ctx, peerService, logger)
+	if err != nil {
 		return nil, fmt.Errorf("oci registry start: %w", err)
 	}
 	return ocireg, nil
 }
 
-func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []netip.AddrPort) (*peerdiscovery.MemberService, error) {
+func startPeerService(logger *zap.Logger, nodeConfig *node.NodeConfig, join []netip.AddrPort, wgPublicKey string) (*peerdiscovery.MemberService, error) {
 	localNode := peerdiscovery.Node{
 		ID:      nodeConfig.ID,
 		Address: netip.MustParseAddrPort(nodeConfig.MemberlistAddress.String()),
+		Metadata: peerdiscovery.NodeMetadata{
+			WireGuardPublicKey: wgPublicKey,
+		},
 	}
 	peerService, err := peerdiscovery.Start(logger, localNode, join, nodeConfig.AdvertiseAddress)
 	if err != nil {
