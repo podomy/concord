@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/concord-robot-transparent.png" alt="Concord" width="15%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/concord-robot-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/concord-robot-light.png">
+    <img src="assets/concord-robot-light.png" alt="Concord" width="15%">
+  </picture>
 </p>
 
 <h1 align="center">Concord</h1>
