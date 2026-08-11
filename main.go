@@ -11,8 +11,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/podomy/concord/src/logs"
-	concordruntime "github.com/podomy/concord/src/runtime"
+	"github.com/podomy/concord/internal/logs"
+	concordruntime "github.com/podomy/concord/internal/runtime"
 )
 
 // main initialises the logger, sets up signal-based shutdown, and runs the node runtime.
