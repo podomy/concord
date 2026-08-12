@@ -17,6 +17,7 @@ import (
 	"github.com/podomy/concord/internal/cn"
 	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/dnsserver"
+	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
@@ -94,6 +95,13 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return fmt.Errorf("start workload and network: %w", err)
 	}
 	defer ocireg.Stop()
+
+	// Start local IPC server for CLI and SDK access.
+	ipcServer := ipc.NewServer(nodeConfig.ID, st.journal, views, workloads, peerService, logger)
+	if err := ipcServer.Start(ctx, ""); err != nil {
+		return fmt.Errorf("start local ipc server: %w", err)
+	}
+	defer shutdownIPCServer(ctx, logger, ipcServer)
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
@@ -272,6 +280,15 @@ func shutdownPeerService(logger *zap.Logger, ps *peerdiscovery.MemberService) {
 	err := ps.Shutdown()
 	if err != nil {
 		logger.Error("shutdown peer service", zap.Error(err))
+	}
+}
+
+func shutdownIPCServer(ctx context.Context, logger *zap.Logger, s *ipc.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	err := s.Shutdown(shutdownCtx)
+	if err != nil {
+		logger.Warn("shutdown ipc server", zap.Error(err))
 	}
 }
 

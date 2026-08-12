@@ -12,6 +12,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
+	github.com/podomy/concord/sdk v0.0.0-20260811031802-1529e546027f
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
