@@ -13,6 +13,7 @@ require (
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
 	github.com/podomy/concord/sdk v0.0.0-20260811031802-1529e546027f
+	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
@@ -406,7 +407,6 @@ require (
 	github.com/spdx/tools-golang v0.5.7 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.7.0 // indirect
