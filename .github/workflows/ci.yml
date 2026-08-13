@@ -30,3 +30,48 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+  build:
+    name: Build Binaries
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            output: concord-linux-amd64
+          - os: linux
+            arch: arm64
+            output: concord-linux-arm64
+          - os: linux
+            arch: arm
+            arm_version: "7"
+            output: concord-linux-armv7
+          - os: linux
+            arch: riscv64
+            output: concord-linux-riscv64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          GOARM: ${{ matrix.arm_version }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o "dist/${{ matrix.output }}" .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: dist/${{ matrix.output }}
+          retention-days: 30
