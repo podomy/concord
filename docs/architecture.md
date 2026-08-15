@@ -4,80 +4,111 @@ Concord is a decentralized coordination engine. State is driven by an append-onl
 
 ---
 
-## Data Flow Diagram
+## Data Flow Diagrams
+
+### 1. Workload Submission Flow
 
 ```
-                                CONCORD DATA FLOW
+CLI / Go SDK
+     │
+     │ (1) POST /workload/submit
+     │     (JSON Workload Spec)
+     ▼
+Unix IPC Server
+(~/.config/concord/concord.sock)
+     │
+     │ (2) Record "workload.spec"
+     │     Event
+     ▼
+Append-Only Journal
+(journal.jsonl)
+     │
+     │ (3) Deterministic
+     │     Projection
+     ▼
+bbolt KV Views
+(Workloads, EventsByID, ByNode)
+```
 
-[ 1. Workload Submission Flow ]
+### 2. Local Workload Reconciliation & Execution Flow
 
-    CLI / Go SDK
-         │
-         │ (1) POST /workload/submit (JSON Workload Spec)
-         ▼
-    Unix IPC Server  (~/.config/concord/concord.sock)
-         │
-         │ (2) Record "workload.spec" Event
-         ▼
-    Append-Only Journal (journal.jsonl)
-         │
-         │ (3) Deterministic Projection
-         ▼
-    bbolt KV Views  (Workloads, EventsByID, EventsByNode)
+```
+bbolt KV Views (Desired State)
+     │
+     │ (4) Active Workload Specs
+     ▼
+Reconciler Loop
+     │
+     ├──► (5) Fetch Image
+     │         │
+     │         ▼
+     │    Embedded OCI Registry
+     │    (Zot localhost:8444)
+     │
+     └──► (6) Lifecycle Control
+               │
+               ▼
+          Container Runtime
+          (internal/cr)
+               │
+               ├──► cgroups (CPU/Mem)
+               │
+               ├──► runc (Namespaces)
+               │
+               ├──► Bridge & veth (concord0)
+               │
+               └──► Health Checker (/health)
+```
 
+### 3. Peer Discovery & WireGuard Mesh Flow
 
-[ 2. Local Workload Reconciliation & Execution Flow ]
+```
+Node Discovery
+     │
+     ├──► mDNS (LAN Multicast)
+     │         │
+     ├──► SWIM Gossip (UDP :17946)
+     │         │
+     └──► DNS Server (SRV/A :15353)
+               │
+               ▼
+     Peer Memberlist
+               │
+               │ (7) Exchange WG Keys & IPs
+               ▼
+     WireGuard Mesh (internal/cn)
+     (Flat Encrypted P2P Overlay)
+```
 
-    bbolt KV Views (Desired State)
-         │
-         │ (4) Active Workload Specs
-         ▼
-    Reconciler Loop
-         │
-         ├──► (5) Fetch Image ────────► Embedded OCI Registry (Zot localhost:8444)
-         │
-         └──► (6) Lifecycle Control ──► Container Runtime (internal/cr)
-                                             │
-                                             ├──► cgroups (CPU / Memory limits)
-                                             ├──► runc (Linux namespaces)
-                                             ├──► Bridge & veth (concord0 NAT)
-                                             └──► HTTP Health Checker (/health)
+### 4. Cross-Node State & Image Replication Flow
 
-
-[ 3. Peer Discovery & WireGuard Mesh Flow ]
-
-    Node Discovery
-         │
-         ├──► mDNS (Local LAN Multicast) ────────┐
-         │                                       ▼
-         ├──► SWIM Gossip (UDP port 17946) ─────► Peer Memberlist
-         │                                       ▲        │
-         └──► Embedded DNS Server (SRV/A :15353) ┘        │ (7) Exchange WG Keys & IPs
-                                                          ▼
-                                                  WireGuard Mesh (internal/cn)
-                                                  (Flat Encrypted P2P Overlay)
-
-
-[ 4. Cross-Node State & Image Replication Flow (Over WireGuard Mesh) ]
-
-         Node A (Local)                                            Node B (Remote)
-    ┌──────────────────────┐                                 ┌──────────────────────┐
-    │  Peer Sync Pull Loop │                                 │   Transport Server   │
-    │  (internal/peersync) │◄──── (8) mTLS Pull Events ──────┤ (internal/transport) │
-    └──────────┬───────────┘                                 └──────────┬───────────┘
-               │                                                        │
-               │ (9) Write Missing Events                               │ Reads From
-               ▼                                                        ▼
-         Local Journal                                            Remote Journal
-               │                                                        │
-               ▼                                                        ▼
-         Local Views ──► Reconciler ──► runc                      Remote Views
-               ▲                                                        ▲
-               │                                                        │
-    ┌──────────┴───────────┐                                 ┌──────────┴───────────┐
-    │ Embedded OCI Registry│◄──── (10) P2P Image / Blob Sync ┤ Embedded OCI Registry│
-    │ (internal/or :8444)  │                                 │ (internal/or :8444)  │
-    └──────────────────────┘                                 └──────────────────────┘
+```
+[ Remote Node B ]
+Transport Server & Registry
+       │
+       │ (8) mTLS Pull Events
+       │ (10) P2P Image/Blob Sync
+       │ (Over WireGuard Mesh)
+       ▼
+[ Local Node A ]
+Peer Sync Loop (internal/peersync)
+       │
+       ├──► (9) Missing Events
+       │         │
+       │         ▼
+       │    Local Journal (journal.jsonl)
+       │         │
+       │         ▼
+       │    Local bbolt Views
+       │         │
+       │         ▼
+       │    Reconciler ──► runc
+       │
+       └──► (10) Missing Blobs
+                 │
+                 ▼
+            Embedded OCI Registry
+            (localhost:8444)
 ```
 
 ---
