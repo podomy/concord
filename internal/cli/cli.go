@@ -14,9 +14,9 @@ import (
 func NewRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "concord",
-		Short: "Concord: Autonomous Fleet Orchestrator",
-		Long: `Concord is a lightweight, partition-tolerant container orchestrator designed
-for autonomous fleets, edge devices, and localized clusters.`,
+		Short: "Concord: Coordination layer for partition-tolerant fleets",
+		Long: `Concord is a decentralized coordination layer for distributed systems operating
+under unreliable, intermittent, and partitioned networks.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

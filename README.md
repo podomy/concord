@@ -31,9 +31,11 @@ coordinates the fleet; it does not pilot the machine.
 
 ### Documentation
 
-- [Commit message format](./COMMITS)
-- [Contributor license agreement](./CLA)
-- [Contributing](./CONTRIBUTING)
+- [Overview](./docs/overview.md)
+- [Architecture](./docs/architecture.md)
+- [CLI Reference](./docs/cli.md)
+- [Go SDK Reference](./docs/sdk.md)
+- [Deployment Guide](./docs/deployment.md)
 
 ### Contributing
 
@@ -45,7 +47,9 @@ Discuss your change with the community before opening a PR
 
 You must subscribe to receive responses.
 
-See [CONTRIBUTING](./CONTRIBUTING) for details.
+- [Commit message format](./COMMITS)
+- [Contributor license agreement](./CLA)
+- [Contributing](./CONTRIBUTING)
 
 ### License
 

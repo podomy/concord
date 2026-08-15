@@ -82,7 +82,7 @@ func TestCLIMainHelp(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "partition-tolerant container orchestrator") || !strings.Contains(out, "Available Commands") {
+	if !strings.Contains(out, "coordination layer for distributed systems") || !strings.Contains(out, "Available Commands") {
 		t.Fatalf("expected main usage in stdout, got:\n%s", out)
 	}
 }
