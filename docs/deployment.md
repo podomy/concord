@@ -102,21 +102,3 @@ When a node starts:
 3. Once discovered, nodes establish an encrypted WireGuard mesh and sync journal events over mTLS.
 
 No central master server, control plane, or external database is required.
-
----
-
-## Fleet Trust & Update Propagation Model
-
-* **Symmetric Trust**: Every node in a Concord cluster is equally trusted. There is no master, primary, or central coordinator. Every machine runs the exact same daemon binary and executes the exact same deterministic state rules.
-* **Substation / Relay Updates**: You do not need network access to every node in the field to deploy an update. You simply submit the workload or configuration change to **any single node** (for example, a base station, depot gateway, or mobile relay).
-* **Opportunistic Physical Sync**: When other nodes (e.g. rovers, drones, edge units) move into physical radio range or connect to the local network of that substation, they automatically discover each other. Journal events and container images propagate immediately across the peer mesh, and each node reconciles its containers to the new desired state without manual intervention.
-
----
-
-## Segment Leader Election & Scheduling
-
-Concord does not use complex Raft quorums or voting rounds that freeze during network partitions. Instead:
-
-1. **Per-Segment Deterministic Leader**: In any connected segment or partition of nodes, the leader is elected deterministically as the reachable node with the lowest lexicographical UUID string.
-2. **Autonomous Scheduling**: The elected leader of that segment inspects unassigned workloads and schedules them onto the node in that segment with the fewest active containers.
-3. **Partition Resilience**: If a cluster segments into multiple isolated groups (e.g. a swarm splits into two valleys), each segment automatically elects its own local leader and continues scheduling and running workloads independently. When segments reunite, their journals sync and state converges.

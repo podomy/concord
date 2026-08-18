@@ -50,8 +50,6 @@ concord workload run alpine:latest /bin/sh -c "while true; do echo hello; sleep 
 ### List Workloads
 ```bash
 concord workload list
-# or alias:
-concord workload ls
 ```
 
 **Output:**
@@ -86,8 +84,6 @@ concord workload stop 4b8d7a12
 ### List Cluster Nodes
 ```bash
 concord node list
-# or alias:
-concord node ls
 ```
 
 **Output:**

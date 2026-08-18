@@ -113,35 +113,6 @@ Peer Sync Loop (internal/peersync)
 
 ---
 
-## The Four Data Pipelines
+## Scheduling
 
-### 1. Workload Submission Pipeline
-
-1. The developer CLI or Go SDK connects to `~/.config/concord/concord.sock` and issues an HTTP POST request with the workload specification.
-2. The IPC handler wraps the specification in an immutable `workload.spec` journal event.
-3. The event is appended to `journal.jsonl` and immediately projected into local `bbolt` key-value view tables (`Workloads`, `EventsByID`).
-
-### 2. Reconciliation & Container Execution Pipeline
-
-1. **Segment Leader Scheduling**: In each reachable network segment, the node with the lowest lexicographical UUID acts as the segment leader. The leader assigns unassigned workloads to the peer with the fewest active workloads.
-2. The reconciler continuously reads the desired active workload specs assigned to this node from the `Workloads` view.
-3. It queries the local container runtime (`internal/cr`) for currently running containers.
-4. For missing workloads, it pulls the container image layers from the local embedded **Zot OCI registry** (`localhost:8444`).
-5. It configures Linux cgroups (CPU shares, memory limits), creates network namespaces with `veth` pairs attached to `concord0`, and spawns the container via `runc`.
-6. It runs periodic HTTP health checks against the workload.
-
-### 3. Peer Discovery & Mesh Pipeline
-
-1. Nodes find each other via **mDNS** (local subnet broadcast) and **SWIM gossip** (UDP port `17946`).
-2. The **Embedded DNS Server** (`internal/dnsserver`) answers queries on port `15353`, returning SRV and A records (`<UUID>.concord.local.`) for cross-subnet discovery.
-3. Nodes exchange WireGuard public keys and endpoint addresses during gossip.
-4. The `TunnelManager` automatically provisions peer tunnels, establishing a secure, flat network overlay.
-
-### 4. Distributed Synchronization Pipeline
-
-1. Every node runs a background peer sync loop (`internal/peersync`).
-2. It connects to discovered peers over mutual TLS (mTLS) authenticated by the shared cluster CA.
-3. It asks peers for journal events it does not yet have in its local log.
-4. Missing events are appended to `journal.jsonl` and projected into local views.
-5. If an event contains a new workload or a stop tombstone, the local reconciler automatically converges local containers to match.
-6. The embedded Zot registry monitors active peers and pulls missing container image layers peer-to-peer across the WireGuard network.
+In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the peer with the fewest active workloads. When segments reunite, journals sync and state converges.
