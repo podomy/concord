@@ -29,6 +29,10 @@ Concord is a fleet brain, not a real-time controller. Motor loops, collision
 avoidance, and sensor fusion run at the edge, below Concord's reach. Concord
 coordinates the fleet; it does not pilot the machine.
 
+Concord is developed with [Resonance](https://github.com/podomy/resonance),
+the simulator for Concord. It is the primary way we validate partition,
+reunion, and scheduling.
+
 ### Documentation
 
 - [Overview](./docs/overview.md)
