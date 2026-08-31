@@ -19,10 +19,9 @@
 
 Concord is an AP distributed system, a runtime and coordination layer
 designed for robotic fleets. It gives you highest reliability from
-warehouse aisles to mines, factories, and space. It is a fleet brain,
-not a real-time controller. Motor loops, collision avoidance, and
-sensor fusion run at the edge, below its reach. It coordinates the
-fleet; it does not pilot the machine.
+warehouse aisles to mines, factories, and space. It is a fleet brain
+that coordinates the fleet, not a real-time controller. Motor,
+collision, and sensor loops run at the edge.
 
 Developed with [Resonance](https://github.com/podomy/resonance), the
 simulator for Concord. It is the primary way we validate partition,
