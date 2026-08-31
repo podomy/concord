@@ -17,17 +17,9 @@
   <code>binary size 103 MB</code>&nbsp;&nbsp;&nbsp;<code>startup RSS ~54 MB</code>
 </p>
 
-Concord is a runtime for machine fleets that lose their network and keep
-running. Built for space, sea, remote terrain, and underground. Places where
-clusters segment, operate locally, and reunite later.
-
-Concord is designed for mathematical consistency. Each segment can keep
-operating from local knowledge, and when segments meet again their state
-is reconciled by explicit rules instead of a hidden central truth.
-
-Concord is a fleet brain, not a real-time controller. Motor loops, collision
-avoidance, and sensor fusion run at the edge, below Concord's reach. Concord
-coordinates the fleet; it does not pilot the machine.
+Concord is an AP distributed system, a runtime and coordination layer
+designed for robotic fleets. It gives you highest reliability from
+warehouse aisles to mines, factories, and space.
 
 Concord is developed with [Resonance](https://github.com/podomy/resonance),
 the simulator for Concord. It is the primary way we validate partition,
