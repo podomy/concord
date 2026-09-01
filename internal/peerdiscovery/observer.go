@@ -17,10 +17,12 @@ import (
 	"github.com/podomy/concord/internal/journalview"
 )
 
-// ObservePeers polls the memberlist every 5 seconds, diffs the result against
-// the previous snapshot, and records peer.seen, peer.updated, and peer.lost
-// events. It blocks until the context is cancelled.
-func ObservePeers(
+// ObserveMemberlistPeers is passive. It polls the already-joined memberlist
+// every 5 seconds, diffs against the previous snapshot, and records
+// peer.seen, peer.updated, and peer.lost events. It does not query
+// mDNS or DNS SRV and does not call Join. Active discovery is handled
+// by runDiscoveryLoop in runtime. It blocks until context is cancelled.
+func ObserveMemberlistPeers(
 	ctx context.Context,
 	logger *zap.Logger,
 	localNodeID uuid.UUID,
