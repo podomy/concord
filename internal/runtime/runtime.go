@@ -95,6 +95,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return err
 	}
 	defer shutdownPeerService(logger, peerService)
+
 	// Peerdiscovery is split: ObserveMemberlistPeers is
 	// passive, it only polls the already-joined memberlist
 	// and records peer.seen/updated/lost. runDiscoveryLoop
@@ -361,7 +362,12 @@ func resolvePeersOrEmpty(
 	ctx context.Context,
 	logger *zap.Logger,
 ) []netip.AddrPort {
-	addresses, err := startResolvers(ctx, logger)
+	addresses, err := startResolvers(
+		ctx,
+		logger,
+		// We don't pass in any ip addresses on init.
+		nil,
+	)
 	if err != nil {
 		// Soft-fail: discovery noise must not kill the
 		// node.
@@ -522,6 +528,22 @@ func discoverAndJoin(
 	logger *zap.Logger,
 	peerService *peerdiscovery.MemberService,
 ) {
+	localAddress, err := peerService.LocalAddr()
+	if err != nil {
+		logger.Warn("peer service local addr failed",
+			zap.Error(err))
+		return
+	}
+
+	members, err := peerService.Members()
+	if err != nil {
+		logger.Warn(
+			"peer service members failed",
+			zap.Error(err),
+		)
+		return
+	}
+
 	mdnsResolver := peerdiscovery.MDNSResolver{
 		Timeout: 5 * time.Second,
 	}
@@ -544,6 +566,17 @@ func discoverAndJoin(
 		logger.Debug("peer discovery: no candidates")
 		return
 	}
+
+	addrs = filterJoinCandidates(
+		addrs,
+		localAddress,
+		members,
+	)
+	if len(addrs) == 0 {
+		logger.Debug("peer discovery: no new candidates")
+		return
+	}
+
 	strs := make([]string, 0, len(addrs))
 	for _, a := range addrs {
 		strs = append(strs, a.String())
@@ -570,10 +603,48 @@ func discoverAndJoin(
 	}
 }
 
+// filterJoinCandidates drops addresses we must not Join:
+// this node's advertise address, and every address already
+// in the memberlist (alive, suspect, or failed). Re-joining
+// those retriggers self-peering and unexpected-node pings.
+func filterJoinCandidates(
+	addrs []netip.AddrPort,
+	localAddress netip.AddrPort,
+	members []peerdiscovery.Node,
+) []netip.AddrPort {
+	skip := make(map[netip.AddrPort]bool, len(members)+1)
+	skip[localAddress] = true
+	for _, m := range members {
+		skip[m.Address] = true
+	}
+
+	out := make([]netip.AddrPort, 0, len(addrs))
+	for _, a := range addrs {
+		if skip[a] {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func startResolvers(
 	ctx context.Context,
 	logger *zap.Logger,
+	peerService *peerdiscovery.MemberService,
 ) ([]netip.AddrPort, error) {
+	var localAddress netip.AddrPort
+	if peerService != nil {
+		addr, err := peerService.LocalAddr()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"peer service local addr: %w",
+				err,
+			)
+		}
+		localAddress = addr
+	}
+
 	mdnsResolver := peerdiscovery.MDNSResolver{
 		Timeout: 5 * time.Second,
 	}
@@ -589,6 +660,17 @@ func startResolvers(
 	if err != nil {
 		return nil, fmt.Errorf("resolve: %w", err)
 	}
+
+	i := 0
+	for _, a := range addrs {
+		if localAddress.IsValid() && a == localAddress {
+			continue
+		}
+		addrs[i] = a
+		i++
+	}
+	addrs = addrs[:i]
+
 	strs := make([]string, 0, len(addrs))
 	for _, a := range addrs {
 		strs = append(strs, a.String())
