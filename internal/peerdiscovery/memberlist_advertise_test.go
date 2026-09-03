@@ -31,6 +31,31 @@ func TestResolveAdvertiseConcreteBind(t *testing.T) {
 	}
 }
 
+func TestSkipAdvertiseIface(t *testing.T) {
+	t.Parallel()
+
+	if !skipAdvertiseIface("cn0") {
+		t.Fatal("cn0 must be skipped")
+	}
+	if !skipAdvertiseIface("wg-a1b2c3d4") {
+		t.Fatal("wg-* must be skipped")
+	}
+	if skipAdvertiseIface("eth0") {
+		t.Fatal("eth0 must not be skipped")
+	}
+}
+
+func TestOverlayPrefix(t *testing.T) {
+	t.Parallel()
+
+	if !OverlayPrefix.Contains(netip.MustParseAddr("10.0.0.1")) {
+		t.Fatal("overlay must contain 10.0.0.1")
+	}
+	if OverlayPrefix.Contains(netip.MustParseAddr("192.168.100.1")) {
+		t.Fatal("underlay must be outside overlay")
+	}
+}
+
 func TestResolveAdvertiseUnspecifiedFindsInterface(t *testing.T) {
 	t.Parallel()
 

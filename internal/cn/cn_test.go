@@ -19,7 +19,7 @@ func TestBridgeCreate(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := CreateBridge(ctx)
+	err := CreateBridge(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestVethPairCreateAndDelete(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := CreateBridge(ctx)
+	err := CreateBridge(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

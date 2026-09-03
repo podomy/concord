@@ -216,9 +216,9 @@ func teardownNetworking(logger *zap.Logger) {
 	}
 }
 
-func setupNetwork(ctx context.Context) error {
+func setupNetwork(ctx context.Context, nodeIndex int) error {
 	// Create the network bridge.
-	err := cn.CreateBridge(ctx)
+	err := cn.CreateBridge(ctx, nodeIndex)
 	if err != nil {
 		return fmt.Errorf("create bridge: %w", err)
 	}
@@ -303,13 +303,13 @@ func startWorkloadAndNetwork(
 		)
 	}
 
-	// Set node subnet.
 	idx, err := nodeIndex(ctx, nodeID, peerService)
-	if err == nil {
-		cn.SetNodeSubnet(idx)
+	if err != nil {
+		idx = 0
 	}
+	cn.SetNodeSubnet(idx)
 
-	err = setupNetwork(ctx)
+	err = setupNetwork(ctx, idx)
 	if err != nil {
 		return nil, fmt.Errorf("setup network: %w", err)
 	}
@@ -615,7 +615,7 @@ func logMemberlist(
 // filterJoinCandidates drops addresses we must not Join:
 // this node's advertise address, and every address already
 // in the memberlist (alive, suspect, or failed). Re-joining
-// those retriggers self-peering and unexpected-node pings.
+// those retriggers unexpected-node pings.
 func filterJoinCandidates(
 	addrs []netip.AddrPort,
 	localAddress netip.AddrPort,

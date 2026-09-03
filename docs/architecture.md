@@ -113,6 +113,31 @@ Peer Sync Loop (internal/peersync)
 
 ---
 
+## Underlay vs overlay
+
+Concord uses two disjoint IPv4 spaces.
+
+**Underlay** is the host NIC. Memberlist, mDNS, and the HTTPS
+transport use it. Join targets are underlay addresses. Peers
+dial whatever `ResolveAdvertise` published, never `cn0`.
+
+**Overlay** is `10.0.0.0/16`. Each node has `cn0` at
+`10.0.{index}.1/24` and allocates containers in that `/24`.
+WireGuard carries peer `/24`s between nodes. Memberlist
+must not advertise `cn0`, `wg-*`, or any `10.0.0.0/16`
+address. Joining an overlay IP on a node that also has
+`cn0` is a local TCP connect, not a peer.
+
+Simulators (including Resonance) attach a tun as the
+underlay NIC. That tun must not use `10.0.0.0/16`. Use a
+disjoint prefix such as `192.168.100.0/24`, one address per
+node. Overlay stays `10.0.0.0/16` inside each netns. If the
+tun is `10.0.0.1` / `10.0.0.2`, Concord cannot tell underlay
+from `cn0`, Join hits the local bridge, and membership
+stays at one node.
+
+---
+
 ## Scheduling
 
 In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the peer with the fewest active workloads. When segments reunite, journals sync and state converges.

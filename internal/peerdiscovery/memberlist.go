@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -16,6 +17,11 @@ import (
 
 	nodepackage "github.com/podomy/concord/internal/node"
 )
+
+// OverlayPrefix is the container and WireGuard mesh.
+// Memberlist must not advertise or Join addresses in this
+// range. It must stay disjoint from the underlay NIC.
+var OverlayPrefix = netip.MustParsePrefix("10.0.0.0/16")
 
 // MemberService wraps memberlist membership tracking for Concord peer discovery.
 type MemberService struct {
@@ -144,29 +150,44 @@ func ResolveAdvertise(bind netip.AddrPort, advertise netip.Addr) netip.AddrPort 
 	}
 
 	// Bind is a wildcard (listen everywhere). Peers cannot dial 0.0.0.0, so
-	// take the first non-loopback interface IP and attach the bind port.
+	// take the first non-loopback underlay IP and attach the bind port.
 	return firstRoutableAddrPort(bind.Port())
 }
 
-// firstRoutableAddrPort returns the first non-loopback host address with the
-// given port. Used when bind is 0.0.0.0 so we still publish something peers
-// can reach. Order follows net.InterfaceAddrs (OS-dependent).
+// skipAdvertiseIface reports overlay interfaces. cn0 and wg-*
+// carry 10.0.0.0/16; advertising them makes Join hit the
+// local bridge instead of a peer.
+func skipAdvertiseIface(name string) bool {
+	return name == "cn0" || strings.HasPrefix(name, "wg-")
+}
+
+// firstRoutableAddrPort returns the first underlay host
+// address with the given port. Skips loopback, cn0, wg-*,
+// and 10.0.0.0/16. Used when bind is 0.0.0.0.
 func firstRoutableAddrPort(port uint16) netip.AddrPort {
-	addrs, err := net.InterfaceAddrs()
+	ifaces, err := net.Interfaces()
 	if err != nil {
-		// No interfaces visible; caller gets zero and memberlist may guess.
 		return netip.AddrPort{}
 	}
-	for _, ia := range addrs {
-		addr, ok := addrFromInterface(ia)
-		if !ok {
-			// Skip loopback, link-local, non-IP, or unusable entries.
+	for _, iface := range ifaces {
+		if skipAdvertiseIface(iface.Name) {
 			continue
 		}
-		// First usable address wins; port comes from memberlist bind.
-		return netip.AddrPortFrom(addr, port)
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, ia := range addrs {
+			addr, ok := addrFromInterface(ia)
+			if !ok {
+				continue
+			}
+			if OverlayPrefix.Contains(addr) {
+				continue
+			}
+			return netip.AddrPortFrom(addr, port)
+		}
 	}
-	// Host only has loopback / link-local (or empty); nothing to advertise.
 	return netip.AddrPort{}
 }
 

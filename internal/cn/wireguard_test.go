@@ -77,18 +77,18 @@ func TestWGInterfaceName(t *testing.T) {
 func TestSetNodeSubnetAndAllocateIP(t *testing.T) {
 	SetNodeSubnet(3)
 	ip1 := AllocateIP()
-	if ip1 != "10.0.3.2/16" {
-		t.Fatalf("expected 10.0.3.2/16, got %s", ip1)
+	if ip1 != "10.0.3.2/24" {
+		t.Fatalf("expected 10.0.3.2/24, got %s", ip1)
 	}
 
 	ip2 := AllocateIP()
-	if ip2 != "10.0.3.3/16" {
-		t.Fatalf("expected 10.0.3.3/16, got %s", ip2)
+	if ip2 != "10.0.3.3/24" {
+		t.Fatalf("expected 10.0.3.3/24, got %s", ip2)
 	}
 
 	SetNodeSubnet(0)
 	ip0 := AllocateIP()
-	if ip0 != "10.0.0.2/16" {
-		t.Fatalf("expected 10.0.0.2/16, got %s", ip0)
+	if ip0 != "10.0.0.2/24" {
+		t.Fatalf("expected 10.0.0.2/24, got %s", ip0)
 	}
 }

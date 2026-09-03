@@ -28,24 +28,24 @@ var (
 // It has to be idempotent (create-if-not exists).
 // 2. One veth pair per container. Created on container start, destroyed on stopping.
 // Bridge attachment though needs a manual cleanup.
-// 3. IP assignment is deterministic per workload. A container gets the same.
-// 10.0.0.x IP every time from the bridge's subnet. Rely on the veth's host-side
-// MAC as a persistent identifier since workloads persist by identity.
+// 3. IP assignment is deterministic per workload. A
+// container gets 10.0.{index}.x from this node's /24.
+// Rely on the veth's host-side MAC as a persistent
+// identifier since workloads persist by identity.
 // 4. Port mapping is a one shot add/remove. A DNAT rule in iptables for each
 // HOSTPORT -> CONTAINERIP:CONTAINERPORT. Removed atomically on container stop.
 
-// CreateBridge ensures the cn0 bridge exists, is up, and has the subnet
-// address 10.0.0.1/16 assigned. It is idempotent, safe to call on every
-// startup.
-func CreateBridge(ctx context.Context) error {
+// CreateBridge ensures the cn0 bridge exists, is up, and
+// has 10.0.{nodeIndex}.1/24 assigned. It is idempotent,
+// safe to call on every startup.
+func CreateBridge(ctx context.Context, nodeIndex int) error {
 	err := ctx.Err()
 	if err != nil {
 		return fmt.Errorf("context cancellation: %w", err)
 	}
 
-	// First usable address of the /16 subnet.
-	ip := "10.0.0.1"
-	mask := "/16"
+	ip := fmt.Sprintf("10.0.%d.1", nodeIndex)
+	mask := "/24"
 
 	// Create the bridge.
 	bridge := &netlink.Bridge{
@@ -123,5 +123,5 @@ func AllocateIP() string {
 	ip := nextContainerIP
 	nextContainerIP = nextContainerIP.Next()
 	ipMu.Unlock()
-	return ip.String() + "/16"
+	return ip.String() + "/24"
 }
