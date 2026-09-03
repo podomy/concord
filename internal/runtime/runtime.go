@@ -94,10 +94,6 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer shutdownPeerService(logger, peerService)
 
-	// Perform an initial discovery and joining of peers into
-	// the memberlist.
-	discoverAndJoin(ctx, logger, peerService)
-
 	// Peerdiscovery is split: ObserveMemberlistPeers is
 	// passive, it only polls the already-joined memberlist
 	// and records peer.seen/updated/lost. runDiscoveryLoop
@@ -489,6 +485,7 @@ func runDiscoveryLoop(
 	logger *zap.Logger,
 	peerService *peerdiscovery.MemberService,
 ) {
+	discoverAndJoin(ctx, logger, peerService)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -544,6 +541,7 @@ func discoverAndJoin(
 	}
 	if len(addrs) == 0 {
 		logger.Debug("peer discovery: no candidates")
+		logMemberlist(logger, peerService)
 		return
 	}
 
@@ -554,6 +552,7 @@ func discoverAndJoin(
 	)
 	if len(addrs) == 0 {
 		logger.Debug("peer discovery: no new candidates")
+		logMemberlist(logger, peerService)
 		return
 	}
 
@@ -572,6 +571,7 @@ func discoverAndJoin(
 			zap.Error(err),
 			zap.Strings("candidates", strs),
 		)
+		logMemberlist(logger, peerService)
 		return
 	}
 	if n > 0 {
@@ -581,6 +581,35 @@ func discoverAndJoin(
 			zap.Strings("candidates", strs),
 		)
 	}
+	logMemberlist(logger, peerService)
+}
+
+// logMemberlist writes the current memberlist view: id, address, state.
+func logMemberlist(
+	logger *zap.Logger,
+	peerService *peerdiscovery.MemberService,
+) {
+	nodes, err := peerService.Members()
+	if err != nil {
+		logger.Warn(
+			"peer service members failed",
+			zap.Error(err),
+		)
+		return
+	}
+	strs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		strs = append(
+			strs,
+			node.ID.String()+" "+
+				node.Address.String()+" "+
+				string(node.State),
+		)
+	}
+	logger.Info(
+		"memberlist content",
+		zap.Strings("members", strs),
+	)
 }
 
 // filterJoinCandidates drops addresses we must not Join:
