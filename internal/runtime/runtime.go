@@ -83,18 +83,20 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer stopMDNS()
 
-	addresses := resolvePeersOrEmpty(ctx, logger)
-
 	peerService, err := startPeerService(
 		logger,
 		nodeConfig,
-		addresses,
+		nil,
 		wgKey.Public,
 	)
 	if err != nil {
 		return err
 	}
 	defer shutdownPeerService(logger, peerService)
+
+	// Perform an initial discovery and joining of peers into
+	// the memberlist.
+	discoverAndJoin(ctx, logger, peerService)
 
 	// Peerdiscovery is split: ObserveMemberlistPeers is
 	// passive, it only polls the already-joined memberlist
@@ -358,28 +360,6 @@ func nodeIndex(
 	return 0, nil
 }
 
-func resolvePeersOrEmpty(
-	ctx context.Context,
-	logger *zap.Logger,
-) []netip.AddrPort {
-	addresses, err := startResolvers(
-		ctx,
-		logger,
-		// We don't pass in any ip addresses on init.
-		nil,
-	)
-	if err != nil {
-		// Soft-fail: discovery noise must not kill the
-		// node.
-		logger.Warn(
-			"peer resolve failed; continuing alone",
-			zap.Error(err),
-		)
-		return nil
-	}
-	return addresses
-}
-
 func startTransport(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -626,61 +606,6 @@ func filterJoinCandidates(
 		out = append(out, a)
 	}
 	return out
-}
-
-func startResolvers(
-	ctx context.Context,
-	logger *zap.Logger,
-	peerService *peerdiscovery.MemberService,
-) ([]netip.AddrPort, error) {
-	var localAddress netip.AddrPort
-	if peerService != nil {
-		addr, err := peerService.LocalAddr()
-		if err != nil {
-			return nil, fmt.Errorf(
-				"peer service local addr: %w",
-				err,
-			)
-		}
-		localAddress = addr
-	}
-
-	mdnsResolver := peerdiscovery.MDNSResolver{
-		Timeout: 5 * time.Second,
-	}
-	dnsSrvResolver := peerdiscovery.DNSSRVResolver{
-		Timeout: 5 * time.Second,
-	}
-
-	multiResolver := peerdiscovery.NewMultiResolver(
-		&mdnsResolver,
-		&dnsSrvResolver,
-	)
-	addrs, err := multiResolver.Resolve(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("resolve: %w", err)
-	}
-
-	i := 0
-	for _, a := range addrs {
-		if localAddress.IsValid() && a == localAddress {
-			continue
-		}
-		addrs[i] = a
-		i++
-	}
-	addrs = addrs[:i]
-
-	strs := make([]string, 0, len(addrs))
-	for _, a := range addrs {
-		strs = append(strs, a.String())
-	}
-	logger.Info(
-		"peer resolvers finished",
-		zap.Int("addresses", len(addrs)),
-		zap.Strings("candidates", strs),
-	)
-	return addrs, nil
 }
 
 func startMDNSAdvertise(
