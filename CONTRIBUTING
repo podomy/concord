@@ -1,18 +1,10 @@
                             CONTRIBUTING
 Changes require an RFC (request for comments) before a PR. Post your proposal to
-the development mail list:
-
-    dev@podomy.com
-
-Subscribe by sending an email to lists@podomy.com with Subject:
-subscribe dev@podomy.com
+the engineering team at contact@podomy.com.
 
 This includes new subsystems, protocol changes, and architectural
 decisions. PRs opened without a prior group discussion will be redirected there
 before code review.
-
-Announcements and releases go to announcements@podomy.com. Subscribe
-the same way.
 
 Use GitHub Issues for bugs and actionable tasks. Tag issues with
 good-first-issue if they are suitable for newcomers.
@@ -31,5 +23,5 @@ not a no.
 1. Build        go build .
 2. Test         go test ./...
 3. Pick an issue or go over the code
-4. Send an RFC to dev@podomy.com if the change is not small
+4. Send an RFC to contact@podomy.com if the change is not small
 5. Submit a PR

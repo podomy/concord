@@ -37,13 +37,7 @@ reunion, and scheduling.
 
 ### Contributing
 
-Discuss your change with the community before opening a PR
-
-[dev@podomy.com](mailto:dev@podomy.com)
-
-[Archive of the past messages can be found here.](https://archive.podomy.com)
-
-You must subscribe to receive responses.
+Discuss your change with the engineering team at [contact@podomy.com](mailto:contact@podomy.com) before opening a PR in order not to waste anybody's effort or time.
 
 - [Commit message format](./COMMITS)
 - [Contributor license agreement](./CLA)
