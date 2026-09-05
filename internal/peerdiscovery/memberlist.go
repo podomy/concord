@@ -6,6 +6,7 @@ package peerdiscovery
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"strings"
@@ -23,28 +24,92 @@ import (
 // range. It must stay disjoint from the underlay NIC.
 var OverlayPrefix = netip.MustParsePrefix("10.0.0.0/16")
 
-// MemberService wraps memberlist membership tracking for Concord peer discovery.
+// MemberService wraps memberlist membership tracking for
+// Concord peer discovery.
 type MemberService struct {
 	list     *memberlist.Memberlist
 	delegate *nodeMetadataDelegate
 }
 
-// Start creates a memberlist-backed peer discovery service for node.
+// Adapter for the message levels coming from the memberlist
+// library
+type MemberlistLogWriter struct {
+	logger *zap.Logger
+}
+
+// stripMemberlistToken cuts one [TAG] prefix plus the
+// memberlist: token memberlist prepends to every line.
+func stripMemberlistToken(s, tag string) string {
+	rest := strings.TrimSpace(strings.TrimPrefix(s, tag))
+	return strings.TrimSpace(
+		strings.TrimPrefix(rest, "memberlist:"),
+	)
+}
+
+func (w *MemberlistLogWriter) Write(p []byte) (int, error) {
+	s := strings.TrimSpace(string(p))
+
+	if strings.HasPrefix(s, "[WARN]") {
+		rest := stripMemberlistToken(s, "[WARN]")
+		w.logger.Warn(rest)
+
+		return len(p), nil
+	}
+
+	if strings.HasPrefix(s, "[ERR]") {
+		rest := stripMemberlistToken(s, "[ERR]")
+		w.logger.Error(rest)
+
+		return len(p), nil
+	}
+
+	if strings.HasPrefix(s, "[DEBUG]") {
+		rest := stripMemberlistToken(s, "[DEBUG]")
+		w.logger.Debug(rest)
+
+		return len(p), nil
+	}
+
+	if strings.HasPrefix(s, "[INFO]") {
+		rest := stripMemberlistToken(s, "[INFO]")
+		w.logger.Info(rest)
+
+		return len(p), nil
+	}
+
+	// Fallback to info logger.
+	w.logger.Info(s)
+
+	return len(p), nil
+}
+
+// Start creates a memberlist-backed peer discovery service
+// for node.
 //
-// The node ID is used as memberlist's node name so discovered members can be
-// mapped back to stable Concord identities. The node address is the local bind
-// endpoint for memberlist traffic. Port 0 asks the OS for an ephemeral port;
+// The node ID is used as memberlist's node name so
+// discovered members can be mapped back to stable Concord
+// identities. The node address is the local bind endpoint
+// for memberlist traffic. Port 0 asks the OS for an
+// ephemeral port;
 // use LocalAddr after Start to learn the bound endpoint.
 //
-// advertise is an optional IP hint from config overriding which IP to
-// publish (see ResolveAdvertise). A zero Addr means auto-detect.
+// advertise is an optional IP hint from config overriding
+// which IP to publish (see ResolveAdvertise). A zero Addr
+// means auto-detect.
 //
-// If join is non-empty, Start attempts to join those bootstrap addresses.
-// A failed join does not abort startup: the node keeps running as a solo
-// member (membership = this node only). Discovery may have returned a
-// non-Concord host; soft-fail avoids taking the whole process down. Callers
+// If join is non-empty, Start attempts to join those
+// bootstrap addresses. A failed join does not abort
+// startup: the node keeps running as a solo member
+// (membership = this node only). Discovery may have
+// returned a non-Concord host; soft-fail avoids taking the
+// whole process down. Callers
 // can retry Join later.
-func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip.Addr) (*MemberService, error) {
+func Start(
+	logger *zap.Logger,
+	node Node,
+	join []netip.AddrPort,
+	advertise netip.Addr,
+) (*MemberService, error) {
 	config := memberlist.DefaultLocalConfig()
 	config.Name = node.ID.String()
 	config.BindAddr = node.Address.Addr().String()
@@ -57,9 +122,14 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 			config.AdvertisePort = int(resolved.Port())
 		}
 	}
-	// Route memberlist's stdlib logger through zap (JSON with the rest of the app).
+	// Route memberlist's stdlib logger through zap (JSON
+	// with the rest of the app).
 	if logger != nil {
-		config.Logger = zap.NewStdLog(logger.Named("memberlist"))
+		config.Logger = log.New(
+			&MemberlistLogWriter{
+				logger: logger.Named("memberlist"),
+			}, "", 0,
+		)
 	}
 
 	cpuMHz, err := nodepackage.GetCPUFreqMHz()
@@ -69,7 +139,10 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 
 	memoryMB, err := nodepackage.GetTotalMemoryMB()
 	if err != nil {
-		return nil, fmt.Errorf("get total memory mb: %w", err)
+		return nil, fmt.Errorf(
+			"get total memory mb: %w",
+			err,
+		)
 	}
 
 	delegate := &nodeMetadataDelegate{}
@@ -78,7 +151,9 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 			WireGuardPublicKey: node.Metadata.WireGuardPublicKey,
 			CPUMHz:             cpuMHz,
 			MemoryMB:           memoryMB,
-			Workloads:          int(delegate.workloads.Load()),
+			Workloads: int(
+				delegate.workloads.Load(),
+			),
 		}
 	}
 
@@ -86,16 +161,22 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 
 	list, err := memberlist.Create(config)
 	if err != nil {
-		return nil, fmt.Errorf("memberlist bind %s: %w", node.Address, err)
+		return nil, fmt.Errorf(
+			"memberlist bind %s: %w",
+			node.Address,
+			err,
+		)
 	}
 
-	// Soft-fail join: bad discovery candidates must not kill Concord.
-	// The local memberlist stays up; membership is just this node until a
+	// Soft-fail join: bad discovery candidates must not
+	// kill Concord. The local memberlist stays up;
+	// membership is just this node until a
 	// later successful Join or inbound gossip.
 	if len(join) > 0 {
 		if _, err := list.Join(addrPortsToStrings(join)); err != nil {
 			if logger != nil {
-				logger.Warn("memberlist join failed; continuing alone",
+				logger.Warn(
+					"memberlist join failed; continuing alone",
 					zap.Error(err),
 					zap.Int("candidates", len(join)),
 				)
@@ -111,50 +192,65 @@ func Start(logger *zap.Logger, node Node, join []netip.AddrPort, advertise netip
 	return &memberService, nil
 }
 
-// SetWorkloadCount updates the count of active local workloads reported in node gossip metadata.
+// SetWorkloadCount updates the count of active local
+// workloads reported in node gossip metadata.
 func (m *MemberService) SetWorkloadCount(n int) {
 	if m == nil || m.delegate == nil {
 		return
 	}
-	// #nosec G115 -- workload count n fits safely within int32 range
+	// #nosec G115 -- workload count n fits safely within
+	// int32 range
 	m.delegate.workloads.Store(int32(n))
 }
 
-// ResolveAdvertise picks the address other peers should dial when contacting
-// this node. Callers pass the memberlist bind address and an optional config
+// ResolveAdvertise picks the address other peers should
+// dial when contacting this node. Callers pass the
+// memberlist bind address and an optional config
 // override.
 //
-// advertise is the operator-supplied IP hint (AdvertiseAddress from config).
-// Empty (zero Addr) means the runtime picks one from the bind address or a
-// non-loopback interface. The port always comes from bind regardless.
+// advertise is the operator-supplied IP hint
+// (AdvertiseAddress from config). Empty (zero Addr) means
+// the runtime picks one from the bind address or a
+// non-loopback interface. The port always comes from bind
+// regardless.
 //
 // Resolution order:
-//  1. Advertise hint if set (IP from config, port from bind).
-//  2. The bind address if it is already a real IP peers can dial.
-//  3. Otherwise the first usable host interface IP, with the bind port.
+// 1. Advertise hint if set (IP from config, port from
+// bind). 2. The bind address if it is already a real IP
+// peers can dial. 3. Otherwise the first usable host
+// interface IP, with the bind port.
 //
-// Returns the zero AddrPort only if no usable address exists; memberlist will
+// Returns the zero AddrPort only if no usable address
+// exists; memberlist will
 // then choose an interface on its own.
-func ResolveAdvertise(bind netip.AddrPort, advertise netip.Addr) netip.AddrPort {
-	// Operator override: which IP to publish. Port always matches bind so
+func ResolveAdvertise(
+	bind netip.AddrPort,
+	advertise netip.Addr,
+) netip.AddrPort {
+	// Operator override: which IP to publish. Port always
+	// matches bind so
 	// peers dial the same port memberlist is listening on.
 	if advertise.IsValid() {
 		return netip.AddrPortFrom(advertise, bind.Port())
 	}
 
-	// Bind is already a specific IP (not 0.0.0.0 / ::). Peers can dial that
-	// same address, so advertise it as-is. IsUnspecified() is true only for
-	// the wildcard addresses that mean "listen on every interface".
-	if bind.Addr().IsValid() && !bind.Addr().IsUnspecified() {
+	// Bind is already a specific IP (not 0.0.0.0 / ::).
+	// Peers can dial that same address, so advertise it
+	// as-is. IsUnspecified() is true only for the wildcard
+	// addresses that mean "listen on every interface".
+	if bind.Addr().IsValid() &&
+		!bind.Addr().IsUnspecified() {
 		return bind
 	}
 
-	// Bind is a wildcard (listen everywhere). Peers cannot dial 0.0.0.0, so
-	// take the first non-loopback underlay IP and attach the bind port.
+	// Bind is a wildcard (listen everywhere). Peers cannot
+	// dial 0.0.0.0, so take the first non-loopback underlay
+	// IP and attach the bind port.
 	return firstRoutableAddrPort(bind.Port())
 }
 
-// skipAdvertiseIface reports overlay interfaces. cn0 and wg-*
+// skipAdvertiseIface reports overlay interfaces. cn0 and
+// wg-*
 // carry 10.0.0.0/16; advertising them makes Join hit the
 // local bridge instead of a peer.
 func skipAdvertiseIface(name string) bool {
@@ -191,20 +287,24 @@ func firstRoutableAddrPort(port uint16) netip.AddrPort {
 	return netip.AddrPort{}
 }
 
-// addrFromInterface converts a net.Addr from net.InterfaceAddrs into a
-// dialable netip.Addr. Returns false for anything peers should not use:
-// non-IP nets, nil IPs, loopback, link-local, or unspecified addresses.
+// addrFromInterface converts a net.Addr from
+// net.InterfaceAddrs into a dialable netip.Addr. Returns
+// false for anything peers should not use: non-IP nets, nil
+// IPs, loopback, link-local, or unspecified addresses.
 func addrFromInterface(ia net.Addr) (netip.Addr, bool) {
-	// InterfaceAddrs yields *net.IPNet for IP configurations.
+	// InterfaceAddrs yields *net.IPNet for IP
+	// configurations.
 	ipNet, ok := ia.(*net.IPNet)
 	if !ok || ipNet.IP == nil {
 		return netip.Addr{}, false
 	}
 
 	ip := ipNet.IP
-	// Filter before conversion: loopback (127.0.0.1), link-local (169.254.x /
-	// fe80::), and unspecified (0.0.0.0) are not useful cluster endpoints.
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+	// Filter before conversion: loopback (127.0.0.1),
+	// link-local (169.254.x / fe80::), and unspecified
+	// (0.0.0.0) are not useful cluster endpoints.
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsUnspecified() {
 		return netip.Addr{}, false
 	}
 
@@ -213,33 +313,46 @@ func addrFromInterface(ia net.Addr) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 
-	// Unmap turns IPv4-mapped IPv6 (::ffff:a.b.c.d) into plain IPv4 so peers
+	// Unmap turns IPv4-mapped IPv6 (::ffff:a.b.c.d) into
+	// plain IPv4 so peers
 	// see a normal address form.
 	addr = addr.Unmap()
-	// Re-check after Unmap in case mapping produced a still-unusable address.
-	if !addr.IsValid() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+	// Re-check after Unmap in case mapping produced a
+	// still-unusable address.
+	if !addr.IsValid() || addr.IsLoopback() ||
+		addr.IsLinkLocalUnicast() {
 		return netip.Addr{}, false
 	}
 	return addr, true
 }
 
-// LocalAddr returns the address memberlist is advertising for this node.
+// LocalAddr returns the address memberlist is advertising
+// for this node.
 func (m *MemberService) LocalAddr() (netip.AddrPort, error) {
 	n := m.list.LocalNode()
 	addr, ok := netip.AddrFromSlice(n.Addr)
 	if !ok {
-		return netip.AddrPort{}, fmt.Errorf("invalid local member address: %v", n.Addr)
+		return netip.AddrPort{}, fmt.Errorf(
+			"invalid local member address: %v",
+			n.Addr,
+		)
 	}
 	return netip.AddrPortFrom(addr.Unmap(), n.Port), nil
 }
 
-// Join asks the running memberlist service to join existing peer addresses.
+// Join asks the running memberlist service to join existing
+// peer addresses.
 //
-// The addresses are bootstrap endpoints, not durable peer identities. After a
-// successful join, memberlist exchanges membership state and Members can return
+// The addresses are bootstrap endpoints, not durable peer
+// identities. After a successful join, memberlist exchanges
+// membership state and Members can return
 // the reachable nodes known to the local process.
-func (m *MemberService) Join(existingMembers []netip.AddrPort) (int, error) {
-	n, err := m.list.Join(addrPortsToStrings(existingMembers))
+func (m *MemberService) Join(
+	existingMembers []netip.AddrPort,
+) (int, error) {
+	n, err := m.list.Join(
+		addrPortsToStrings(existingMembers),
+	)
 	if err != nil {
 		return 0, fmt.Errorf("list join: %w", err)
 	}
@@ -247,11 +360,14 @@ func (m *MemberService) Join(existingMembers []netip.AddrPort) (int, error) {
 	return n, nil
 }
 
-// Members returns the current memberlist view as Concord peer discovery nodes.
+// Members returns the current memberlist view as Concord
+// peer discovery nodes.
 //
-// Memberlist stores each member's identity in Node.Name. Concord writes UUIDs
-// into that field when starting memberlist, so this method parses the name back
-// into a uuid.UUID and pairs it with the member's advertised address.
+// Memberlist stores each member's identity in Node.Name.
+// Concord writes UUIDs into that field when starting
+// memberlist, so this method parses the name back into a
+// uuid.UUID and pairs it with the member's advertised
+// address.
 func (m *MemberService) Members() ([]Node, error) {
 	members := m.list.Members()
 
@@ -260,18 +376,27 @@ func (m *MemberService) Members() ([]Node, error) {
 	for _, member := range members {
 		id, err := uuid.Parse(member.Name)
 		if err != nil {
-			return nil, fmt.Errorf("parse member id: %w", err)
+			return nil, fmt.Errorf(
+				"parse member id: %w",
+				err,
+			)
 		}
 
 		addr, ok := netip.AddrFromSlice(member.Addr)
 		if !ok {
-			return nil, fmt.Errorf("invalid member address: %v", member.Addr)
+			return nil, fmt.Errorf(
+				"invalid member address: %v",
+				member.Addr,
+			)
 		}
 
 		var meta NodeMetadata
 		if len(member.Meta) > 0 {
 			if err := json.Unmarshal(member.Meta, &meta); err != nil {
-				return nil, fmt.Errorf("unmarshal member metadata: %w", err)
+				return nil, fmt.Errorf(
+					"unmarshal member metadata: %w",
+					err,
+				)
 			}
 		}
 
@@ -286,7 +411,8 @@ func (m *MemberService) Members() ([]Node, error) {
 	return out, nil
 }
 
-// Shutdown stops the memberlist service and releases its network resources.
+// Shutdown stops the memberlist service and releases its
+// network resources.
 func (m *MemberService) Shutdown() error {
 	err := m.list.Shutdown()
 	if err != nil {
@@ -296,9 +422,12 @@ func (m *MemberService) Shutdown() error {
 	return nil
 }
 
-// addrPortsToStrings converts strongly typed endpoints into the string format
+// addrPortsToStrings converts strongly typed endpoints into
+// the string format
 // expected by memberlist.Join.
-func addrPortsToStrings(addresses []netip.AddrPort) []string {
+func addrPortsToStrings(
+	addresses []netip.AddrPort,
+) []string {
 	out := make([]string, 0, len(addresses))
 	for _, address := range addresses {
 		out = append(out, address.String())
@@ -307,7 +436,8 @@ func addrPortsToStrings(addresses []netip.AddrPort) []string {
 	return out
 }
 
-// memberState maps memberlist's liveness states into Concord peer discovery states.
+// memberState maps memberlist's liveness states into
+// Concord peer discovery states.
 func memberState(state memberlist.NodeStateType) NodeState {
 	switch state {
 	case memberlist.StateAlive:
@@ -323,15 +453,17 @@ func memberState(state memberlist.NodeStateType) NodeState {
 	}
 }
 
-// nodeMetadataDelegate implements memberlist.Delegate to serialize and gossip
-// local node metadata (CPU, Memory, and active container workload counts)
+// nodeMetadataDelegate implements memberlist.Delegate to
+// serialize and gossip local node metadata (CPU, Memory,
+// and active container workload counts)
 // across cluster peers.
 type nodeMetadataDelegate struct {
 	meta      func() NodeMetadata
 	workloads atomic.Int32
 }
 
-// NodeMeta produces JSON-serialized metadata for this node to be included
+// NodeMeta produces JSON-serialized metadata for this node
+// to be included
 // in memberlist ping and gossip packets.
 func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	bytes, err := json.Marshal(d.meta())
@@ -341,14 +473,31 @@ func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	return bytes
 }
 
-// NotifyMsg receives user-data messages from cluster peers (unused by Concord).
+// NotifyMsg receives user-data messages from cluster peers
+// (unused by Concord).
 func (d *nodeMetadataDelegate) NotifyMsg([]byte) {}
 
-// GetBroadcasts returns user broadcast messages to piggyback on gossip rounds (unused by Concord).
-func (d *nodeMetadataDelegate) GetBroadcasts(int, int) [][]byte { return nil }
+// GetBroadcasts returns user broadcast messages to
+// piggyback on gossip rounds (unused by Concord).
+func (d *nodeMetadataDelegate) GetBroadcasts(
+	int,
+	int,
+) [][]byte {
+	return nil
+}
 
-// LocalState returns arbitrary local state for full push/pull state sync (unused by Concord).
-func (d *nodeMetadataDelegate) LocalState(bool) []byte { return nil }
+// LocalState returns arbitrary local state for full
+// push/pull state sync (unused by Concord).
+func (d *nodeMetadataDelegate) LocalState(
+	bool,
+) []byte {
+	return nil
+}
 
-// MergeRemoteState processes full push/pull state sync received from peers (unused by Concord).
-func (d *nodeMetadataDelegate) MergeRemoteState([]byte, bool) {}
+// MergeRemoteState processes full push/pull state sync
+// received from peers (unused by Concord).
+func (d *nodeMetadataDelegate) MergeRemoteState(
+	[]byte,
+	bool,
+) {
+}
