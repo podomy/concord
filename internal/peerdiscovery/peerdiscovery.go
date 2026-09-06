@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 
 	"github.com/google/uuid"
@@ -15,7 +16,8 @@ import (
 	"github.com/podomy/concord/internal/node"
 )
 
-// NodeState describes memberlist's current liveness observation for a node.
+// NodeState describes memberlist's current liveness
+// observation for a node.
 type NodeState string
 
 const (
@@ -26,11 +28,13 @@ const (
 	NodeStateUnknown NodeState = "unknown"
 )
 
-// Node identifies a Concord node as it appears in peer discovery.
+// Node identifies a Concord node as it appears in peer
+// discovery.
 //
-// ID is the stable Concord node identity. Address is the current network
-// endpoint used by memberlist for peer membership traffic. The address can
-// change over time; the ID is the durable identity. State is memberlist's
+// ID is the stable Concord node identity. Address is the
+// current network endpoint used by memberlist for peer
+// membership traffic. The address can change over time; the
+// ID is the durable identity. State is memberlist's
 // current liveness observation for the node.
 type Node struct {
 	State    NodeState
@@ -39,7 +43,8 @@ type Node struct {
 	ID       uuid.UUID
 }
 
-// NodeMetadata carries dynamic metrics and networking capabilities gossiped across the cluster.
+// NodeMetadata carries dynamic metrics and networking
+// capabilities gossiped across the cluster.
 type NodeMetadata struct {
 	WireGuardPublicKey string  `json:"wireguard_public_key"`
 	CPUMHz             float64 `json:"cpu_mhz"`
@@ -47,39 +52,54 @@ type NodeMetadata struct {
 	Workloads          int     `json:"workload_count"`
 }
 
-// Resolver discovers candidate peer addresses for bootstrapping memberlist
-// membership. Different implementations cover different discovery mechanisms
-// such as LAN broadcast, DNS SRV records, or a rendezvous point.
+// Resolver discovers candidate peer addresses for
+// bootstrapping memberlist membership. Different
+// implementations cover different discovery mechanisms such
+// as LAN broadcast, DNS SRV records, or a rendezvous point.
 //
-// Resolve must be safe for concurrent calls from multiple goroutines.
+// Resolve must be safe for concurrent calls from multiple
+// goroutines.
 type Resolver interface {
 	Resolve(ctx context.Context) ([]netip.AddrPort, error)
 }
 
-// ResolverFunc is an adapter that turns a plain function into a Resolver.
+// ResolverFunc is an adapter that turns a plain function
+// into a Resolver.
 type ResolverFunc func(ctx context.Context) ([]netip.AddrPort, error)
 
 // Resolve calls the underlying function.
-func (f ResolverFunc) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
+func (f ResolverFunc) Resolve(
+	ctx context.Context,
+) ([]netip.AddrPort, error) {
 	return f(ctx)
 }
 
-// MultiResolver merges candidates from multiple resolvers. Each resolver is
-// called and results are deduplicated by their string representation.
+// MultiResolver merges candidates from multiple resolvers.
+// Each resolver is called and results are deduplicated by
+// their string representation.
 type MultiResolver struct {
 	resolvers []Resolver
 }
 
-// NewMultiResolver returns a resolver that queries all provided resolvers.
-func NewMultiResolver(resolvers ...Resolver) *MultiResolver {
+// NewMultiResolver returns a resolver that queries all
+// provided resolvers.
+func NewMultiResolver(
+	resolvers ...Resolver,
+) *MultiResolver {
 	return &MultiResolver{resolvers: resolvers}
 }
 
-// Resolve calls every configured resolver and deduplicates the results.
-func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
+// Resolve calls every configured resolver and deduplicates
+// the results.
+func (m *MultiResolver) Resolve(
+	ctx context.Context,
+) ([]netip.AddrPort, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("context cancellation: %w", ctx.Err())
+		return nil, fmt.Errorf(
+			"context cancellation: %w",
+			ctx.Err(),
+		)
 	default:
 	}
 
@@ -104,7 +124,10 @@ func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 
 	if len(addresses) == 0 && len(errs) > 0 {
 		combinedError := errors.Join(errs...)
-		return nil, fmt.Errorf("all resolvers failed: %w", combinedError)
+		return nil, fmt.Errorf(
+			"all resolvers failed: %w",
+			combinedError,
+		)
 	}
 
 	result := make([]netip.AddrPort, 0, len(addresses))
@@ -115,41 +138,75 @@ func (m *MultiResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	return result, nil
 }
 
-func MDNSAdvertise(ctx context.Context, nodeConfig *node.NodeConfig) (*mdns.Server, error) {
+// MDNSAdvertise publishes this node on the local network
+// under DNSService. It advertises only the resolved
+// underlay address, the same one memberlist publishes, so
+// peers never learn overlay endpoints such as cn0 or
+// docker0. Advertising all interfaces leaks those
+// addresses into peer candidate pools, and joining them
+// dials the local bridge instead of a peer. A nil IP list
+// falls back to all interfaces and is used only when no
+// usable address resolves.
+func MDNSAdvertise(
+	ctx context.Context,
+	nodeConfig *node.NodeConfig,
+) (*mdns.Server, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("context cancellation: %w", err)
+		return nil, fmt.Errorf(
+			"context cancellation: %w",
+			err,
+		)
 	}
 
+	resolved := ResolveAdvertise(
+		nodeConfig.MemberlistAddress,
+		nodeConfig.AdvertiseAddress,
+	)
+	var ips []net.IP
+	if resolved.IsValid() {
+		ips = []net.IP{net.IP(resolved.Addr().AsSlice())}
+	}
 	service, err := mdns.NewMDNSService(
 		nodeConfig.ID.String(), // unique name - use node ID string.
 		DNSService,
 		"", // domain, empty = local.
 		"", // hostname, empty = auto.
 		int(nodeConfig.MemberlistAddress.Port()),
-		nil, // IPs, nil = all interfaces.
+		ips, // nil when unresolvable: advertise all interfaces.
 		nil, // TXT records optional.
 	)
 	if err != nil {
-		return nil, fmt.Errorf("mdns service creation: %w", err)
+		return nil, fmt.Errorf(
+			"mdns service creation: %w",
+			err,
+		)
 	}
 
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	server, err := mdns.NewServer(
+		&mdns.Config{Zone: service},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("mdns server creation: %w", err)
+		return nil, fmt.Errorf(
+			"mdns server creation: %w",
+			err,
+		)
 	}
 
 	return server, nil
 }
 
-// Service identifiers for Concord peer discovery. The format follows RFC 6763.
+// Service identifiers for Concord peer discovery. The
+// format follows RFC 6763.
 //
-// * MDNSService (_concord._udp) is used for mDNS / LAN discovery.
-// Nodes on the same local network advertise themselves via multicast.
+// * MDNSService (_concord._udp) is used for mDNS / LAN
+// discovery. Nodes on the same local network advertise
+// themselves via multicast.
 // Other nodes discover them by browsing for this service.
 //
-// * DNSService (_concord._udp) is also used for DNS SRV record discovery.
-// Nodes query each other's embedded DNS servers to discover the full
-// memberlist, extending reach beyond the local network segment.
+// * DNSService (_concord._udp) is also used for DNS SRV
+// record discovery. Nodes query each other's embedded DNS
+// servers to discover the full memberlist, extending reach
+// beyond the local network segment.
 var (
 	DNSService = "_concord._udp"
 	DNSPort    = "8053"
