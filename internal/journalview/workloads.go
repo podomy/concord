@@ -22,7 +22,9 @@ import (
 // Invariants.
 // 1. Only workload.spec events affect this view.
 // 2. There is one stored spec per workload.Spec.ID.
-// 3. Applying a newer spec replaces the previous spec.
+// 3. A stored tombstone (Removed=true) is never replaced
+// by a live spec. A stop wins over any spec copy,
+// regardless of arrival order.
 // 4. Removed=true remains stored as a tombstone.
 // 5. Rebuild replays the journal in order and produces the same final state.
 // 6. Malformed workload.spec payloads return an error.
@@ -61,6 +63,22 @@ func (e *Workloads) putEvent(b *bolt.Bucket, event journal.Event) error {
 
 	key := make([]byte, 0, len(serializedSpecID))
 	key = append(key, serializedSpecID...)
+
+	// Skip the write when a tombstone is already stored
+	// for this ID. A stop wins over any later spec copy.
+	var storedSpec workload.Spec
+	stored := b.Get(key)
+	// Get returns nil if nothing is stored.
+	if stored != nil {
+		err = json.Unmarshal(stored, &storedSpec)
+		if err != nil {
+			return fmt.Errorf("unmarshal: %w", err)
+		}
+
+		if storedSpec.Removed && !spec.Removed {
+			return nil
+		}
+	}
 
 	err = b.Put(key, serializedSpec)
 	if err != nil {
