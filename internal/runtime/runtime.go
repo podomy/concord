@@ -613,9 +613,9 @@ func logMemberlist(
 }
 
 // filterJoinCandidates drops addresses we must not Join:
-// this node's advertise address, and every address already
-// in the memberlist (alive, suspect, or failed). Re-joining
-// those retriggers unexpected-node pings.
+// this node's advertise address, and addresses already in
+// the memberlist as alive or suspect. Failed, dead, or left
+// members stay joinable so reunion can happen.
 func filterJoinCandidates(
 	addrs []netip.AddrPort,
 	localAddress netip.AddrPort,
@@ -623,8 +623,16 @@ func filterJoinCandidates(
 ) []netip.AddrPort {
 	skip := make(map[netip.AddrPort]bool, len(members)+1)
 	skip[localAddress] = true
+
+	// We must not skip members of the list unless,
+	// the node is alive or the node is suspect.
+	// If we skip all of them regardless of status,
+	// reconnection doesn't happen when a node dies.
 	for _, m := range members {
-		skip[m.Address] = true
+		if m.State == peerdiscovery.NodeStateAlive ||
+			m.State == peerdiscovery.NodeStateSuspect {
+			skip[m.Address] = true
+		}
 	}
 
 	out := make([]netip.AddrPort, 0, len(addrs))
