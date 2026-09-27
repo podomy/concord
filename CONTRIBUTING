@@ -19,7 +19,7 @@ If maintainers cannot meet the window, they will say so. Silence is
 not a no.
 
                           Getting Started
-Prerequisites  Go >=1.26.3 (go.work:1) and golangci-lint v2
+Prerequisites  Go >=1.26.3 (go.work:1) and golangci-lint v2.14.0
 +               Install: https://golangci-lint.run/welcome/install/
 
 1. Build        go build .
