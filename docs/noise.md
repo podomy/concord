@@ -245,6 +245,11 @@ higher generation supersedes every older pin fleet-wide with no coordination.
 * Partial state loss (new key at an old generation with a valid signature)
   is rejected by the pin and healed by a bump, instead of silently splitting
   the fleet.
+* No Byzantine outsider: the fleet is single-tenant and every node is
+  operator-provisioned with the same CA and gossip key, so a stranger cannot
+  join, gossip, or handshake. Faults in scope are own-node corruption, loss,
+  and partition, which the deterministic merge rules absorb and the Resonance
+  suite replays.
 
 ## Non-goals
 
