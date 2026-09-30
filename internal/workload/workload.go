@@ -6,16 +6,16 @@ package workload
 import "github.com/google/uuid"
 
 type Spec struct {
-	Image         string // OCI reference, e.g. "docker.io/nginx:latest".
-	Restart       RestartPolicy
-	Command       []string // entrypoint override.
-	Env           map[string]string
-	Resources     Resources
-	ID            uuid.UUID
-	SegmentID     uuid.UUID // which node must run this.
-	Removed       bool
-	HostPort      uint16
-	ContainerPort uint16
+	Image          string // OCI reference, e.g. "docker.io/nginx:latest".
+	Restart        RestartPolicy
+	Command        []string // entrypoint override.
+	Env            map[string]string
+	Resources      Resources
+	ID             uuid.UUID
+	AssignedNodeID uuid.UUID `json:"AssignedNodeID"` // which node is assigned to run this.
+	Removed        bool
+	HostPort       uint16
+	ContainerPort  uint16
 	// StopTimeoutSeconds specifies the maximum time (in seconds) allowed for graceful
 	// process shutdown via SIGTERM before falling back to SIGKILL. Defaults to 60 seconds if <= 0.
 	StopTimeoutSeconds int

@@ -192,7 +192,7 @@ func reconcileWorkloadSpec(
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
 ) {
-	if spec.SegmentID != nodeID {
+	if spec.AssignedNodeID != nodeID {
 		return
 	}
 
@@ -583,7 +583,7 @@ func adoptContainers(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID,
 	}
 
 	for _, spec := range specs {
-		if spec.Removed || spec.SegmentID != nodeID {
+		if spec.Removed || spec.AssignedNodeID != nodeID {
 			continue
 		}
 

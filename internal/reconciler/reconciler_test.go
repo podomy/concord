@@ -102,7 +102,7 @@ func TestReconcilerCreateError(t *testing.T) {
 
 func TestReconcilerSkipsWrongNode(t *testing.T) {
 	_, _, workloads, running, cidrs := setupReconcilerTest(t)
-	writeSpecEvent(t, workloads, workload.Spec{Image: "nginx:latest", ID: uuid.New(), SegmentID: uuid.New()}, uuid.New())
+	writeSpecEvent(t, workloads, workload.Spec{Image: "nginx:latest", ID: uuid.New(), AssignedNodeID: uuid.New()}, uuid.New())
 	puller, runner := &mockPuller{}, &mockRunner{}
 
 	runTick(t, puller, runner, workloads, running, cidrs)
@@ -165,9 +165,9 @@ func TestReconcilerDoesNotStartTombstonedWorkload(t *testing.T) {
 	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
 
 	spec := workload.Spec{
-		ID:        uuid.New(),
-		Image:     "nginx:latest",
-		SegmentID: uuid.Nil,
+		ID:             uuid.New(),
+		Image:          "nginx:latest",
+		AssignedNodeID: uuid.Nil,
 	}
 	writeSpecEvent(t, workloads, spec, uuid.Nil)
 

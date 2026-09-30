@@ -59,7 +59,7 @@ func isLeader(myID uuid.UUID, peerService *peerdiscovery.MemberService) bool {
 	return leader == myID
 }
 
-// scheduleWorkloads inspects unassigned workload specs (SegmentID == uuid.Nil)
+// scheduleWorkloads inspects unassigned workload specs (AssignedNodeID == uuid.Nil)
 // and assigns them to the cluster node with the lowest active workload count.
 func scheduleWorkloads(
 	ctx context.Context,
@@ -89,12 +89,12 @@ func scheduleWorkloads(
 	}
 
 	for _, spec := range specs {
-		if spec.SegmentID != uuid.Nil || spec.Removed {
+		if spec.AssignedNodeID != uuid.Nil || spec.Removed {
 			continue
 		}
 
 		chosenMember := pickNode(members)
-		spec.SegmentID = chosenMember.ID
+		spec.AssignedNodeID = chosenMember.ID
 
 		payload, err := json.Marshal(spec)
 		if err != nil {

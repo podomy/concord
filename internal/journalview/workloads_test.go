@@ -24,10 +24,10 @@ func TestWorkloadsApplyAndGet(t *testing.T) {
 	view := NewWorkloads(kv)
 
 	spec := workload.Spec{
-		ID:        uuid.New(),
-		Image:     "nginx:latest",
-		SegmentID: uuid.New(),
-		HostPort:  8080,
+		ID:             uuid.New(),
+		Image:          "nginx:latest",
+		AssignedNodeID: uuid.New(),
+		HostPort:       8080,
 	}
 	payload, err := json.Marshal(spec)
 	if err != nil {
