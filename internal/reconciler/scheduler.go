@@ -15,6 +15,7 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/peerdiscovery"
+	"github.com/podomy/concord/internal/workload"
 )
 
 // ErrNoMembers indicates that the cluster members list is empty.
@@ -59,8 +60,8 @@ func isLeader(myID uuid.UUID, peerService *peerdiscovery.MemberService) bool {
 	return leader == myID
 }
 
-// scheduleWorkloads inspects unassigned workload specs (AssignedNodeID == uuid.Nil)
-// and assigns them to the cluster node with the lowest active workload count.
+// scheduleWorkloads assigns unassigned workload specs (AssignedNodeID == uuid.Nil)
+// and reassigns orphaned specs whose owner is no longer alive to an alive node.
 func scheduleWorkloads(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -88,24 +89,60 @@ func scheduleWorkloads(
 		return
 	}
 
+	alive := aliveNodeIDs(members)
+	if len(alive) == 0 {
+		return
+	}
+
 	for _, spec := range specs {
-		if spec.AssignedNodeID != uuid.Nil || spec.Removed {
+		if spec.Removed {
+			continue
+		}
+
+		if spec.AssignedNodeID == uuid.Nil {
+			chosenMember := pickNode(members)
+			spec.AssignedNodeID = chosenMember.ID
+			recordAssignment(ctx, logger, j, views, nodeID, spec)
+			continue
+		}
+
+		if _, ok := alive[spec.AssignedNodeID]; ok {
 			continue
 		}
 
 		chosenMember := pickNode(members)
-		spec.AssignedNodeID = chosenMember.ID
-
-		payload, err := json.Marshal(spec)
-		if err != nil {
-			logger.Error("json marshal", zap.Error(err))
+		if chosenMember.State != peerdiscovery.NodeStateAlive {
 			continue
 		}
+		spec.AssignedNodeID = chosenMember.ID
+		recordAssignment(ctx, logger, j, views, nodeID, spec)
+	}
+}
 
-		event := journal.NewEvent(nodeID, "workload.spec", payload)
-		if err := journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.spec"); err != nil {
-			logger.Error("record workload.spec event", zap.Error(err))
+// aliveNodeIDs returns the set of member IDs currently observed as alive.
+func aliveNodeIDs(members []peerdiscovery.Node) map[uuid.UUID]struct{} {
+	alive := make(map[uuid.UUID]struct{}, len(members))
+	for _, member := range members {
+		if member.State == peerdiscovery.NodeStateAlive {
+			alive[member.ID] = struct{}{}
 		}
+	}
+
+	return alive
+}
+
+// recordAssignment writes one workload.spec copy carrying its current assignment.
+func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, nodeID uuid.UUID, spec workload.Spec) {
+	payload, err := json.Marshal(spec)
+	if err != nil {
+		logger.Error("json marshal", zap.Error(err))
+		return
+	}
+
+	event := journal.NewEvent(nodeID, "workload.spec", payload)
+	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.spec")
+	if err != nil {
+		logger.Error("record workload.spec event", zap.Error(err))
 	}
 }
 
