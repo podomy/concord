@@ -159,7 +159,7 @@ Only the segment leader acts, via `internal/reconciler/scheduler.go:scheduleWork
 
 Convergence follows the view rules in `internal/journalview/workloads.go` (`putEvent`, `keepStored`): the higher epoch always supersedes the stored copy, equal epochs fall back to byte-larger serialization, and tombstones dominate both. Concurrent reassignments from opposite partitions therefore converge on the highest epoch, and stale copies never resurrect a stopped workload. Execution stays at-most-once per partition: the reconciler runs a spec only on its assigned node.
 
-An epoch is a reassignment count. Every time the scheduler moves a workload to a new node it goes up by one, and the stored copy with the largest count wins.
+An epoch is a reassignment count. Every time the scheduler moves a workload to a new node it goes up by one, and the stored copy with the largest count wins. Without it there is no way to tell which copy is newer: a reassignment differs from the stored copy only by node ID, so byte comparison would pick the larger UUID instead of the newer assignment, and the orphan would stall whenever the dead owner's ID happened to be larger.
 
 ---
 
@@ -174,6 +174,6 @@ The sidestep leaks in one place. Nodes re-record the spec (initial assignment wr
 Landed rules in `internal/journalview/workloads.go` (`putEvent`):
 
 * Tombstone dominance. A stored tombstone (`Removed=true`) is never replaced by a live spec copy, regardless of arrival order or epoch. A stop wins over any spec copy.
-* Live-live tiebreak. Two live specs for one ID resolve by deterministic comparison: the higher `AssignmentEpoch` wins; equal epochs fall back to the byte-larger serialization. A reassignment therefore always supersedes the stored copy it was derived from, and concurrent reassignments from opposite partitions converge on the highest epoch, regardless of arrival order.
+* Live-live tiebreak. Two live specs for one ID resolve by deterministic comparison: the higher `AssignmentEpoch` wins. Byte comparison runs only on an epoch draw, where the byte-larger serialization wins. A reassignment therefore always supersedes the stored copy it was derived from, and concurrent reassignments from opposite partitions converge on the highest epoch, regardless of arrival order.
 
 All rules are order-independent: every node converges to the same stored copy no matter the sync arrival sequence. No wall-clock participates in these paths. The epoch is a per-workload generation counter, same family as the key-pin generation, incremented only by the scheduler on reassignment; initial assignments carry epoch zero.
