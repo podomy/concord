@@ -116,6 +116,62 @@ func TestWorkloadsUpdateAndTombstone(t *testing.T) {
 	}
 }
 
+func TestWorkloadsHigherEpochWins(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewWorkloads(kv)
+
+	specID := uuid.New()
+	largeNode, err := uuid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff")
+	if err != nil {
+		t.Fatalf("parse large node: %v", err)
+	}
+	smallNode, err := uuid.Parse("00000000-0000-0000-0000-000000000000")
+	if err != nil {
+		t.Fatalf("parse small node: %v", err)
+	}
+
+	// Low epoch with byte-larger assignment applied first.
+	low := workload.Spec{ID: specID, Image: "redis:6", AssignedNodeID: largeNode}
+	applyWorkloadSpec(t, ctx, view, low)
+
+	// High epoch with byte-smaller assignment still supersedes.
+	high := workload.Spec{ID: specID, Image: "redis:6", AssignedNodeID: smallNode, AssignmentEpoch: 1}
+	applyWorkloadSpec(t, ctx, view, high)
+
+	got, err := view.Get(ctx, specID)
+	if err != nil {
+		t.Fatalf("get spec: %v", err)
+	}
+	if got == nil || got.AssignedNodeID != smallNode || got.AssignmentEpoch != 1 {
+		t.Fatalf("expected high-epoch spec, got %+v", got)
+	}
+
+	// Stale low epoch never replaces the stored high epoch.
+	applyWorkloadSpec(t, ctx, view, low)
+	got, err = view.Get(ctx, specID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.AssignmentEpoch != 1 {
+		t.Fatalf("expected stored epoch 1, got %+v", got)
+	}
+}
+
+// applyWorkloadSpec marshals one spec and applies it as a workload.spec event.
+func applyWorkloadSpec(t *testing.T, ctx context.Context, view *Workloads, spec workload.Spec) {
+	t.Helper()
+	payload, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), "workload.spec", payload)); err != nil {
+		t.Fatalf("apply spec: %v", err)
+	}
+}
+
 func TestWorkloadsList(t *testing.T) {
 	t.Parallel()
 

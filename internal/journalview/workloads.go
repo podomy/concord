@@ -25,10 +25,10 @@ import (
 // 2. There is one stored spec per workload.Spec.ID.
 // 3. A stored tombstone (Removed=true) is never replaced
 // by a live spec. A stop wins over any spec copy,
-// regardless of arrival order.
+// regardless of arrival order or epoch.
 // 4. Two live specs for one ID resolve deterministically:
-// the byte-larger serialization wins, regardless of
-// arrival order.
+// the higher AssignmentEpoch wins; equal epochs fall back
+// to the byte-larger serialization. Arrival order never matters.
 // 5. Removed=true remains stored as a tombstone.
 // 6. Rebuild replays the journal in order and produces the same final state.
 // 7. Malformed workload.spec payloads return an error.
@@ -68,34 +68,44 @@ func (e *Workloads) putEvent(b *bolt.Bucket, event journal.Event) error {
 	key := make([]byte, 0, len(serializedSpecID))
 	key = append(key, serializedSpecID...)
 
-	// Skip the write when a tombstone is already stored
-	// for this ID. A stop wins over any later spec copy.
-	var storedSpec workload.Spec
 	stored := b.Get(key)
 	// Get returns nil if nothing is stored.
-	if stored != nil {
-		err = json.Unmarshal(stored, &storedSpec)
-		if err != nil {
-			return fmt.Errorf("unmarshal: %w", err)
-		}
-
-		// Tombstone prevails. A stop cannot be reverted
-		// by a later spec copy.
-		if storedSpec.Removed && !spec.Removed {
-			return nil
-		}
-
-		// Live specs resolve deterministically: the byte-larger
-		// serialization wins, so arrival order does not matter.
-		// Why byte comparison and not something meaningful?
-		// Nothing meaningful exists, two concurrent assignments have
-		// no "right" winner, only a deterministic one.
-		if !storedSpec.Removed && !spec.Removed && bytes.Compare(serializedSpec, stored) < 0 {
-			return nil
-		}
+	if stored == nil {
+		return putSpec(b, key, serializedSpec)
 	}
 
-	err = b.Put(key, serializedSpec)
+	var storedSpec workload.Spec
+	err = json.Unmarshal(stored, &storedSpec)
+	if err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+
+	if keepStored(stored, storedSpec, serializedSpec, spec) {
+		return nil
+	}
+
+	return putSpec(b, key, serializedSpec)
+}
+
+// keepStored reports whether the stored copy wins over the incoming spec.
+// A stored tombstone beats any live copy. Higher assignment epochs beat
+// lower ones; equal epochs fall back to the byte-larger serialization.
+func keepStored(stored []byte, storedSpec workload.Spec, serializedSpec []byte, spec workload.Spec) bool {
+	if storedSpec.Removed && !spec.Removed {
+		return true
+	}
+	if storedSpec.Removed || spec.Removed {
+		return false
+	}
+	if spec.AssignmentEpoch != storedSpec.AssignmentEpoch {
+		return spec.AssignmentEpoch < storedSpec.AssignmentEpoch
+	}
+	return bytes.Compare(serializedSpec, stored) < 0
+}
+
+// putSpec writes the serialized spec under key.
+func putSpec(b *bolt.Bucket, key, serializedSpec []byte) error {
+	err := b.Put(key, serializedSpec)
 	if err != nil {
 		return fmt.Errorf("bucket put kv: %w", err)
 	}

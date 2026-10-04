@@ -13,9 +13,12 @@ type Spec struct {
 	Resources      Resources
 	ID             uuid.UUID
 	AssignedNodeID uuid.UUID `json:"AssignedNodeID"` // which node is assigned to run this.
-	Removed        bool
-	HostPort       uint16
-	ContainerPort  uint16
+	// AssignmentEpoch counts reassignments of one workload ID. Higher wins
+	// in the view so an orphan move always supersedes the stored copy.
+	AssignmentEpoch uint64
+	Removed         bool
+	HostPort        uint16
+	ContainerPort   uint16
 	// StopTimeoutSeconds specifies the maximum time (in seconds) allowed for graceful
 	// process shutdown via SIGTERM before falling back to SIGKILL. Defaults to 60 seconds if <= 0.
 	StopTimeoutSeconds int

@@ -18,12 +18,18 @@ import (
 	"github.com/podomy/concord/internal/workload"
 )
 
+// MemberSource lists current membership (memberlist).
+// *peerdiscovery.MemberService implements it.
+type MemberSource interface {
+	Members() ([]peerdiscovery.Node, error)
+}
+
 // ErrNoMembers indicates that the cluster members list is empty.
 var ErrNoMembers = errors.New("not enough members in the members list")
 
 // getLeader determines the cluster leader by finding the member with the
 // lowest lexicographical UUID string.
-func getLeader(peerService *peerdiscovery.MemberService) (uuid.UUID, error) {
+func getLeader(peerService MemberSource) (uuid.UUID, error) {
 	if peerService == nil {
 		return uuid.Nil, ErrNoMembers //nolint:wrapcheck // sentinel error
 	}
@@ -51,7 +57,7 @@ func getLeader(peerService *peerdiscovery.MemberService) (uuid.UUID, error) {
 }
 
 // isLeader checks whether the given nodeID is currently the leader of the cluster.
-func isLeader(myID uuid.UUID, peerService *peerdiscovery.MemberService) bool {
+func isLeader(myID uuid.UUID, peerService MemberSource) bool {
 	leader, err := getLeader(peerService)
 	if err != nil {
 		return false
@@ -67,7 +73,7 @@ func scheduleWorkloads(
 	logger *zap.Logger,
 	j journal.Journal,
 	workloads *journalview.Workloads,
-	peerService *peerdiscovery.MemberService,
+	peerService MemberSource,
 	nodeID uuid.UUID,
 	views []journalview.View,
 ) {
@@ -115,6 +121,7 @@ func scheduleWorkloads(
 			continue
 		}
 		spec.AssignedNodeID = chosenMember.ID
+		spec.AssignmentEpoch++
 		recordAssignment(ctx, logger, j, views, nodeID, spec)
 	}
 }
