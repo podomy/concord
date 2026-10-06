@@ -177,3 +177,36 @@ Landed rules in `internal/journalview/workloads.go` (`putEvent`):
 * Live-live tiebreak. Two live specs for one ID resolve by deterministic comparison: the higher `AssignmentEpoch` wins. Byte comparison runs only on an epoch draw, where the byte-larger serialization wins. A reassignment therefore always supersedes the stored copy it was derived from, and concurrent reassignments from opposite partitions converge on the highest epoch, regardless of arrival order.
 
 All rules are order-independent: every node converges to the same stored copy no matter the sync arrival sequence. No wall-clock participates in these paths. The epoch is a per-workload generation counter, same family as the key-pin generation, incremented only by the scheduler on reassignment; initial assignments carry epoch zero.
+
+---
+
+## Object model
+
+Fleets are single tenant: one operator, one trust domain, every node provisioned with the same CA and gossip key. Nodes cooperate rather than distrust each other. Isolation between customers happens at fleet level, separate meshes, not inside one mesh: tenancy within a mesh would demand per-object auth, quotas, and tenant-aware scheduling, which is the CP machinery Concord rejects. Mutually distrustful workloads sharing one mesh would be a different system, not a new object kind.
+
+The workload is the only object. There is one spec (`internal/workload/workload.go:Spec`), one assignment flow, and one convergence story.
+
+### One spec
+
+New needs arrive as workload fields. Image, command, env, resources, ports, health, restart policy, and timeouts already live there. Volume mounts, network policy, and secret references belong there too.
+
+### Why not one kind per concern
+
+In comparison, Kubernetes follows the CP model: a central API server backed by an etcd quorum arbitrates a registry of specialized kinds, each with its own controller and lifecycle.
+
+* Deployments describe desired pods.
+* PVs and PVCs separate storage provisioning from consumption, so volumes outlive their claimants.
+* Services and Ingress carve networking and edge routing into independently owned objects.
+* ConfigMaps and Secrets split configuration out of the pod spec.
+
+That granularity serves multi-tenant clusters where different teams own different concerns and a quorum is always reachable to serialize them. Concord has neither pressure: single tenant, whole workloads pinned to nodes, local-first execution with no quorum to appeal to.
+
+Each additional kind would multiply the expensive surfaces: its own view with merge rules, scheduler handling, reconciler branch, IPC and SDK endpoints, and partition coverage in Resonance. Convergence machinery is owed per kind, and the assignment epoch is what one installment of that debt looks like.
+
+### What dies with the workload
+
+A stop reaps everything the workload owns, storage included. The tombstone (`Removed=true`) dominates every live copy at any epoch, and nothing attached to the workload survives it. No storage survives tombstoning the workload, and this follows from failover rather than simplicity: a workload can be reassigned to another node at any time, so node-local data that outlives it strands itself where nothing runs. Making such data useful would require replicated volumes, a consistency subsystem of its own that contradicts local-first. Durable needs already have homes: shared mission state belongs in the journal where it converges, images and models in the registry, logs streamed out. What remains is scratch space, workload-scoped by nature, provisioned with the workload and deleted with it.
+
+### When a kind splits out
+
+A new kind splits out only when it has an independent lifecycle and different merge semantics, meaning state that must survive its workload's tombstone under rules stop-wins cannot express. No such case exists today. Until one arrives with a concrete use, bake it into the workload.
