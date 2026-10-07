@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -121,4 +122,31 @@ func mustReadEOF(t *testing.T, reader *JSONLReader, ctx context.Context) {
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
+}
+
+// Lines far past the 64KB scanner default still read: one oversized
+// payload must not break the reader.
+func TestJSONLReaderLargeLine(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	big := `{"data":"` + strings.Repeat("x", 200*1024) + `"}`
+	if err := os.WriteFile(path, []byte(big+"\n"), 0o600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	reader, err := OpenJSONLReaderPath(path)
+	if err != nil {
+		t.Fatalf("open journal reader: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close journal reader: %v", err)
+		}
+	})
+
+	if off := mustReadOffset(t, reader, context.Background(), 0); off != 0 {
+		t.Fatalf("offset = %d, want 0", off)
+	}
+	mustReadEOF(t, reader, context.Background())
 }

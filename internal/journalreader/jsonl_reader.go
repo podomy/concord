@@ -24,6 +24,18 @@ type JSONLReader struct {
 	offset  int64
 }
 
+// maxJournalLineBytes caps one journal line. Events are small, but a cap
+// far above the 64KB scanner default means one oversized payload fails
+// loudly at 10MB instead of mysteriously at 64KB.
+const maxJournalLineBytes = 10 * 1024 * 1024
+
+// newJournalScanner scans one event per line with room for large payloads.
+func newJournalScanner(file *os.File) *bufio.Scanner {
+	scanner := bufio.NewScanner(bufio.NewReader(file))
+	scanner.Buffer(make([]byte, 64*1024), maxJournalLineBytes)
+	return scanner
+}
+
 // getJournalPath returns the auto-determined path for the local journal file.
 func getJournalPath() (string, error) {
 	dir, err := os.UserConfigDir()
@@ -59,7 +71,7 @@ func OpenJSONLReaderPath(path string) (*JSONLReader, error) {
 		return nil, fmt.Errorf("open journal for reading: %w", err)
 	}
 
-	scanner := bufio.NewScanner(bufio.NewReader(file))
+	scanner := newJournalScanner(file)
 
 	return &JSONLReader{file: file, scanner: scanner}, nil
 }
@@ -114,7 +126,7 @@ func (r *JSONLReader) SeekTo(offset int64) error {
 	if err != nil {
 		return fmt.Errorf("seek journal: %w", err)
 	}
-	r.scanner = bufio.NewScanner(bufio.NewReader(r.file))
+	r.scanner = newJournalScanner(r.file)
 	r.offset = offset
 	return nil
 }

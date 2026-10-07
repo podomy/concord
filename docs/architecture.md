@@ -178,6 +178,16 @@ Landed rules in `internal/journalview/workloads.go` (`putEvent`):
 
 All rules are order-independent: every node converges to the same stored copy no matter the sync arrival sequence. No wall-clock participates in these paths. The epoch is a per-workload generation counter, same family as the key-pin generation, incremented only by the scheduler on reassignment; initial assignments carry epoch zero.
 
+Assignment rides in `workload.spec` itself rather than a separate event
+type, deliberately. A separate assignment stream would not remove the
+conflict, it would move it: opposite partitions still write concurrent
+claims for one spec id, and those still need highest-epoch-wins to
+converge. What it would add is a second stream to merge, a join across
+streams in the scheduler and reconciler, and a stop-wins question
+spanning two orderings instead of one three-line check. Duplicate spec
+copies are the cheaper wart: storage is cheap, merge stays
+deterministic, and old journals need no migration.
+
 ---
 
 ## Object model
@@ -210,3 +220,31 @@ A stop reaps everything the workload owns, storage included. The tombstone (`Rem
 ### When a kind splits out
 
 A new kind splits out only when it has an independent lifecycle and different merge semantics, meaning state that must survive its workload's tombstone under rules stop-wins cannot express. No such case exists today. Until one arrives with a concrete use, bake it into the workload.
+
+---
+
+## The journal
+
+The journal is one file, `journal.jsonl` under `XDG_CONFIG_HOME/concord`,
+created with owner-only permissions. Every event is one JSON line:
+marshal, append the line plus its newline in a single write, fsync before
+return. Appends serialize on a mutex and open with `O_APPEND`, so
+concurrent writers never interleave mid-line and every recorded byte
+offset stays a line boundary for the life of the file. Readers open
+separate read-only handles; the serving index seeks them by offset.
+
+That encoding is more than enough and stays that way on purpose.
+Coordination events are small and infrequent, so parse cost and verbosity
+never matter, while grep-able text keeps failure dumps and Resonance
+replays readable.
+
+One real limit: lines cap at 10MB (`maxJournalLineBytes` in
+`internal/journalreader/jsonl_reader.go`), far above the 64KB scanner
+default, so a single oversized payload fails loudly instead of
+mysteriously. High-rate telemetry never belongs here anyway: that
+traffic wants last-value semantics on a data plane, meaning each topic
+keeps only its latest reading and a newer arrival simply overwrites it.
+No history, no replay, late duplicates harmless by construction. The
+journal is the opposite, total history with deterministic replay, which
+is exactly what coordination needs and exactly what telemetry would
+drown in.
