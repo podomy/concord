@@ -32,6 +32,7 @@ reunion, and scheduling.
 - [Overview](./docs/overview.md)
 - [Architecture](./docs/architecture.md)
 - [Noise Transport](./docs/noise.md)
+- [Journal Sync](./docs/cursors.md)
 - [CLI Reference](./docs/cli.md)
 - [Go SDK Reference](./docs/sdk.md)
 - [Deployment Guide](./docs/deployment.md)

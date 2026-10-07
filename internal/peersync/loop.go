@@ -41,10 +41,10 @@ type MemberSource interface {
 //     (skipped if already synced this tick for a meet).
 //
 // After each successful Sync, events are applied idempotently (skip known ids)
-// into the local journal and views. The watermark advances only if apply succeeds.
+// into the local journal and views. The cursor advances only if apply succeeds.
 //
-// Watermarks live only in process memory: a process restart starts again
-// from an empty watermark (full pull from the peer's start). Idempotent
+// Cursors live only in process memory: a process restart starts again
+// from an empty cursor (full pull from the peer's start). Idempotent
 // apply on event id is what prevents duplicate journal rows after replay.
 //
 // Individual Sync/apply failures are soft-fail (log and continue). The loop
@@ -60,18 +60,18 @@ func RunPullLoop(
 	byID EventByID,
 ) {
 	previous := map[uuid.UUID]peerdiscovery.Node{}
-	watermarks := map[uuid.UUID]string{}
+	cursors := newCursorSet()
 	ticker := time.NewTicker(defaultPullInterval)
 	defer ticker.Stop()
 
 	port := parseTransportPort(transport.Port)
 	state := pullState{
-		syncer:     syncer,
-		journal:    j,
-		views:      views,
-		byID:       byID,
-		port:       port,
-		watermarks: watermarks,
+		syncer:  syncer,
+		journal: j,
+		views:   views,
+		byID:    byID,
+		port:    port,
+		cursors: cursors,
 	}
 
 	for {
@@ -86,12 +86,12 @@ func RunPullLoop(
 
 // pullState is the per-loop dependencies shared by meet/periodic/syncOne.
 type pullState struct {
-	syncer     PeerSync
-	journal    journal.Journal
-	views      []journalview.View
-	byID       EventByID
-	port       uint16
-	watermarks map[uuid.UUID]string
+	syncer  PeerSync
+	journal journal.Journal
+	views   []journalview.View
+	byID    EventByID
+	port    uint16
+	cursors cursorSet
 }
 
 // pullTick runs one reconciliation pass: list members, meet pulls, periodic pulls.
@@ -180,7 +180,7 @@ func pullPeriodic(
 }
 
 // syncOne pulls one page from member, applies events idempotently, then advances
-// the watermark only if apply succeeded.
+// the cursor only if apply succeeded.
 func syncOne(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -189,7 +189,7 @@ func syncOne(
 ) bool {
 	addr := netip.AddrPortFrom(member.Address.Addr(), state.port)
 	req := transport.SyncRequest{
-		Watermark: state.watermarks[member.ID],
+		Watermark: state.cursors.lookup(member.ID),
 		Limit:     defaultSyncLimit,
 	}
 
@@ -222,9 +222,7 @@ func syncOne(
 		return false
 	}
 
-	if res.NextWatermark != "" {
-		state.watermarks[member.ID] = res.NextWatermark
-	}
+	state.cursors.advance(member.ID, res.NextWatermark)
 
 	logger.Info("peer sync ok",
 		zap.String("peer_id", member.ID.String()),

@@ -199,7 +199,7 @@ sends anything readable to an unverified peer: the responder sends no reply
 bytes before verifying, and the dialer sends no sync bytes before verifying.
 
 After the handshake, sync runs as plain HTTP/1.1 over the encrypted channel:
-same `POST /v1/sync`, same watermark cursors, same idempotent apply. One
+same `POST /v1/sync`, same cursors, same idempotent apply. One
 connection carries one sync; session keys are discarded on close, so recorded
 traffic cannot be decrypted later from a stolen static key.
 
