@@ -23,6 +23,11 @@ const (
 	defaultPullInterval = 5 * time.Second
 	// defaultSyncLimit is the max events per Sync page (keeps transfers small).
 	defaultSyncLimit = 100
+	// maxPagesPerTick caps pages pulled from one peer per tick. Steady state
+	// stays one page; catch-up moves while pages come back full. The cap
+	// bounds per-tick work and memory so one far-behind peer cannot starve
+	// the loop.
+	maxPagesPerTick = 10
 )
 
 // MemberSource lists current membership (memberlist).
@@ -34,7 +39,8 @@ type MemberSource interface {
 // RunPullLoop is the peer journal reconciliation loop.
 //
 // It does not push our events. Each tick it discovers who is alive via
-// memberlist and pulls a page of their journal over the Noise transport:
+// memberlist and pulls their journals over the Noise transport, up to
+// maxPagesPerTick pages per peer while each page comes back full:
 //
 //   - On meet: peer is newly seen or has become alive again → Sync once now.
 //   - Periodic: every defaultPullInterval, Sync all still-alive peers
@@ -192,8 +198,11 @@ func pullPeriodic(
 	}
 }
 
-// syncOne pulls one page from member, applies events idempotently, then advances
-// the cursor only if apply succeeded.
+// syncOne pulls up to maxPagesPerTick pages from member, applying events
+// idempotently and advancing the cursor only on successful applies. A full
+// page means more may wait, so it keeps pulling; a short page ends the run.
+// It reports whether the first page succeeded: a later page failing still
+// counts as synced this tick, since the progress so far is stored.
 func syncOne(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -201,10 +210,6 @@ func syncOne(
 	member peerdiscovery.Node,
 ) bool {
 	addr := netip.AddrPortFrom(member.Address.Addr(), state.port)
-	req := transport.SyncRequest{
-		Watermark: state.cursors.lookup(member.ID),
-		Limit:     defaultSyncLimit,
-	}
 
 	peer, ok := noisePeer(member)
 	if !ok {
@@ -215,43 +220,57 @@ func syncOne(
 		return false
 	}
 
-	res, err := state.syncer.Sync(ctx, addr, peer, req)
-	if err != nil {
-		logger.Warn("peer sync failed",
-			zap.String("peer_id", member.ID.String()),
-			zap.String("addr", addr.String()),
-			zap.Error(err),
-		)
-		return false
-	}
+	events, applied := 0, 0
+	for page := range maxPagesPerTick {
+		req := transport.SyncRequest{
+			Cursor: state.cursors.lookup(member.ID),
+			Limit:  defaultSyncLimit,
+		}
 
-	applied, err := ApplyEvents(ctx, state.journal, state.views, state.byID, res.Events)
-	if err != nil {
-		logger.Warn("peer sync apply failed",
-			zap.String("peer_id", member.ID.String()),
-			zap.String("addr", addr.String()),
-			zap.Error(err),
-		)
-		return false
-	}
-
-	moved := state.cursors.advance(member.ID, res.NextWatermark)
-	if moved && state.cursorStore != nil {
-		err := state.cursorStore.save(member.ID, res.NextWatermark)
+		res, err := state.syncer.Sync(ctx, addr, peer, req)
 		if err != nil {
-			logger.Warn("persist cursor failed",
+			logger.Warn("peer sync failed",
 				zap.String("peer_id", member.ID.String()),
+				zap.String("addr", addr.String()),
 				zap.Error(err),
 			)
+			return page > 0
+		}
+
+		newEvents, err := ApplyEvents(ctx, state.journal, state.views, state.byID, res.Events)
+		if err != nil {
+			logger.Warn("peer sync apply failed",
+				zap.String("peer_id", member.ID.String()),
+				zap.String("addr", addr.String()),
+				zap.Error(err),
+			)
+			return page > 0
+		}
+
+		moved := state.cursors.advance(member.ID, res.NextCursor)
+		if moved && state.cursorStore != nil {
+			serr := state.cursorStore.save(member.ID, res.NextCursor)
+			if serr != nil {
+				logger.Warn("persist cursor failed",
+					zap.String("peer_id", member.ID.String()),
+					zap.Error(serr),
+				)
+			}
+		}
+
+		events += len(res.Events)
+		applied += newEvents
+		if len(res.Events) < defaultSyncLimit {
+			break
 		}
 	}
 
 	logger.Info("peer sync ok",
 		zap.String("peer_id", member.ID.String()),
 		zap.String("addr", addr.String()),
-		zap.Int("events", len(res.Events)),
+		zap.Int("events", events),
 		zap.Int("applied", applied),
-		zap.String("next_watermark", res.NextWatermark),
+		zap.String("next_cursor", state.cursors.lookup(member.ID)),
 	)
 	return true
 }

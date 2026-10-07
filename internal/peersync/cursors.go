@@ -33,7 +33,7 @@ func (c cursorSet) lookup(peer uuid.UUID) string {
 }
 
 // advance moves peer's cursor to next, unless next is empty. An empty
-// NextWatermark means the peer had nothing new, so the stored cursor
+// NextCursor means the peer had nothing new, so the stored cursor
 // must be kept, never cleared. It reports whether the cursor moved.
 func (c cursorSet) advance(peer uuid.UUID, next string) bool {
 	if next == "" {

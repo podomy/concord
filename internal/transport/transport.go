@@ -21,20 +21,27 @@ var Port = "8443"
 // runs the IK responder handshake first; connections presenting an unsigned or
 // mismatched key are closed before serving. verify admits members and enforces
 // pinning; see KeyPinner in runtime. Sync logic itself lives in sync.go and is
-// unchanged by the framing.
+// unchanged by the framing. A nil index serves from full scans; a live one
+// seeks by cursor offset and builds in the background until caught up.
 func Start(
 	ctx context.Context,
 	logger *zap.Logger,
 	static StaticKey,
 	parcel []byte,
 	verify Verifier,
+	index *offsetIndex,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled: %w", err)
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+SyncPath, postSync)
+	// Every request carries the index so pages seek by cursor offset.
+	// A nil index serves from full scans, which keeps index-less
+	// setups on today's behavior.
+	mux.HandleFunc("POST "+SyncPath, func(w http.ResponseWriter, r *http.Request) {
+		postSync(w, r, index)
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + Port,
@@ -58,6 +65,13 @@ func Start(
 		logger:   logger,
 	}
 
+	// Fill the index in the background: one full scan in small batches.
+	// Requests serve through the full-scan fallback until it catches up,
+	// so serving never waits for the build.
+	if index != nil {
+		go buildSyncIndex(ctx, logger, index)
+	}
+
 	// Stop when runtime shuts down. WithoutCancel keeps a live parent after ctx ends
 	// so Shutdown can finish in-flight requests within the timeout.
 	go func() {
@@ -77,6 +91,15 @@ func Start(
 	}()
 
 	return nil
+}
+
+// buildSyncIndex runs the one-time offset backfill and logs the outcome.
+// A failed build only costs full scans; every request still serves.
+func buildSyncIndex(ctx context.Context, logger *zap.Logger, index *offsetIndex) {
+	err := index.build(ctx)
+	if err != nil {
+		logger.Warn("sync index build failed", zap.Error(err))
+	}
 }
 
 // handshakeError is a temporary Accept error carrying a failed Noise

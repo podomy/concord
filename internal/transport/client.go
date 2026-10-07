@@ -46,16 +46,16 @@ func NewClient(static StaticKey, parcel []byte, verify Verifier) *Client {
 // peer is the peer's transport address (advertise IP + Port, usually 8443),
 // not the memberlist gossip port. expect is the peer's gossiped Noise
 // identity; the responder must prove that exact node ID with a CA-signed
-// parcel before any sync bytes flow, otherwise the watermark cursor cannot
+// parcel before any sync bytes flow, otherwise the cursor cannot
 // trust whose journal it reads.
 //
-// req.Watermark is the cursor for "events we already have from this peer"
+// req.Cursor is the cursor for "events we already have from this peer"
 // (often the last applied event id / mark). Empty means from the start.
 // req.Limit caps how many events to return so the transfer fits a short link.
 //
 // This call does not push our journal to the peer; it only asks for theirs.
-// The peer responds with Events (after the watermark, up to limit) and
-// NextWatermark to store for the next Sync.
+// The peer responds with Events (after the cursor, up to limit) and
+// NextCursor to store for the next Sync.
 func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req SyncRequest) (SyncResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return SyncResponse{}, fmt.Errorf("context cancelled: %w", err)
@@ -79,7 +79,7 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req
 	}
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(req); err != nil {
+	if err = json.NewEncoder(&buf).Encode(req); err != nil {
 		_ = conn.Close() //nolint:errcheck // best-effort close on encode error
 		return SyncResponse{}, fmt.Errorf("marshal sync request: %w", err)
 	}

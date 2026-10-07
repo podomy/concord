@@ -16,19 +16,19 @@ import (
 	"github.com/podomy/concord/internal/journalreader"
 )
 
-// From-start page: empty watermark returns the first limit events.
+// From-start page: empty cursor returns the first limit events.
 func TestReadJournalPageFromStart(t *testing.T) {
 	t.Parallel()
 
 	e1, e2, e3 := testEvent("a"), testEvent("b"), testEvent("c")
 	r := openTempJournal(t, e1, e2, e3)
 
-	got, next, found, err := readJournalPage(context.Background(), r, "", 2)
+	got, next, found, learned, err := readJournalPage(context.Background(), r, "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
-		t.Fatal("empty watermark should be found")
+		t.Fatal("empty cursor should be found")
 	}
 	if len(got) != 2 || got[0].ID != e1.ID || got[1].ID != e2.ID {
 		t.Fatalf("got %#v", got)
@@ -36,21 +36,24 @@ func TestReadJournalPageFromStart(t *testing.T) {
 	if next != e2.ID.String() {
 		t.Fatalf("next = %q, want e2", next)
 	}
+	if len(learned) != 2 || learned[e1.ID] >= learned[e2.ID] {
+		t.Fatalf("learned offsets = %v, want increasing pair", learned)
+	}
 }
 
-// After watermark: page is exclusive of the watermark event.
-func TestReadJournalPageAfterWatermark(t *testing.T) {
+// After cursor: page is exclusive of the cursor event.
+func TestReadJournalPageAfterCursor(t *testing.T) {
 	t.Parallel()
 
 	e1, e2, e3 := testEvent("a"), testEvent("b"), testEvent("c")
 	r := openTempJournal(t, e1, e2, e3)
 
-	got, next, found, err := readJournalPage(context.Background(), r, e1.ID.String(), 10)
+	got, next, found, _, err := readJournalPage(context.Background(), r, e1.ID.String(), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
-		t.Fatal("known watermark should be found")
+		t.Fatal("known cursor should be found")
 	}
 	if len(got) != 2 || got[0].ID != e2.ID || got[1].ID != e3.ID {
 		t.Fatalf("got %#v", got)
@@ -60,42 +63,42 @@ func TestReadJournalPageAfterWatermark(t *testing.T) {
 	}
 }
 
-// Cursor already at last event: empty page, watermark unchanged, found true.
+// Cursor already at last event: empty page, cursor unchanged, found true.
 func TestReadJournalPageEmptyAfterLast(t *testing.T) {
 	t.Parallel()
 
 	e1 := testEvent("a")
 	r := openTempJournal(t, e1)
 
-	got, next, found, err := readJournalPage(context.Background(), r, e1.ID.String(), 10)
+	got, next, found, _, err := readJournalPage(context.Background(), r, e1.ID.String(), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
-		t.Fatal("watermark at end should still be found")
+		t.Fatal("cursor at end should still be found")
 	}
 	if len(got) != 0 {
 		t.Fatalf("got %d events, want 0", len(got))
 	}
 	if next != e1.ID.String() {
-		t.Fatalf("next = %q, want watermark", next)
+		t.Fatalf("next = %q, want cursor", next)
 	}
 }
 
-// Unknown watermark: found false so loadSyncPage can fall back to from-start.
-func TestReadJournalPageUnknownWatermark(t *testing.T) {
+// Unknown cursor: found false so loadSyncPage can fall back to from-start.
+func TestReadJournalPageUnknownCursor(t *testing.T) {
 	t.Parallel()
 
 	e1 := testEvent("a")
 	r := openTempJournal(t, e1)
 	unknown := uuid.New().String()
 
-	got, next, found, err := readJournalPage(context.Background(), r, unknown, 10)
+	got, next, found, _, err := readJournalPage(context.Background(), r, unknown, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if found {
-		t.Fatal("unknown watermark must not be found")
+		t.Fatal("unknown cursor must not be found")
 	}
 	if len(got) != 0 || next != unknown {
 		t.Fatalf("got len=%d next=%q", len(got), next)
@@ -109,7 +112,7 @@ func TestReadJournalPageRespectsLimit(t *testing.T) {
 	events := []journal.Event{testEvent("1"), testEvent("2"), testEvent("3"), testEvent("4")}
 	r := openTempJournal(t, events...)
 
-	got, next, found, err := readJournalPage(context.Background(), r, "", 3)
+	got, next, found, _, err := readJournalPage(context.Background(), r, "", 3)
 	if err != nil {
 		t.Fatal(err)
 	}

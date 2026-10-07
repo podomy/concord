@@ -16,9 +16,12 @@ import (
 )
 
 // JSONLReader reads journal events from a JSONL file sequentially.
+// It also tracks byte offsets: every event is one line, so the start
+// offset of each line stays valid as long as the file is append-only.
 type JSONLReader struct {
 	file    *os.File
 	scanner *bufio.Scanner
+	offset  int64
 }
 
 // getJournalPath returns the auto-determined path for the local journal file.
@@ -64,25 +67,56 @@ func OpenJSONLReaderPath(path string) (*JSONLReader, error) {
 // Read reads the next event from the journal.
 // It returns io.EOF when all events have been read.
 func (r *JSONLReader) Read(ctx context.Context) (*journal.Event, error) {
+	event, _, err := r.ReadWithOffset(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+// ReadWithOffset reads the next event and reports the byte offset where
+// its line starts. The caller can Seek back to a reported offset later:
+// offsets stay valid because the journal only ever appends whole lines.
+func (r *JSONLReader) ReadWithOffset(ctx context.Context) (*journal.Event, int64, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("read cancelled: %w", ctx.Err())
+		return nil, 0, fmt.Errorf("read cancelled: %w", ctx.Err())
 	default:
 	}
 
 	if !r.scanner.Scan() {
-		if err := r.scanner.Err(); err != nil {
-			return nil, fmt.Errorf("scan journal: %w", err)
+		serr := r.scanner.Err()
+		if serr != nil {
+			return nil, 0, fmt.Errorf("scan journal: %w", serr)
 		}
-		return nil, io.EOF
+		return nil, 0, io.EOF
 	}
+
+	text := r.scanner.Text()
+	start := r.offset
+	// One newline byte follows every line; the writer always appends it.
+	r.offset += int64(len(text)) + 1
 
 	var event journal.Event
-	if err := json.Unmarshal([]byte(r.scanner.Text()), &event); err != nil {
-		return nil, fmt.Errorf("unmarshal journal event: %w", err)
+	err := json.Unmarshal([]byte(text), &event)
+	if err != nil {
+		return nil, 0, fmt.Errorf("unmarshal journal event: %w", err)
 	}
 
-	return &event, nil
+	return &event, start, nil
+}
+
+// SeekTo positions the reader at a byte offset previously reported by
+// ReadWithOffset (or zero for the file start). The offset must be a line
+// boundary; seeking mid-line reads garbage.
+func (r *JSONLReader) SeekTo(offset int64) error {
+	_, err := r.file.Seek(offset, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("seek journal: %w", err)
+	}
+	r.scanner = bufio.NewScanner(bufio.NewReader(r.file))
+	r.offset = offset
+	return nil
 }
 
 // Close closes the underlying journal file.

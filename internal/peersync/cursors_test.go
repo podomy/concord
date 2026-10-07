@@ -112,8 +112,8 @@ func TestSyncOnePersistsCursor(t *testing.T) {
 	ev := mustEvent()
 	fake := &fakeSyncer{
 		resp: transport.SyncResponse{
-			NextWatermark: ev.ID.String(),
-			Events:        []journal.Event{ev},
+			NextCursor: ev.ID.String(),
+			Events:     []journal.Event{ev},
 		},
 	}
 	cursorStore := testCursorStore(t)
@@ -148,7 +148,7 @@ func TestSyncOneFailedApplyPersistsNothing(t *testing.T) {
 	cursorStore := testCursorStore(t)
 	j := &memJournal{}
 	state := pullState{
-		syncer:      &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "w", Events: []journal.Event{mustEvent()}}},
+		syncer:      &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w", Events: []journal.Event{mustEvent()}}},
 		journal:     j,
 		byID:        &brokenIndex{},
 		port:        8443,

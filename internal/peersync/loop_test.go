@@ -137,7 +137,7 @@ func TestSyncOneUsesTransportPortAndCursor(t *testing.T) {
 	member := dummyNode(peerID)
 	cursors := map[uuid.UUID]string{peerID: "mark-1"}
 	fake := &fakeSyncer{
-		resp: transport.SyncResponse{NextWatermark: "mark-2", Events: nil},
+		resp: transport.SyncResponse{NextCursor: "mark-2", Events: nil},
 	}
 
 	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member) {
@@ -150,8 +150,8 @@ func TestSyncOneUsesTransportPortAndCursor(t *testing.T) {
 	if call.peer.String() != "192.0.2.10:8443" {
 		t.Fatalf("peer addr = %s, want 192.0.2.10:8443 (transport port, not gossip)", call.peer)
 	}
-	if call.req.Watermark != "mark-1" {
-		t.Fatalf("cursor = %q, want mark-1", call.req.Watermark)
+	if call.req.Cursor != "mark-1" {
+		t.Fatalf("cursor = %q, want mark-1", call.req.Cursor)
 	}
 	if call.req.Limit != defaultSyncLimit {
 		t.Fatalf("limit = %d, want %d", call.req.Limit, defaultSyncLimit)
@@ -168,7 +168,7 @@ func TestSyncOneEmptyNextCursorDoesNotClear(t *testing.T) {
 	peerID := uuid.New()
 	member := dummyNode(peerID)
 	cursors := map[uuid.UUID]string{peerID: "keep-me"}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: ""}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: ""}}
 
 	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member) {
 		t.Fatal("expected success")
@@ -188,7 +188,7 @@ func TestSyncOneSkipsPeerWithoutNoiseKey(t *testing.T) {
 		Address: mustAddrPort("192.0.2.10:7946"),
 		State:   peerdiscovery.NodeStateAlive,
 	}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "w"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w"}}
 
 	if syncOne(context.Background(), zap.NewNop(), testPullState(fake, map[uuid.UUID]string{}), member) {
 		t.Fatal("expected skip, got success")
@@ -222,14 +222,122 @@ func TestSyncOneMissingCursorSendsEmpty(t *testing.T) {
 	peerID := uuid.New()
 	member := dummyNode(peerID)
 	cursors := map[uuid.UUID]string{}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "first"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "first"}}
 
 	syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member)
-	if fake.calls[0].req.Watermark != "" {
-		t.Fatalf("first pull watermark = %q, want empty", fake.calls[0].req.Watermark)
+	if fake.calls[0].req.Cursor != "" {
+		t.Fatalf("first pull cursor = %q, want empty", fake.calls[0].req.Cursor)
 	}
 	if cursors[peerID] != "first" {
 		t.Fatalf("stored = %q, want first", cursors[peerID])
+	}
+}
+
+// A full page means more may wait: keep pulling until a short page ends it.
+func TestSyncOnePullsFullPagesUntilShort(t *testing.T) {
+	t.Parallel()
+
+	peerID := uuid.New()
+	member := dummyNode(peerID)
+	full := make([]journal.Event, 0, defaultSyncLimit)
+	for range defaultSyncLimit {
+		full = append(full, mustEvent())
+	}
+	last := full[len(full)-1].ID.String()
+	tail := []journal.Event{mustEvent(), mustEvent()}
+	fake := &fakeSyncer{responses: []transport.SyncResponse{
+		{NextCursor: last, Events: full},
+		{NextCursor: tail[1].ID.String(), Events: tail},
+	}}
+	cursors := map[uuid.UUID]string{}
+	j := &memJournal{}
+	state := pullState{
+		syncer:  fake,
+		journal: j,
+		byID:    &journalIndex{j: j},
+		port:    8443,
+		cursors: cursors,
+	}
+
+	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+		t.Fatal("expected success")
+	}
+	if len(fake.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(fake.calls))
+	}
+	if fake.calls[1].req.Cursor != last {
+		t.Fatalf("second page cursor = %q, want %q", fake.calls[1].req.Cursor, last)
+	}
+	if len(j.events) != defaultSyncLimit+2 {
+		t.Fatalf("applied = %d, want %d", len(j.events), defaultSyncLimit+2)
+	}
+	if cursors[peerID] != tail[1].ID.String() {
+		t.Fatalf("cursor = %q", cursors[peerID])
+	}
+}
+
+// Catch-up never exceeds the per-tick page cap, no matter how full pages stay.
+func TestSyncOneStopsAtPageCap(t *testing.T) {
+	t.Parallel()
+
+	peerID := uuid.New()
+	member := dummyNode(peerID)
+	fake := &fakeSyncer{}
+	for range maxPagesPerTick + 1 {
+		page := make([]journal.Event, 0, defaultSyncLimit)
+		for range defaultSyncLimit {
+			page = append(page, mustEvent())
+		}
+		fake.responses = append(fake.responses, transport.SyncResponse{NextCursor: page[len(page)-1].ID.String(), Events: page})
+	}
+	cursors := map[uuid.UUID]string{}
+
+	syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member)
+	if len(fake.calls) != maxPagesPerTick {
+		t.Fatalf("calls = %d, want %d", len(fake.calls), maxPagesPerTick)
+	}
+	if len(fake.responses) != 1 {
+		t.Fatalf("unconsumed responses = %d, want 1", len(fake.responses))
+	}
+}
+
+// A later page failing still counts as synced: progress so far is stored.
+func TestSyncOneLaterPageFailureKeepsProgress(t *testing.T) {
+	t.Parallel()
+
+	peerID := uuid.New()
+	member := dummyNode(peerID)
+	full := make([]journal.Event, 0, defaultSyncLimit)
+	for range defaultSyncLimit {
+		full = append(full, mustEvent())
+	}
+	last := full[len(full)-1].ID.String()
+	fake := &fakeSyncer{
+		responses: []transport.SyncResponse{{NextCursor: last, Events: full}},
+		err:       errors.New("dial failed"),
+		errOnCall: 2,
+	}
+	cursors := map[uuid.UUID]string{}
+	j := &memJournal{}
+	state := pullState{
+		syncer:  fake,
+		journal: j,
+		byID:    &journalIndex{j: j},
+		port:    8443,
+		cursors: cursors,
+	}
+
+	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+		t.Fatal("expected success with stored progress")
+	}
+	if len(fake.calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(fake.calls))
+	}
+	if len(j.events) != defaultSyncLimit {
+		t.Fatalf("applied = %d, want %d", len(j.events), defaultSyncLimit)
+	}
+	if cursors[peerID] != last {
+		t.Fatalf("cursor = %q, want %q", cursors[peerID], last)
 	}
 }
 
@@ -244,7 +352,7 @@ func TestPullTickMeetThenPeriodicNoDoubleSync(t *testing.T) {
 		{ID: self, Address: mustAddrPort("127.0.0.1:7946"), State: peerdiscovery.NodeStateAlive},
 		peer,
 	}}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "w1"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w1"}}
 	cursors := map[uuid.UUID]string{}
 
 	previous := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), nil)
@@ -272,7 +380,7 @@ func TestPullTickSkipsDeadAndSelf(t *testing.T) {
 		{ID: self, Address: mustAddrPort("10.0.0.1:7946"), State: peerdiscovery.NodeStateAlive},
 		{ID: deadID, Address: mustAddrPort("10.0.0.2:7946"), State: peerdiscovery.NodeStateDead},
 	}}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "x"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "x"}}
 
 	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), nil)
 	if len(fake.calls) != 0 {
@@ -293,15 +401,15 @@ func TestPullTickDeadToAliveIsMeet(t *testing.T) {
 	src := &fakeMembers{list: []peerdiscovery.Node{
 		keyedNode(peerID, "203.0.113.5:7946"),
 	}}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "back"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "back"}}
 	cursors := map[uuid.UUID]string{peerID: "before-death"}
 
 	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), previous)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d, want 1 meet pull", len(fake.calls))
 	}
-	if fake.calls[0].req.Watermark != "before-death" {
-		t.Fatalf("should resume cursor after rejoin, got %q", fake.calls[0].req.Watermark)
+	if fake.calls[0].req.Cursor != "before-death" {
+		t.Fatalf("should resume cursor after rejoin, got %q", fake.calls[0].req.Cursor)
 	}
 }
 
@@ -325,7 +433,7 @@ func TestPullTickMembersErrorKeepsPrevious(t *testing.T) {
 	}
 }
 
-// Each successful page advances the cursor; next tick sends the prior NextWatermark.
+// Each successful page advances the cursor; next tick sends the prior NextCursor.
 func TestPullTickPagingCursorsAcrossTicks(t *testing.T) {
 	t.Parallel()
 
@@ -335,9 +443,9 @@ func TestPullTickPagingCursorsAcrossTicks(t *testing.T) {
 		keyedNode(peerID, "192.0.2.1:7946"),
 	}}
 	fake := &fakeSyncer{responses: []transport.SyncResponse{
-		{NextWatermark: "page1"},
-		{NextWatermark: "page2"},
-		{NextWatermark: "page3"},
+		{NextCursor: "page1"},
+		{NextCursor: "page2"},
+		{NextCursor: "page3"},
 	}}
 	cursors := map[uuid.UUID]string{}
 
@@ -346,15 +454,15 @@ func TestPullTickPagingCursorsAcrossTicks(t *testing.T) {
 		t.Fatalf("after tick1: %q", cursors[peerID])
 	}
 	prev = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
-	if fake.calls[1].req.Watermark != "page1" {
-		t.Fatalf("tick2 sent cursor %q, want page1", fake.calls[1].req.Watermark)
+	if fake.calls[1].req.Cursor != "page1" {
+		t.Fatalf("tick2 sent cursor %q, want page1", fake.calls[1].req.Cursor)
 	}
 	if cursors[peerID] != "page2" {
 		t.Fatalf("after tick2: %q", cursors[peerID])
 	}
 	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
-	if fake.calls[2].req.Watermark != "page2" {
-		t.Fatalf("tick3 sent cursor %q, want page2", fake.calls[2].req.Watermark)
+	if fake.calls[2].req.Cursor != "page2" {
+		t.Fatalf("tick3 sent cursor %q, want page2", fake.calls[2].req.Cursor)
 	}
 	if cursors[peerID] != "page3" {
 		t.Fatalf("after tick3: %q", cursors[peerID])
@@ -374,8 +482,8 @@ func TestPullTickPerPeerCursorsIndependent(t *testing.T) {
 	}}
 	fake := &fakeSyncer{
 		byPeer: map[string]transport.SyncResponse{
-			"10.0.0.1:8443": {NextWatermark: "wa"},
-			"10.0.0.2:8443": {NextWatermark: "wb"},
+			"10.0.0.1:8443": {NextCursor: "wa"},
+			"10.0.0.2:8443": {NextCursor: "wb"},
 		},
 	}
 	cursors := map[uuid.UUID]string{}
@@ -397,7 +505,7 @@ func TestPullTickPeerDownThenUpResumesCursor(t *testing.T) {
 		keyedNode(peerID, "192.0.2.50:7946"),
 	}}
 	fake := &fakeSyncer{responses: []transport.SyncResponse{
-		{NextWatermark: "got-to-here"},
+		{NextCursor: "got-to-here"},
 	}}
 	cursors := map[uuid.UUID]string{}
 
@@ -420,14 +528,14 @@ func TestPullTickPeerDownThenUpResumesCursor(t *testing.T) {
 
 	// Peer back: next pull must send the same cursor (resume, not from scratch).
 	fake.err = nil
-	fake.resp = transport.SyncResponse{NextWatermark: "after-recovery"}
+	fake.resp = transport.SyncResponse{NextCursor: "after-recovery"}
 	fake.calls = nil
 	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls after recovery = %d", len(fake.calls))
 	}
-	if fake.calls[0].req.Watermark != "got-to-here" {
-		t.Fatalf("resume cursor = %q, want got-to-here", fake.calls[0].req.Watermark)
+	if fake.calls[0].req.Cursor != "got-to-here" {
+		t.Fatalf("resume cursor = %q, want got-to-here", fake.calls[0].req.Cursor)
 	}
 	if cursors[peerID] != "after-recovery" {
 		t.Fatalf("cursor after recovery: %q", cursors[peerID])
@@ -446,7 +554,7 @@ func TestPullTickProcessRestartResyncsFromEmptyCursor(t *testing.T) {
 	src := &fakeMembers{list: []peerdiscovery.Node{
 		keyedNode(peerID, "192.0.2.60:7946"),
 	}}
-	fake := &fakeSyncer{resp: transport.SyncResponse{NextWatermark: "progress"}}
+	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "progress"}}
 
 	// "Old process" had advanced the cursor.
 	oldCursors := map[uuid.UUID]string{}
@@ -457,15 +565,15 @@ func TestPullTickProcessRestartResyncsFromEmptyCursor(t *testing.T) {
 
 	// "New process" after restart: fresh cursor set (RunPullLoop starts empty).
 	fake.calls = nil
-	fake.resp = transport.SyncResponse{NextWatermark: "progress-again"}
+	fake.resp = transport.SyncResponse{NextCursor: "progress-again"}
 	newCursors := map[uuid.UUID]string{}
 	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, newCursors), nil)
 
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d", len(fake.calls))
 	}
-	if fake.calls[0].req.Watermark != "" {
-		t.Fatalf("after restart sent watermark %q, want empty (full resync)", fake.calls[0].req.Watermark)
+	if fake.calls[0].req.Cursor != "" {
+		t.Fatalf("after restart sent cursor %q, want empty (full resync)", fake.calls[0].req.Cursor)
 	}
 	if newCursors[peerID] != "progress-again" {
 		t.Fatalf("new process cursor: %q", newCursors[peerID])
@@ -481,8 +589,8 @@ func TestSyncOneAppliesEventsBeforeCursor(t *testing.T) {
 	ev := mustEvent()
 	fake := &fakeSyncer{
 		resp: transport.SyncResponse{
-			NextWatermark: ev.ID.String(),
-			Events:        []journal.Event{ev},
+			NextCursor: ev.ID.String(),
+			Events:     []journal.Event{ev},
 		},
 	}
 	cursors := map[uuid.UUID]string{}
@@ -550,13 +658,16 @@ type fakeSyncer struct {
 	byPeer    map[string]transport.SyncResponse
 	resp      transport.SyncResponse
 	mu        sync.Mutex
+	// errOnCall fails exactly that 1-based call number with err; 0 disables,
+	// so err alone still fails every call.
+	errOnCall int
 }
 
 func (f *fakeSyncer) Sync(_ context.Context, peer netip.AddrPort, expect transport.Peer, req transport.SyncRequest) (transport.SyncResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, syncCall{peer: peer, expect: expect, req: req})
-	if f.err != nil {
+	if f.err != nil && (f.errOnCall <= 0 || len(f.calls) == f.errOnCall) {
 		return transport.SyncResponse{}, f.err
 	}
 	if f.byPeer != nil {

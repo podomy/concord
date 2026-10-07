@@ -122,7 +122,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	logger.Info("DNS server started")
 
-	client, err := setupSyncTransport(ctx, logger, *nodeConfig, staticKey, noiseIdentity, st.journal, views, pinned)
+	client, err := setupSyncTransport(ctx, logger, *nodeConfig, staticKey, noiseIdentity, st.journal, views, pinned, st.kv)
 	if err != nil {
 		return err
 	}
@@ -368,8 +368,11 @@ func startTransport(
 	static transport.StaticKey,
 	identity peerdiscovery.NoiseIdentity,
 	verify transport.Verifier,
+	kv *kvstore.KVStore,
 ) (*transport.Client, error) {
 	parcel := transport.EncodeParcel(nodeConfig.ID, identity.Generation, identity.Signature)
+
+	offsetIndex := transport.NewOffsetIndex(kv)
 
 	err := transport.Start(
 		ctx,
@@ -377,6 +380,7 @@ func startTransport(
 		static,
 		parcel,
 		verify,
+		offsetIndex,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -400,7 +404,8 @@ func startTransport(
 }
 
 // setupSyncTransport builds the pinning verifier and starts the Noise
-// transport plus sync client.
+// transport plus sync client. The serving side seeks by cursor offset
+// through an index on the shared kv store.
 func setupSyncTransport(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -410,6 +415,7 @@ func setupSyncTransport(
 	j journal.Journal,
 	views []journalview.View,
 	pinned *journalview.PinnedKeys,
+	kv *kvstore.KVStore,
 ) (*transport.Client, error) {
 	// First-seen pinning wraps the CA check for both handshake directions.
 	// Pins persist in the journal, so restarts re-pin from replay.
@@ -418,7 +424,7 @@ func setupSyncTransport(
 		return nil, err
 	}
 
-	return startTransport(ctx, logger, nodeConfig, static, identity, verify)
+	return startTransport(ctx, logger, nodeConfig, static, identity, verify, kv)
 }
 
 // ensureNodeKeys ensures every key this node needs: the WireGuard pair for
