@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <code>binary size 103 MB</code>&nbsp;&nbsp;&nbsp;<code>startup RSS ~54 MB</code>
+  <code>binary size 78 MB</code>&nbsp;&nbsp;&nbsp;<code>startup RSS ~57 MB</code>
 </p>
 
 Concord is an AP distributed system, a runtime and coordination layer
