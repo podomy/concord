@@ -18,10 +18,14 @@ already pulled from that peer. Nothing more. It is a bookmark, not data.
   to and including `evt-120`.
 * No entry for a peer means first contact: pull from B's very first event.
 
-Cursors live in process memory only (`internal/peersync/cursors.go`,
-type `cursorSet`). A restart wipes them, which is why every restart
-re-pulls every peer journal from event zero. That is correct but
-wasteful, and it is the reason persistence is the next job.
+Cursors persist in bbolt (`synccursors` bucket, `internal/peersync/cursors.go`),
+so a restart resumes mid-history instead of re-pulling from event zero.
+A store load failure falls back to empty cursors; idempotent apply
+discards the overlap. That is the whole of it: a plain bucket of
+peer id to cursor string. No view, no journal events. Views project
+journal events and cursors are not one, so there is nothing to project;
+and journaling them would flood the log with an event per peer per tick
+for state no other node can use.
 
 ## One sync round, concretely
 
@@ -71,10 +75,8 @@ guaranteed and the overlap is harmless, because apply skips known ids
 anyway. Neither side ever fully trusts the other's cursor, and neither
 side needs to.
 
-## The two known costs
+## The remaining known cost
 
-* Every restart re-pulls every peer journal from event zero, with
-  dedup absorbing the duplicates. Fix: persist the cursors.
 * To serve one page, the server reads its whole journal file from the
   start to find the skip point. Long journals make every page
   expensive. Fix (separate job): an index from event id to file

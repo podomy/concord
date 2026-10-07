@@ -58,19 +58,19 @@ func testPullState(syncer PeerSync, cursors map[uuid.UUID]string) pullState {
 	}
 }
 
-func TestParseTransportPort(t *testing.T) {
+func TestParsePortOrDefault(t *testing.T) {
 	t.Parallel()
 
-	if got := parseTransportPort("8443"); got != 8443 {
+	if got := parsePortOrDefault("8443"); got != 8443 {
 		t.Fatalf("got %d, want 8443", got)
 	}
-	if got := parseTransportPort("not-a-port"); got != 8443 {
+	if got := parsePortOrDefault("not-a-port"); got != 8443 {
 		t.Fatalf("invalid port fallback: got %d", got)
 	}
-	if got := parseTransportPort("0"); got != 8443 {
+	if got := parsePortOrDefault("0"); got != 8443 {
 		t.Fatalf("zero port fallback: got %d", got)
 	}
-	if got := parseTransportPort("9000"); got != 9000 {
+	if got := parsePortOrDefault("9000"); got != 9000 {
 		t.Fatalf("got %d, want 9000", got)
 	}
 }
@@ -524,7 +524,7 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		j := &memJournal{}
-		RunPullLoop(ctx, zap.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j})
+		RunPullLoop(ctx, zap.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j}, nil)
 		close(done)
 	}()
 

@@ -127,7 +127,8 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return err
 	}
 	// Reconciliation loop: pull peers and apply events into
-	// local journal/views.
+	// local journal/views. Cursors persist in the kv store so
+	// restarts resume mid-history.
 	go peersync.RunPullLoop(
 		ctx,
 		logger,
@@ -137,6 +138,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		st.journal,
 		views,
 		eventsByID,
+		peersync.NewCursorStore(st.kv),
 	)
 	logger.Info("peer sync pull loop started")
 

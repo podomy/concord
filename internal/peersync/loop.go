@@ -41,11 +41,13 @@ type MemberSource interface {
 //     (skipped if already synced this tick for a meet).
 //
 // After each successful Sync, events are applied idempotently (skip known ids)
-// into the local journal and views. The cursor advances only if apply succeeds.
+// into the local journal and views. The cursor advances only if apply succeeds,
+// in memory and in the store together.
 //
-// Cursors live only in process memory: a process restart starts again
-// from an empty cursor (full pull from the peer's start). Idempotent
-// apply on event id is what prevents duplicate journal rows after replay.
+// Cursors persist in bbolt through the store, so a restart resumes mid-history
+// instead of re-pulling from event zero. A store load failure starts from empty
+// cursors instead; idempotent apply discards the overlap. A nil store keeps
+// RAM-only behavior and exists for unit tests.
 //
 // Individual Sync/apply failures are soft-fail (log and continue). The loop
 // blocks until ctx is cancelled.
@@ -58,20 +60,30 @@ func RunPullLoop(
 	j journal.Journal,
 	views []journalview.View,
 	byID EventByID,
+	cursorStore *cursorStore,
 ) {
 	previous := map[uuid.UUID]peerdiscovery.Node{}
 	cursors := newCursorSet()
+	if cursorStore != nil {
+		loaded, err := cursorStore.load()
+		if err != nil {
+			logger.Warn("load persisted cursors, starting empty", zap.Error(err))
+		} else {
+			cursors = loaded
+		}
+	}
 	ticker := time.NewTicker(defaultPullInterval)
 	defer ticker.Stop()
 
-	port := parseTransportPort(transport.Port)
+	port := parsePortOrDefault(transport.Port)
 	state := pullState{
-		syncer:  syncer,
-		journal: j,
-		views:   views,
-		byID:    byID,
-		port:    port,
-		cursors: cursors,
+		syncer:      syncer,
+		journal:     j,
+		views:       views,
+		byID:        byID,
+		port:        port,
+		cursors:     cursors,
+		cursorStore: cursorStore,
 	}
 
 	for {
@@ -86,12 +98,13 @@ func RunPullLoop(
 
 // pullState is the per-loop dependencies shared by meet/periodic/syncOne.
 type pullState struct {
-	syncer  PeerSync
-	journal journal.Journal
-	views   []journalview.View
-	byID    EventByID
-	port    uint16
-	cursors cursorSet
+	syncer      PeerSync
+	journal     journal.Journal
+	views       []journalview.View
+	byID        EventByID
+	port        uint16
+	cursors     cursorSet
+	cursorStore *cursorStore
 }
 
 // pullTick runs one reconciliation pass: list members, meet pulls, periodic pulls.
@@ -222,7 +235,16 @@ func syncOne(
 		return false
 	}
 
-	state.cursors.advance(member.ID, res.NextWatermark)
+	moved := state.cursors.advance(member.ID, res.NextWatermark)
+	if moved && state.cursorStore != nil {
+		err := state.cursorStore.save(member.ID, res.NextWatermark)
+		if err != nil {
+			logger.Warn("persist cursor failed",
+				zap.String("peer_id", member.ID.String()),
+				zap.Error(err),
+			)
+		}
+	}
 
 	logger.Info("peer sync ok",
 		zap.String("peer_id", member.ID.String()),
@@ -248,11 +270,17 @@ func noisePeer(member peerdiscovery.Node) (transport.Peer, bool) {
 	}, true
 }
 
-// parseTransportPort parses transport.Port; invalid or zero falls back to 8443.
-func parseTransportPort(port string) uint16 {
-	n, err := strconv.ParseUint(port, 10, 16)
+// fallbackTransportPort is the Noise transport port used when the
+// configured value is missing or malformed.
+const fallbackTransportPort = 8443
+
+// parsePortOrDefault parses a decimal port string, falling back to
+// fallbackTransportPort on garbage or zero. Zero is rejected because
+// dialing port zero never reaches the transport.
+func parsePortOrDefault(raw string) uint16 {
+	n, err := strconv.ParseUint(raw, 10, 16)
 	if err != nil || n == 0 {
-		return 8443
+		return fallbackTransportPort
 	}
 	return uint16(n)
 }
