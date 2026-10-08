@@ -78,9 +78,13 @@ func RunLoop(
 	defer ticker.Stop()
 
 	// The fast beat checks local health; the slow beat converges the world.
-	// Both run in this goroutine so the running maps need no locking.
+	// History captures on its own slow beat so trends cost one append per
+	// 5s, never per sample. All three run in this goroutine so the running
+	// maps need no locking.
 	fastTicker := time.NewTicker(fastTickInterval)
 	defer fastTicker.Stop()
+	historyTicker := time.NewTicker(historyInterval)
+	defer historyTicker.Stop()
 
 	exitEvents := make(chan ExitEvent, 100)
 
@@ -108,6 +112,9 @@ func RunLoop(
 
 		case <-fastTicker.C:
 			runFastTick(ctx, logger, sampler, running, j, views, nodeID, peerService)
+
+		case <-historyTicker.C:
+			sampler.CaptureTrend()
 		}
 	}
 }

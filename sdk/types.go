@@ -60,11 +60,13 @@ type Workload struct {
 // stats exist only where the workload runs, so the local node is always
 // the relevant one.
 type WorkloadStats struct {
-	CPUPercent uint8      `json:"cpu_percent"`
-	MemPercent uint8      `json:"mem_percent"`
-	MemUsageMB uint64     `json:"mem_usage_mb"`
-	MemLimitMB uint64     `json:"mem_limit_mb"`
-	Node       NodeStatus `json:"node"`
+	CPUPercent    uint8      `json:"cpu_percent"`
+	MemPercent    uint8      `json:"mem_percent"`
+	MemUsageMB    uint64     `json:"mem_usage_mb"`
+	MemLimitMB    uint64     `json:"mem_limit_mb"`
+	AvgCPUPercent uint8      `json:"avg_cpu_percent"`
+	AvgMemPercent uint8      `json:"avg_mem_percent"`
+	Node          NodeStatus `json:"node"`
 }
 
 // NodeStatus is a node's identity plus CPU, memory, and disk utilization

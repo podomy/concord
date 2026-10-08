@@ -60,6 +60,9 @@ type Client interface {
 	// Stats returns live utilization for one running workload.
 	Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, error)
 
+	// Metrics returns sampler state in Prometheus text exposition format.
+	Metrics(ctx context.Context) (string, error)
+
 	// Nodes lists all known cluster nodes and their network status.
 	Nodes(ctx context.Context) ([]Node, error)
 
@@ -261,6 +264,31 @@ func (c *unixClient) Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, e
 	}
 
 	return &stats, nil
+}
+
+// Metrics returns sampler state in Prometheus text exposition format.
+func (c *unixClient) Metrics(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, unixSocketHost+"/metrics", nil)
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("metrics request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return string(body), nil
 }
 
 type listResponse struct {

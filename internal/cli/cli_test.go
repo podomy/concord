@@ -207,6 +207,20 @@ func TestCLIWorkloadStats(t *testing.T) {
 	}
 }
 
+func TestCLIMetrics(t *testing.T) {
+	setupCLITest(t)
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"metrics"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("metrics failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "concord_node_cpu_percent") {
+		t.Fatalf("expected exposition output, got:\n%s", out)
+	}
+}
+
 func TestCLINodeListEmpty(t *testing.T) {
 	setupCLITest(t)
 	ctx := context.Background()

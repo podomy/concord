@@ -79,8 +79,8 @@ concord workload stats <id>
 **Output:**
 ```
 Workload 4b8d7a12
-  CPU     25%
-  Memory  50% (512 of 1024 MB)
+  CPU     25% (avg 22%)
+  Memory  50% (512 of 1024 MB, avg 48%)
 Node 9f2c1a44
   CPU     10%
   Memory  20%
@@ -137,6 +137,29 @@ concord node rotate-key
 Deletes the static key and bumps the generation counter. Local file ops
 only, no daemon involved: restart the daemon to apply. The full
 procedure and the pin rules live in `docs/noise.md`.
+
+---
+
+## Metrics
+
+### Scrape Node Metrics
+```bash
+concord metrics
+```
+
+Prints sampler state in Prometheus text exposition format: per-workload
+CPU, memory, and usage plus the node trio. Point readings from memory,
+scraped by anything that speaks the format.
+
+**Output:**
+```
+# HELP concord_node_cpu_percent Node CPU utilization percent.
+# TYPE concord_node_cpu_percent gauge
+concord_node_cpu_percent 10
+# HELP concord_workload_cpu_percent Workload CPU utilization percent.
+# TYPE concord_workload_cpu_percent gauge
+concord_workload_cpu_percent{id="4b8d7a12-..."} 25
+```
 
 ---
 

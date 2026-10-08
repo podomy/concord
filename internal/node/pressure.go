@@ -54,19 +54,21 @@ type workloadPrev struct {
 // only later samples carry deltas. It is safe for concurrent use: the fast
 // beat writes while inspection endpoints read.
 type Sampler struct {
-	mu       sync.Mutex
-	lastCPU  cpuTimes
-	haveHost bool
-	last     HostPressure
-	prev     map[uuid.UUID]workloadPrev
-	samples  map[uuid.UUID]WorkloadSample
+	mu         sync.Mutex
+	lastCPU    cpuTimes
+	haveHost   bool
+	last       HostPressure
+	prev       map[uuid.UUID]workloadPrev
+	samples    map[uuid.UUID]WorkloadSample
+	workTrends map[uuid.UUID]*trend
 }
 
 // NewSampler creates an empty pressure sampler.
 func NewSampler() *Sampler {
 	return &Sampler{
-		prev:    make(map[uuid.UUID]workloadPrev),
-		samples: make(map[uuid.UUID]WorkloadSample),
+		prev:       make(map[uuid.UUID]workloadPrev),
+		samples:    make(map[uuid.UUID]WorkloadSample),
+		workTrends: make(map[uuid.UUID]*trend),
 	}
 }
 
@@ -132,12 +134,13 @@ func (s *Sampler) SampleWorkload(id uuid.UUID, cpuTotal, memUsageBytes, memLimit
 	return sample
 }
 
-// DropWorkload forgets a workload's counters and latest sample.
+// DropWorkload forgets a workload's counters, latest sample, and history.
 func (s *Sampler) DropWorkload(id uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.prev, id)
 	delete(s.samples, id)
+	delete(s.workTrends, id)
 }
 
 // Workloads returns a copy of the latest per-workload samples.
@@ -147,6 +150,35 @@ func (s *Sampler) Workloads() map[uuid.UUID]WorkloadSample {
 	out := make(map[uuid.UUID]WorkloadSample, len(s.samples))
 	maps.Copy(out, s.samples)
 	return out
+}
+
+// CaptureTrend appends the latest readings to their trend series. Call it
+// on a slow beat, not per sample: history is trend context at 5s granularity
+// while latest values stay on the fast beat.
+func (s *Sampler) CaptureTrend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for id, sample := range s.samples {
+		hist, ok := s.workTrends[id]
+		if !ok {
+			hist = newTrend()
+			s.workTrends[id] = hist
+		}
+		hist.add(trendPoint{at: now, cpu: sample.CPUPercent, mem: sample.MemPercent, memMB: sample.MemUsageMB})
+	}
+}
+
+// Trend folds a workload's series into mean CPU and memory percents plus
+// the samples folded. Unknown ids report zeros.
+func (s *Sampler) Trend(id uuid.UUID) (cpu, mem uint8, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hist, ok := s.workTrends[id]
+	if !ok {
+		return 0, 0, 0
+	}
+	return hist.average()
 }
 
 // percentOf returns 100*a/b clamped to 0-100, or 0 when b is 0.

@@ -24,6 +24,7 @@ under unreliable, intermittent, and partitioned networks.`,
 	rootCmd.AddCommand(
 		newWorkloadCommand(),
 		newNodeCommand(),
+		newMetricsCommand(),
 	)
 
 	return rootCmd

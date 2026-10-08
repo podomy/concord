@@ -23,6 +23,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workloads", s.handleListWorkloads)
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", s.handleDeleteWorkload)
 	mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
 }
@@ -173,6 +174,7 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pressure := s.sampler.LastHost()
+	avgCPU, avgMem, _ := s.sampler.Trend(id)
 
 	// The memory limit comes from the spec when it is still around; a
 	// missing spec only drops the limit, never the readings.
@@ -187,10 +189,12 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, sdk.WorkloadStats{
-		CPUPercent: sample.CPUPercent,
-		MemPercent: sample.MemPercent,
-		MemUsageMB: sample.MemUsageMB,
-		MemLimitMB: memLimitMB,
+		CPUPercent:    sample.CPUPercent,
+		MemPercent:    sample.MemPercent,
+		MemUsageMB:    sample.MemUsageMB,
+		MemLimitMB:    memLimitMB,
+		AvgCPUPercent: avgCPU,
+		AvgMemPercent: avgMem,
 		Node: sdk.NodeStatus{
 			ID:          s.nodeID,
 			CPUPercent:  pressure.CPU,

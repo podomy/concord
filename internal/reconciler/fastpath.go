@@ -26,6 +26,11 @@ import (
 // beat reads local state only and never schedules, places, or syncs.
 const fastTickInterval = 500 * time.Millisecond
 
+// historyInterval captures trend history. Five seconds keeps an hour of
+// context in 720 points per series; anything faster belongs in memory on
+// the fast beat, not in history.
+const historyInterval = 5 * time.Second
+
 // runFastTick checks the health of running workloads on the fast beat and
 // samples pressure for the scheduler and inspection. It appends journal
 // events solely on transitions (see runHealthChecks), so the fast cadence

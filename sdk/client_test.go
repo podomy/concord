@@ -67,10 +67,12 @@ func TestClient_Stats_Success(t *testing.T) {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
 		writeJSONResponse(t, w, http.StatusOK, map[string]any{
-			"cpu_percent":  25,
-			"mem_percent":  50,
-			"mem_usage_mb": 512,
-			"mem_limit_mb": 1024,
+			"cpu_percent":     25,
+			"mem_percent":     50,
+			"mem_usage_mb":    512,
+			"mem_limit_mb":    1024,
+			"avg_cpu_percent": 20,
+			"avg_mem_percent": 45,
 			"node": map[string]any{
 				"id":           targetID.String(),
 				"cpu_percent":  10,
@@ -94,14 +96,43 @@ func TestClient_Stats_Success(t *testing.T) {
 		t.Fatalf("unexpected stats error: %v", err)
 	}
 	want := sdk.WorkloadStats{
-		CPUPercent: 25,
-		MemPercent: 50,
-		MemUsageMB: 512,
-		MemLimitMB: 1024,
-		Node:       sdk.NodeStatus{ID: targetID, CPUPercent: 10, MemPercent: 20, DiskPercent: 30},
+		CPUPercent:    25,
+		MemPercent:    50,
+		MemUsageMB:    512,
+		MemLimitMB:    1024,
+		AvgCPUPercent: 20,
+		AvgMemPercent: 45,
+		Node:          sdk.NodeStatus{ID: targetID, CPUPercent: 10, MemPercent: 20, DiskPercent: 30},
 	}
 	if !reflect.DeepEqual(want, *stats) {
 		t.Fatalf("stats = %+v, want %+v", stats, want)
+	}
+}
+
+func TestClient_Metrics(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = w.Write([]byte("concord_node_cpu_percent 10\n")) //nolint:errcheck // test stub
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	body, err := client.Metrics(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected metrics error: %v", err)
+	}
+	if body != "concord_node_cpu_percent 10\n" {
+		t.Fatalf("body = %q", body)
 	}
 }
 

@@ -25,6 +25,37 @@ event, which every node merges and agrees on. Rising edges work the
 same way. Edges are events with history; samples are readings without
 any.
 
+## Beats and routing
+
+Three beats share one goroutine, so nothing races and nothing locks:
+
+```
+time ───────────────────────────────────────────────────▶
+fast  ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲ sample + health (500ms)
+slow  ▲                       ▲ reconcile + place (5s)
+trend ▲                       ▲ capture trends (5s)
+```
+
+The beats divide the work: fast samples into memory and gossips the
+trio, slow reads gossip and places, trend folds latest readings into
+rings. All three share one goroutine, so no maps need locking; the
+price is that a slow reconcile delays fast beats, accepted until health
+latency needs the guarantee a mutex would buy.
+
+Everything the sampler holds leaves through exactly one door:
+
+```
+sampler (memory only)
+  ├── trio ────────▶ gossip ──▶ scheduler (slow tick, leader)
+  ├── latest ──────▶ stats endpoint ──▶ CLI, SDK
+  ├── trends ──────▶ stats averages
+  ├── points ──────▶ /metrics ──▶ scrapers
+  └── edges ───────▶ journal (transitions only)
+```
+
+No door leads to another: gossip never carries samples, the journal
+never carries readings, exposition never carries history.
+
 ## The trio
 
 Each node samples three utilizations as 0-100 percents:
@@ -76,6 +107,18 @@ percent and memory against its limit. Served through
 `GET /v1/workloads/{id}/stats` and `workload stats`, in memory only.
 Operators see what each workload costs; the mesh never hears about it.
 
+## History and exposition
+
+Latest values answer "how loaded now"; trends answer "where is it
+going". Every 5 seconds the reconciler captures current readings into
+round-robin trend series, 720 slots each, one hour of context per series
+with memory flat forever. `workload stats` shows the window average beside
+the live reading, and `GET /metrics` (plus `concord metrics`) serves
+everything in Prometheus text exposition format for external
+collectors. Trends hold the window, exposition serves points, the journal
+carries neither: history that never converges stays out of the log by
+the same rule as samples.
+
 ## What stays out
 
 Per-sample journal writes, per-workload gossip, cross-node rollups, and
@@ -83,7 +126,7 @@ new dependencies. `/proc`, `Statfs`, and libcontainer cover it all.
 
 ## Where it lives
 
-Sampler (`internal/node/pressure.go`), gossip fields and `SetPressure`
-(`internal/peerdiscovery/`), placement (`pickNode` in
-`internal/reconciler/scheduler.go`), inspection (IPC stats endpoint,
-SDK `Stats`, CLI).
+Sampler (`internal/node/pressure.go`, trends in `internal/node/trend.go`),
+gossip fields and `SetPressure` (`internal/peerdiscovery/`), placement
+(`pickNode` in `internal/reconciler/scheduler.go`), inspection (IPC stats
+and metrics endpoints, SDK `Stats` and `Metrics`, CLI).

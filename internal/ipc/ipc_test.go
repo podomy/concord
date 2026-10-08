@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +153,11 @@ func TestIPCStats(t *testing.T) {
 	ctx := context.Background()
 
 	id := uuid.New()
-	h.sampler.SampleWorkload(id, 250_000_000, 256*1024*1024, 1024*1024*1024, time.Now())
+	t0 := time.Now()
+	h.sampler.SampleWorkload(id, 250_000_000, 256*1024*1024, 1024*1024*1024, t0)
+	h.sampler.CaptureTrend()
+	h.sampler.SampleWorkload(id, 750_000_000, 256*1024*1024, 1024*1024*1024, t0.Add(2*time.Second))
+	h.sampler.CaptureTrend()
 	if _, err := h.sampler.SampleHost(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,12 +169,20 @@ func TestIPCStats(t *testing.T) {
 	if got.MemPercent != 25 || got.MemUsageMB != 256 {
 		t.Fatalf("stats = %+v", got)
 	}
+	if got.AvgCPUPercent != 12 || got.AvgMemPercent != 25 {
+		t.Fatalf("trend = %d/%d", got.AvgCPUPercent, got.AvgMemPercent)
+	}
 	if got.MemLimitMB != 0 {
 		t.Fatalf("limit without spec = %d, want 0", got.MemLimitMB)
 	}
 	if got.Node.MemPercent > 100 || got.Node.DiskPercent > 100 {
 		t.Fatalf("node = %+v", got.Node)
 	}
+}
+
+func TestIPCStatsMemLimit(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
 
 	w := mustBuild(t, sdk.NewWorkload().Image("app:latest").MemoryMB(1024))
 	specID := mustSubmit(t, h.client, ctx, w)
@@ -184,6 +197,30 @@ func TestIPCStats(t *testing.T) {
 
 	if _, err := h.client.Stats(ctx, uuid.New()); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestIPCMetrics(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	id := uuid.New()
+	h.sampler.SampleWorkload(id, 0, 128*1024*1024, 0, time.Now())
+
+	body, err := h.client.Metrics(ctx)
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	for _, want := range []string{
+		"# HELP concord_node_cpu_percent",
+		"# TYPE concord_node_cpu_percent gauge",
+		"concord_node_disk_percent",
+		`concord_workload_cpu_percent{id="` + id.String() + `"}`,
+		"concord_workload_mem_usage_mb",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in:\n%s", want, body)
+		}
 	}
 }
 
