@@ -246,8 +246,17 @@ func handleWorkloadStats(ctx context.Context, stdout io.Writer, idArg string) er
 		return fmt.Errorf("get workload stats %s: %w", targetID, err)
 	}
 
-	_, _ = fmt.Fprintf(stdout, "CPU %d%% MEM %d%% (%d MB)\n", stats.CPUPercent, stats.MemPercent, stats.MemUsageMB)                        //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintf(stdout, "NODE CPU %d%% MEM %d%% DISK %d%%\n", stats.Node.CPUPercent, stats.Node.MemPercent, stats.Node.DiskPercent) //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "Workload %s\n", truncateID(targetID)) //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "  CPU     %d%%\n", stats.CPUPercent)  //nolint:errcheck // CLI output
+	if stats.MemLimitMB > 0 {
+		_, _ = fmt.Fprintf(stdout, "  Memory  %d%% (%d of %d MB)\n", stats.MemPercent, stats.MemUsageMB, stats.MemLimitMB) //nolint:errcheck // CLI output
+	} else {
+		_, _ = fmt.Fprintf(stdout, "  Memory  %d%% (%d MB)\n", stats.MemPercent, stats.MemUsageMB) //nolint:errcheck // CLI output
+	}
+	_, _ = fmt.Fprintf(stdout, "Node %s\n", truncateID(stats.Node.ID))     //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "  CPU     %d%%\n", stats.Node.CPUPercent)  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "  Memory  %d%%\n", stats.Node.MemPercent)  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "  Disk    %d%%\n", stats.Node.DiskPercent) //nolint:errcheck // CLI output
 	return nil
 }
 

@@ -30,6 +30,15 @@ any.
 Each node samples three utilizations as 0-100 percents:
 
 * CPU from `/proc/stat` deltas between beats (first sample reports 0).
+  Utilization is inherently a ratio over time: two cumulative counters
+  differenced, not a value read off disk.
+
+  ```
+  CPU% = 100 × busy_delta / total_delta
+       = 100 × (1 − idle_delta / total_delta)
+  ```
+
+  Both deltas span the same two beats; idle counts idle plus iowait.
 * Memory as used over total from `/proc/meminfo`.
 * Disk as used blocks over total on the concord data disk.
 

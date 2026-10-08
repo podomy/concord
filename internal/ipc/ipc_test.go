@@ -164,8 +164,22 @@ func TestIPCStats(t *testing.T) {
 	if got.MemPercent != 25 || got.MemUsageMB != 256 {
 		t.Fatalf("stats = %+v", got)
 	}
+	if got.MemLimitMB != 0 {
+		t.Fatalf("limit without spec = %d, want 0", got.MemLimitMB)
+	}
 	if got.Node.MemPercent > 100 || got.Node.DiskPercent > 100 {
 		t.Fatalf("node = %+v", got.Node)
+	}
+
+	w := mustBuild(t, sdk.NewWorkload().Image("app:latest").MemoryMB(1024))
+	specID := mustSubmit(t, h.client, ctx, w)
+	h.sampler.SampleWorkload(specID, 0, 0, 0, time.Now())
+	specStats, err := h.client.Stats(ctx, specID)
+	if err != nil {
+		t.Fatalf("stats with spec: %v", err)
+	}
+	if specStats.MemLimitMB != 1024 {
+		t.Fatalf("limit = %d, want 1024", specStats.MemLimitMB)
 	}
 
 	if _, err := h.client.Stats(ctx, uuid.New()); !errors.Is(err, sdk.ErrNotFound) {

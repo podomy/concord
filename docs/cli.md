@@ -78,13 +78,19 @@ concord workload stats <id>
 
 **Output:**
 ```
-CPU 25% MEM 50% (512 MB)
-NODE CPU 10% MEM 20% DISK 30%
+Workload 4b8d7a12
+  CPU     25%
+  Memory  50% (512 of 1024 MB)
+Node 9f2c1a44
+  CPU     10%
+  Memory  20%
+  Disk    30%
 ```
 
-The second line is the local node's pressure trio: stats exist only
-where the workload runs, so the local node is always the relevant
-context.
+Labeled lines with units everywhere; the memory line names the limit so
+the percent means something (`512 MB` alone when unlimited). The node
+block is the local node's trio: stats exist only where the workload
+runs, so the local node is always the relevant context.
 
 Percents are 0-100 utilization: CPU from `/proc/stat` deltas between
 beats (first sample reports 0), memory as used over total, disk as used

@@ -202,7 +202,7 @@ func TestCLIWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workload stats failed: %v, stderr: %s", err, stderr.String())
 	}
-	if out := stdout.String(); !strings.Contains(out, "128 MB") || !strings.Contains(out, "NODE CPU") {
+	if out := stdout.String(); !strings.Contains(out, "128 MB") || !strings.Contains(out, "Disk") {
 		t.Fatalf("expected memory usage and node pressure in output, got:\n%s", out)
 	}
 }

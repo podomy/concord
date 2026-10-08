@@ -174,11 +174,25 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 	}
 	pressure := s.sampler.LastHost()
 
+	// The memory limit comes from the spec when it is still around; a
+	// missing spec only drops the limit, never the readings.
+	var memLimitMB uint64
+	if s.workloads != nil {
+		spec, err := s.workloads.Get(r.Context(), id)
+		if err != nil {
+			s.logger.Error("get workload for stats", zap.Error(err), zap.String("id", idStr))
+		} else if spec != nil && spec.Resources.MemoryMB > 0 {
+			memLimitMB = uint64(spec.Resources.MemoryMB)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, sdk.WorkloadStats{
 		CPUPercent: sample.CPUPercent,
 		MemPercent: sample.MemPercent,
 		MemUsageMB: sample.MemUsageMB,
-		Node: sdk.NodePressure{
+		MemLimitMB: memLimitMB,
+		Node: sdk.NodeStatus{
+			ID:          s.nodeID,
 			CPUPercent:  pressure.CPU,
 			MemPercent:  pressure.Mem,
 			DiskPercent: pressure.Disk,

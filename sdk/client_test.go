@@ -70,7 +70,9 @@ func TestClient_Stats_Success(t *testing.T) {
 			"cpu_percent":  25,
 			"mem_percent":  50,
 			"mem_usage_mb": 512,
+			"mem_limit_mb": 1024,
 			"node": map[string]any{
+				"id":           targetID.String(),
 				"cpu_percent":  10,
 				"mem_percent":  20,
 				"disk_percent": 30,
@@ -95,7 +97,8 @@ func TestClient_Stats_Success(t *testing.T) {
 		CPUPercent: 25,
 		MemPercent: 50,
 		MemUsageMB: 512,
-		Node:       sdk.NodePressure{CPUPercent: 10, MemPercent: 20, DiskPercent: 30},
+		MemLimitMB: 1024,
+		Node:       sdk.NodeStatus{ID: targetID, CPUPercent: 10, MemPercent: 20, DiskPercent: 30},
 	}
 	if !reflect.DeepEqual(want, *stats) {
 		t.Fatalf("stats = %+v, want %+v", stats, want)

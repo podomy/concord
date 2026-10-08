@@ -142,6 +142,13 @@ stays at one node.
 
 In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the alive peer with the lowest pressure, breaking ties by fewest active workloads. When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below. Pressure sampling and placement order are detailed in `docs/metrics.md`.
 
+The scheduler reads pressure only from gossip, never from the local
+sampler, and that indirection is intentional. The leader sees exactly
+what every other node sees, no special-cased self, so each partition's
+leader places from its partition's gossip under the same rule. A
+sampler-direct read would be fresher for self and staler for peers,
+splitting the decision input for no gain.
+
 ---
 
 ## Orphan reassignment

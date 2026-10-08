@@ -55,21 +55,25 @@ type Workload struct {
 
 // WorkloadStats reports live utilization for one running workload.
 // These are sampled readings, not desired state: they never enter the
-// journal and never appear on submit. Node carries the local node's
-// pressure trio as context: stats exist only where the workload runs,
-// so the local node is always the relevant one.
+// journal and never appear on submit. MemLimitMB is 0 when unlimited.
+// Node carries the local node's identity and pressure trio as context:
+// stats exist only where the workload runs, so the local node is always
+// the relevant one.
 type WorkloadStats struct {
-	CPUPercent uint8        `json:"cpu_percent"`
-	MemPercent uint8        `json:"mem_percent"`
-	MemUsageMB uint64       `json:"mem_usage_mb"`
-	Node       NodePressure `json:"node"`
+	CPUPercent uint8      `json:"cpu_percent"`
+	MemPercent uint8      `json:"mem_percent"`
+	MemUsageMB uint64     `json:"mem_usage_mb"`
+	MemLimitMB uint64     `json:"mem_limit_mb"`
+	Node       NodeStatus `json:"node"`
 }
 
-// NodePressure is CPU, memory, and disk utilization as 0-100 percents.
-type NodePressure struct {
-	CPUPercent  uint8 `json:"cpu_percent"`
-	MemPercent  uint8 `json:"mem_percent"`
-	DiskPercent uint8 `json:"disk_percent"`
+// NodeStatus is a node's identity plus CPU, memory, and disk utilization
+// as 0-100 percents.
+type NodeStatus struct {
+	ID          uuid.UUID `json:"id"`
+	CPUPercent  uint8     `json:"cpu_percent"`
+	MemPercent  uint8     `json:"mem_percent"`
+	DiskPercent uint8     `json:"disk_percent"`
 }
 
 // Node represents a cluster member node and its current health state.
