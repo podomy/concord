@@ -75,6 +75,11 @@ func RunLoop(
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
+	// The fast beat checks local health; the slow beat converges the world.
+	// Both run in this goroutine so the running maps need no locking.
+	fastTicker := time.NewTicker(fastTickInterval)
+	defer fastTicker.Stop()
+
 	exitEvents := make(chan ExitEvent, 100)
 
 	// On restart or full shutdown of concord we pickup the containers that were running.
@@ -98,7 +103,9 @@ func RunLoop(
 			}
 
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService)
-			runHealthChecks(ctx, logger, running, j, views, nodeID)
+
+		case <-fastTicker.C:
+			runFastTick(ctx, logger, running, j, views, nodeID)
 		}
 	}
 }

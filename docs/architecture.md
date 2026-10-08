@@ -163,6 +163,33 @@ An epoch is a reassignment count. Every time the scheduler moves a workload to a
 
 ---
 
+## Reconciliation rhythm
+
+Every loop in concord is a tick, not a subscription. Peer sync pulls
+every 5 seconds, the reconciler compares desired against running every 5
+seconds, health follows the same beat. Each pass looks at the actual
+state, looks at the desired state, and closes the gap. Nothing waits to
+be notified.
+
+That is level-driven reconciliation, and it matches the failure model
+on purpose. A missed notification, a crashed handler, a partition
+healing mid-pass: the next tick picks all of it up without anyone
+having to notice. Event-driven designs react faster but drift silently
+when a delivery drops, which is why even Kubernetes pairs watches with
+resync periods as a backstop. In a system built for partitions, event
+delivery is exactly what cannot be relied on, so the tick is the
+mechanism and five seconds is only its current tuning.
+
+A faster loop does not change this, it nests inside it. Health checks
+and watchdogs that need millisecond reactions run on a short local
+beat over the same running state, and they stay silent: the fast loop
+reads the journal never and writes it only on transitions, a container
+crossing from healthy to sick, a restart decided. Raw observations stay
+in memory; only their edges converge. The slow tick keeps converging
+the world, the fast loop keeps the node alive between ticks.
+
+---
+
 ## Conflict model
 
 Concord sidesteps most conflicts by construction: every `workload run` mints a fresh unique ID, so concurrent submissions never disagree about the same key. Merge of distinct IDs is a union.
