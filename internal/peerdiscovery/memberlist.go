@@ -178,6 +178,9 @@ func Start(
 			Workloads: int(
 				delegate.workloads.Load(),
 			),
+			CPUPercent:      clampPressure(delegate.cpu.Load()),
+			MemPercent:      clampPressure(delegate.mem.Load()),
+			DiskPercent:     clampPressure(delegate.disk.Load()),
 			NoisePublicKey:  identity.Pub,
 			NoiseGeneration: identity.Generation,
 		}
@@ -250,6 +253,25 @@ func (m *MemberService) SetWorkloadCount(n int) {
 	// #nosec G115 -- workload count n fits safely within
 	// int32 range
 	m.delegate.workloads.Store(int32(n))
+}
+
+// SetPressure updates the utilization trio reported in node gossip
+// metadata. Values are 0-100 percents sampled on the fast beat.
+func (m *MemberService) SetPressure(cpu, mem, disk uint8) {
+	if m == nil || m.delegate == nil {
+		return
+	}
+	m.delegate.cpu.Store(uint32(cpu))
+	m.delegate.mem.Store(uint32(mem))
+	m.delegate.disk.Store(uint32(disk))
+}
+
+// clampPressure narrows a stored 0-100 utilization to uint8.
+func clampPressure(v uint32) uint8 {
+	if v > 100 {
+		return 100
+	}
+	return uint8(v)
 }
 
 // ResolveAdvertise picks the address other peers should
@@ -504,11 +526,14 @@ func memberState(state memberlist.NodeStateType) NodeState {
 
 // nodeMetadataDelegate implements memberlist.Delegate to
 // serialize and gossip local node metadata (CPU, Memory,
-// and active container workload counts)
+// utilization pressure, and active container workload counts)
 // across cluster peers.
 type nodeMetadataDelegate struct {
 	meta      func() NodeMetadata
 	workloads atomic.Int32
+	cpu       atomic.Uint32
+	mem       atomic.Uint32
+	disk      atomic.Uint32
 }
 
 // NodeMeta produces JSON-serialized metadata for this node

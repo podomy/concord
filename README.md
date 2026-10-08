@@ -33,6 +33,7 @@ reunion, and scheduling.
 - [Architecture](./docs/architecture.md)
 - [Noise Transport](./docs/noise.md)
 - [Journal Sync](./docs/cursors.md)
+- [Metrics and Pressure](./docs/metrics.md)
 - [CLI Reference](./docs/cli.md)
 - [Go SDK Reference](./docs/sdk.md)
 - [Deployment Guide](./docs/deployment.md)

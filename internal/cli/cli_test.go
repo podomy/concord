@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -19,9 +20,10 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
+	"github.com/podomy/concord/internal/node"
 )
 
-func setupCLITest(t *testing.T) {
+func setupCLITest(t *testing.T) *node.Sampler {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -50,7 +52,8 @@ func setupCLITest(t *testing.T) {
 	views := []journalview.View{workloads}
 
 	nodeID := uuid.New()
-	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop())
+	sampler := node.NewSampler()
+	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -70,6 +73,8 @@ func setupCLITest(t *testing.T) {
 			t.Logf("close kv: %v", err)
 		}
 	})
+
+	return sampler
 }
 
 func TestCLIMainHelp(t *testing.T) {
@@ -177,6 +182,29 @@ func TestCLIWorkloadLifecycle(t *testing.T) {
 	testVerifyList(t, ctx, shortID)
 	testVerifyInspect(t, ctx, shortID, workloadID)
 	testStopWorkload(t, ctx, shortID)
+}
+
+func TestCLIWorkloadStats(t *testing.T) {
+	sampler := setupCLITest(t)
+	ctx := context.Background()
+
+	workloadID := testSubmitWorkload(t, ctx)
+	shortID := workloadID[:8]
+
+	id, err := uuid.Parse(workloadID)
+	if err != nil {
+		t.Fatalf("parse workload id: %v", err)
+	}
+	sampler.SampleWorkload(id, 0, 128*1024*1024, 0, time.Now())
+
+	var stdout, stderr bytes.Buffer
+	err = cli.Execute(ctx, []string{"workload", "stats", shortID}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload stats failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "128 MB") || !strings.Contains(out, "NODE CPU") {
+		t.Fatalf("expected memory usage and node pressure in output, got:\n%s", out)
+	}
 }
 
 func TestCLINodeListEmpty(t *testing.T) {

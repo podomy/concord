@@ -53,10 +53,32 @@ type Workload struct {
 	HealthPath         string            `json:"health_path,omitempty"`
 }
 
+// WorkloadStats reports live utilization for one running workload.
+// These are sampled readings, not desired state: they never enter the
+// journal and never appear on submit. Node carries the local node's
+// pressure trio as context: stats exist only where the workload runs,
+// so the local node is always the relevant one.
+type WorkloadStats struct {
+	CPUPercent uint8        `json:"cpu_percent"`
+	MemPercent uint8        `json:"mem_percent"`
+	MemUsageMB uint64       `json:"mem_usage_mb"`
+	Node       NodePressure `json:"node"`
+}
+
+// NodePressure is CPU, memory, and disk utilization as 0-100 percents.
+type NodePressure struct {
+	CPUPercent  uint8 `json:"cpu_percent"`
+	MemPercent  uint8 `json:"mem_percent"`
+	DiskPercent uint8 `json:"disk_percent"`
+}
+
 // Node represents a cluster member node and its current health state.
 type Node struct {
 	ID                 uuid.UUID `json:"id"`
 	Address            string    `json:"address"`
 	State              string    `json:"state"`
 	WireGuardPublicKey string    `json:"wireguard_public_key,omitempty"`
+	CPUPercent         uint8     `json:"cpu_percent,omitempty"`
+	MemPercent         uint8     `json:"mem_percent,omitempty"`
+	DiskPercent        uint8     `json:"disk_percent,omitempty"`
 }

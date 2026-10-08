@@ -6,6 +6,7 @@ package ipc_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
+	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/sdk"
 )
 
@@ -28,6 +30,7 @@ type testHarness struct {
 	kv         *kvstore.KVStore
 	journal    *journal.JSONL
 	workloads  *journalview.Workloads
+	sampler    *node.Sampler
 }
 
 func setupTestServer(t *testing.T) *testHarness {
@@ -52,7 +55,8 @@ func setupTestServer(t *testing.T) *testHarness {
 	views := []journalview.View{workloads}
 
 	nodeID := uuid.New()
-	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop())
+	sampler := node.NewSampler()
+	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -89,6 +93,7 @@ func setupTestServer(t *testing.T) *testHarness {
 		kv:         kv,
 		journal:    j,
 		workloads:  workloads,
+		sampler:    sampler,
 	}
 }
 
@@ -133,6 +138,38 @@ func TestIPCSubmitAndGet(t *testing.T) {
 	diff := cmp.Diff(id, got.ID)
 	if diff != "" {
 		t.Fatalf("workload ID mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestIPCStats(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "concord"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	id := uuid.New()
+	h.sampler.SampleWorkload(id, 250_000_000, 256*1024*1024, 1024*1024*1024, time.Now())
+	if _, err := h.sampler.SampleHost(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := h.client.Stats(ctx, id)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if got.MemPercent != 25 || got.MemUsageMB != 256 {
+		t.Fatalf("stats = %+v", got)
+	}
+	if got.Node.MemPercent > 100 || got.Node.DiskPercent > 100 {
+		t.Fatalf("node = %+v", got.Node)
+	}
+
+	if _, err := h.client.Stats(ctx, uuid.New()); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -276,7 +313,7 @@ func TestIPCServerGracefulShutdown(t *testing.T) {
 	workloads := journalview.NewWorkloads(kv)
 	views := []journalview.View{workloads}
 
-	server := ipc.NewServer(uuid.New(), j, views, workloads, nil, zap.NewNop())
+	server := ipc.NewServer(uuid.New(), j, views, workloads, nil, zap.NewNop(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := server.Start(ctx, socketPath); err != nil {

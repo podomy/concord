@@ -142,7 +142,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	)
 	logger.Info("peer sync pull loop started")
 
-	// Start the workload infrastructure and network.
+	// Start the workload infrastructure and network. The sampler is shared
+	// between the reconciler fast beat (writes) and the IPC server (reads).
+	sampler := node.NewSampler()
 	ocireg, err := startWorkloadAndNetwork(
 		ctx,
 		nodeConfig.ID,
@@ -152,6 +154,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		workloads,
 		views,
 		wgKey,
+		sampler,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -169,6 +172,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		workloads,
 		peerService,
 		logger,
+		sampler,
 	)
 	if err := ipcServer.Start(ctx, ""); err != nil {
 		return fmt.Errorf("start local ipc server: %w", err)
@@ -244,6 +248,7 @@ func startWorkloadInfrastructure(
 	st *stores,
 	workloads *journalview.Workloads,
 	views []journalview.View,
+	sampler *node.Sampler,
 ) (*or.Registry, error) {
 	// Start the OCI registry.
 	ocireg, err := startOCIRegistry(
@@ -276,6 +281,7 @@ func startWorkloadInfrastructure(
 		workloads,
 		views,
 		peerService,
+		sampler,
 	)
 	logger.Info("workload reconciler started")
 
@@ -291,6 +297,7 @@ func startWorkloadAndNetwork(
 	workloads *journalview.Workloads,
 	views []journalview.View,
 	wgKey cn.Key,
+	sampler *node.Sampler,
 ) (*or.Registry, error) {
 	ocireg, err := startWorkloadInfrastructure(
 		ctx,
@@ -300,6 +307,7 @@ func startWorkloadAndNetwork(
 		st,
 		workloads,
 		views,
+		sampler,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

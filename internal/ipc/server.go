@@ -19,6 +19,7 @@ import (
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
+	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/sdk"
 )
@@ -40,6 +41,7 @@ type Server struct {
 	views       []journalview.View
 	workloads   *journalview.Workloads
 	peerService *peerdiscovery.MemberService
+	sampler     *node.Sampler
 	logger      *zap.Logger
 
 	mu         sync.Mutex
@@ -57,6 +59,7 @@ func NewServer(
 	workloads *journalview.Workloads,
 	peerService *peerdiscovery.MemberService,
 	logger *zap.Logger,
+	sampler *node.Sampler,
 ) *Server {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -68,6 +71,7 @@ func NewServer(
 		views:       views,
 		workloads:   workloads,
 		peerService: peerService,
+		sampler:     sampler,
 		logger:      logger.Named("ipc"),
 	}
 }

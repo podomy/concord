@@ -153,8 +153,9 @@ func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal
 	}
 }
 
-// pickNode selects the peer discovery node with the fewest running workloads,
+// pickNode selects the peer discovery node with the lowest pressure,
 // prioritizing healthy (NodeStateAlive) peers over inactive/dead nodes.
+// Equal pressure falls back to fewest running workloads.
 func pickNode(members []peerdiscovery.Node) peerdiscovery.Node {
 	best := members[0]
 
@@ -164,11 +165,27 @@ func pickNode(members []peerdiscovery.Node) peerdiscovery.Node {
 			best = member
 			continue
 		}
-		// If both share the same liveness state, select the one with fewer workloads.
-		if member.State == best.State && member.Metadata.Workloads < best.Metadata.Workloads {
+		if member.State != best.State {
+			continue
+		}
+		// Lowest pressure wins; fewest workloads breaks ties.
+		memberPressure, bestPressure := nodePressure(member), nodePressure(best)
+		if memberPressure != bestPressure {
+			if memberPressure < bestPressure {
+				best = member
+			}
+			continue
+		}
+		if member.Metadata.Workloads < best.Metadata.Workloads {
 			best = member
 		}
 	}
 
 	return best
+}
+
+// nodePressure reduces a member's utilization trio to one number: the max,
+// so a node is as loaded as its most constrained resource.
+func nodePressure(member peerdiscovery.Node) uint8 {
+	return max(member.Metadata.CPUPercent, member.Metadata.MemPercent, member.Metadata.DiskPercent)
 }

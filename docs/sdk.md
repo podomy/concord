@@ -45,6 +45,7 @@ fmt.Printf("Workload submitted: %s\n", id)
 | `client.Stop(ctx, id)` | Stop and remove a workload |
 | `client.Get(ctx, id)` | Fetch a workload spec by UUID |
 | `client.List(ctx)` | List active workloads |
+| `client.Stats(ctx, id)` | Live utilization for one workload |
 | `client.Nodes(ctx)` | List cluster nodes |
 
 Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.

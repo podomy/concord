@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -53,6 +54,51 @@ func writeJSONResponse(t *testing.T, w http.ResponseWriter, status int, data any
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		t.Fatalf("write JSON response failed: %v", err)
+	}
+}
+
+func TestClient_Stats_Success(t *testing.T) {
+	t.Parallel()
+
+	targetID := uuid.New()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/workloads/"+targetID.String()+"/stats" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		writeJSONResponse(t, w, http.StatusOK, map[string]any{
+			"cpu_percent":  25,
+			"mem_percent":  50,
+			"mem_usage_mb": 512,
+			"node": map[string]any{
+				"cpu_percent":  10,
+				"mem_percent":  20,
+				"disk_percent": 30,
+			},
+		})
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	stats, err := client.Stats(context.Background(), targetID)
+	if err != nil {
+		t.Fatalf("unexpected stats error: %v", err)
+	}
+	want := sdk.WorkloadStats{
+		CPUPercent: 25,
+		MemPercent: 50,
+		MemUsageMB: 512,
+		Node:       sdk.NodePressure{CPUPercent: 10, MemPercent: 20, DiskPercent: 30},
+	}
+	if !reflect.DeepEqual(want, *stats) {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
 	}
 }
 

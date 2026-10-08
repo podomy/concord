@@ -57,6 +57,9 @@ type Client interface {
 	// List returns all active workloads currently recorded in the cluster view.
 	List(ctx context.Context) ([]Workload, error)
 
+	// Stats returns live utilization for one running workload.
+	Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, error)
+
 	// Nodes lists all known cluster nodes and their network status.
 	Nodes(ctx context.Context) ([]Node, error)
 
@@ -221,6 +224,43 @@ func (c *unixClient) Get(ctx context.Context, id uuid.UUID) (*Workload, error) {
 	}
 
 	return &w, nil
+}
+
+// Stats queries live utilization for one running workload by its UUID.
+// Absent readings (never sampled, already stopped) report ErrNotFound.
+func (c *unixClient) Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, error) {
+	url := unixSocketHost + "/v1/workloads/" + id.String() + "/stats"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("stats request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var stats WorkloadStats
+	err = json.Unmarshal(body, &stats)
+	if err != nil {
+		return nil, fmt.Errorf("decode stats: %w", err)
+	}
+
+	return &stats, nil
 }
 
 type listResponse struct {

@@ -4,6 +4,7 @@
 package peerdiscovery
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/hashicorp/memberlist"
@@ -60,4 +61,39 @@ func TestSetWorkloadCount(t *testing.T) {
 	// Test nil MemberService does not panic.
 	var nilService *MemberService
 	nilService.SetWorkloadCount(10)
+}
+
+// SetPressure lands in gossiped metadata next to the workload count.
+func TestSetPressure(t *testing.T) {
+	t.Parallel()
+
+	delegate := &nodeMetadataDelegate{}
+	delegate.meta = func() NodeMetadata {
+		return NodeMetadata{
+			Workloads:   int(delegate.workloads.Load()),
+			CPUPercent:  clampPressure(delegate.cpu.Load()),
+			MemPercent:  clampPressure(delegate.mem.Load()),
+			DiskPercent: clampPressure(delegate.disk.Load()),
+		}
+	}
+
+	ms := &MemberService{delegate: delegate}
+
+	ms.SetPressure(30, 40, 50)
+	metaBytes := delegate.NodeMeta(512)
+
+	var meta NodeMetadata
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.CPUPercent != 30 || meta.MemPercent != 40 || meta.DiskPercent != 50 {
+		t.Fatalf("pressure = %d/%d/%d", meta.CPUPercent, meta.MemPercent, meta.DiskPercent)
+	}
+	if len(metaBytes) > 512 {
+		t.Fatalf("metadata %d bytes exceeds gossip cap", len(metaBytes))
+	}
+
+	// Test nil MemberService does not panic.
+	var nilService *MemberService
+	nilService.SetPressure(1, 2, 3)
 }

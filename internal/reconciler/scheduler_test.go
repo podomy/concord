@@ -135,6 +135,77 @@ func TestLeaderElectionNilService(t *testing.T) {
 	}
 }
 
+// Lower pressure beats fewer workloads: pressure places, counts tie-break.
+func TestPickNodePrefersLowerPressure(t *testing.T) {
+	t.Parallel()
+
+	loaded := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			Workloads:  0,
+			CPUPercent: 80,
+		},
+	}
+	idle := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			Workloads:  5,
+			CPUPercent: 10,
+		},
+	}
+
+	if chosen := pickNode([]peerdiscovery.Node{loaded, idle}); chosen.ID != idle.ID {
+		t.Fatalf("expected idle node, got %v", chosen.ID)
+	}
+}
+
+// Equal pressure falls back to fewest workloads; the bottleneck resource
+// decides, so high disk alone loses to uniformly low pressure.
+func TestPickNodePressureTieAndBottleneck(t *testing.T) {
+	t.Parallel()
+
+	busy := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			Workloads:  0,
+			CPUPercent: 10,
+		},
+	}
+	idler := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			Workloads:  3,
+			CPUPercent: 10,
+		},
+	}
+	if chosen := pickNode([]peerdiscovery.Node{busy, idler}); chosen.ID != busy.ID {
+		t.Fatalf("expected fewer workloads on tie, got %v", chosen.ID)
+	}
+
+	diskFull := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			DiskPercent: 90,
+		},
+	}
+	even := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			CPUPercent: 20,
+			MemPercent: 20,
+		},
+	}
+	if chosen := pickNode([]peerdiscovery.Node{diskFull, even}); chosen.ID != even.ID {
+		t.Fatalf("expected bottleneck to lose, got %v", chosen.ID)
+	}
+}
+
 func TestScheduleAssignsUnassigned(t *testing.T) {
 	t.Parallel()
 

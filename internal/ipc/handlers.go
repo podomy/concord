@@ -22,6 +22,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/workloads", s.handleSubmitWorkload)
 	mux.HandleFunc("GET /v1/workloads", s.handleListWorkloads)
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
+	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", s.handleDeleteWorkload)
 	mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
 }
@@ -149,6 +150,42 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, internalToSDKWorkload(*spec))
 }
 
+// handleWorkloadStats returns live utilization for one workload by its
+// unique UUID. Readings come from the reconciler sampler, never the
+// journal: absent samples (never sampled, already stopped, sampler
+// missing) report 404 Not Found.
+func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workload id: "+idStr)
+		return
+	}
+
+	if s.sampler == nil {
+		writeError(w, http.StatusNotFound, "workload stats not found")
+		return
+	}
+
+	sample, ok := s.sampler.Workloads()[id]
+	if !ok {
+		writeError(w, http.StatusNotFound, "workload stats not found")
+		return
+	}
+	pressure := s.sampler.LastHost()
+
+	writeJSON(w, http.StatusOK, sdk.WorkloadStats{
+		CPUPercent: sample.CPUPercent,
+		MemPercent: sample.MemPercent,
+		MemUsageMB: sample.MemUsageMB,
+		Node: sdk.NodePressure{
+			CPUPercent:  pressure.CPU,
+			MemPercent:  pressure.Mem,
+			DiskPercent: pressure.Disk,
+		},
+	})
+}
+
 // handleDeleteWorkload marks a workload as removed by appending a tombstone event to the journal:
 // 1. Verifies the workload exists and is not already removed.
 // 2. Creates a tombstone spec with Removed = true.
@@ -216,6 +253,9 @@ func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 			Address:            m.Address.String(),
 			State:              string(m.State),
 			WireGuardPublicKey: m.Metadata.WireGuardPublicKey,
+			CPUPercent:         m.Metadata.CPUPercent,
+			MemPercent:         m.Metadata.MemPercent,
+			DiskPercent:        m.Metadata.DiskPercent,
 		})
 	}
 

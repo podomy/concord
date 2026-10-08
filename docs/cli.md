@@ -9,8 +9,6 @@ Concord uses a noun-first command structure: `concord <noun> <action> [flags]`.
 ```bash
 # Start the node daemon in the foreground
 concord
-# or explicitly:
-concord daemon
 ```
 
 ---
@@ -23,15 +21,15 @@ concord workload run [flags] <image> [command...]
 ```
 
 **Flags:**
-| Flag | Short | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--port` | `-p` | `""` | Port mapping: `host:container` (e.g. `8080:80`) |
-| `--env` | `-e` | `[]` | Environment variables in `KEY=VAL` format (repeatable) |
-| `--restart` | | `always` | Policy: `always`, `never`, `on_failure` |
-| `--cpu` | | `1024` | CFS CPU shares (`1024` = 1 core) |
-| `--memory` | | `0` | Memory limit in MB (`0` = unlimited) |
-| `--health-path` | | `/health` | HTTP endpoint for health checks |
-| `--health-action` | | `restart` | Action on failure: `restart` or `signal` |
+```
+--port, -p (default ""): port mapping host:container (e.g. 8080:80)
+--env, -e (default []): environment variables in KEY=VAL format (repeatable)
+--restart (default always): policy always, never, on_failure
+--cpu (default 1024): CFS CPU shares (1024 = 1 core)
+--memory (default 0): memory limit in MB (0 = unlimited)
+--health-path (default /health): HTTP endpoint for health checks
+--health-action (default restart): action on failure restart or signal
+```
 
 **Examples:**
 ```bash
@@ -64,17 +62,43 @@ ID          IMAGE              PORTS       RESTART   HEALTH
 ### Inspect a Workload
 ```bash
 # Supports full UUIDs or 8-character prefixes
-concord workload inspect 4b8d7a12
+concord workload inspect <id>
 ```
 
 Returns the full JSON specification for the workload.
 
 ---
 
+### Workload Utilization
+```bash
+# Live CPU and memory readings sampled on the fast beat.
+# Absent readings (never sampled, already stopped) report not found.
+concord workload stats <id>
+```
+
+**Output:**
+```
+CPU 25% MEM 50% (512 MB)
+NODE CPU 10% MEM 20% DISK 30%
+```
+
+The second line is the local node's pressure trio: stats exist only
+where the workload runs, so the local node is always the relevant
+context.
+
+Percents are 0-100 utilization: CPU from `/proc/stat` deltas between
+beats (first sample reports 0), memory as used over total, disk as used
+blocks over total on the concord data disk. A percent says how full the
+resource is, never how much room it has; the scheduler reads fullness
+from the trio and headroom from the node's totals together. Full
+definitions live in `docs/metrics.md`.
+
+---
+
 ### Stop a Workload
 ```bash
 # Stops container and writes a tombstone event to the journal
-concord workload stop 4b8d7a12
+concord workload stop <id>
 ```
 
 ---
@@ -88,9 +112,25 @@ concord node list
 
 **Output:**
 ```
-NODE ID                                ADDRESS             STATE    WIREGUARD PUBLIC KEY
-a1b2c3d4-e5f6-7890-abcd-ef1234567890   192.168.1.10:17946  alive    +abc123xyz...
+NODE ID                                ADDRESS             STATE    WIREGUARD PUBLIC KEY    PRESSURE
+a1b2c3d4-e5f6-7890-abcd-ef1234567890   192.168.1.10:17946  alive    +abc123xyz...           23%
 ```
+
+PRESSURE is the highest of the node's gossiped CPU, memory, and disk
+utilization: the number the scheduler places by. Each percent is 0-100
+utilization of that resource, how full it is rather than how much room
+remains. Full definitions live in `docs/metrics.md`.
+
+---
+
+### Rotate the Noise Key
+```bash
+concord node rotate-key
+```
+
+Deletes the static key and bumps the generation counter. Local file ops
+only, no daemon involved: restart the daemon to apply. The full
+procedure and the pin rules live in `docs/noise.md`.
 
 ---
 

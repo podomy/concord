@@ -31,6 +31,7 @@ import (
 	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
+	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/workload"
 )
@@ -68,6 +69,7 @@ func RunLoop(
 	workloads *journalview.Workloads,
 	views []journalview.View,
 	peerService *peerdiscovery.MemberService,
+	sampler *node.Sampler,
 ) {
 	running := map[uuid.UUID]*ContainerAndProcess{}
 	ipAndCIDRs := map[uuid.UUID]string{}
@@ -105,36 +107,7 @@ func RunLoop(
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService)
 
 		case <-fastTicker.C:
-			runFastTick(ctx, logger, running, j, views, nodeID)
-		}
-	}
-}
-
-func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
-	for _, entry := range running {
-		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
-			continue
-		}
-		healthy := cr.CheckHealth(ctx, logger, entry.Spec)
-		// Check liveness.
-		if healthy {
-			continue
-		}
-
-		// Check readiness and resources.
-		switch entry.Spec.HealthAction {
-		case workload.HealthActionRestart:
-			logger.Warn("restarting unhealthy workload")
-			destroyContainer(ctx, logger, entry.Spec, running)
-		case workload.HealthActionSignal:
-			logger.Warn("signaling unhealthy workload")
-			// Emmitting a journal event.
-			event := journal.NewEvent(nodeID, "workload.unhealthy", json.RawMessage{})
-			err := journalview.RecordEvent(ctx, j, views, event)
-			if err != nil {
-				logger.Error("record event failed", zap.Error(err))
-				continue
-			}
+			runFastTick(ctx, logger, sampler, running, j, views, nodeID, peerService)
 		}
 	}
 }

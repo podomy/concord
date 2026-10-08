@@ -39,13 +39,13 @@ Create `/etc/systemd/system/concord.service`:
 
 ```ini
 [Unit]
-Description=Concord Fleet Node
+Description=Concord Node
 After=network.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/concord daemon
+ExecStart=/usr/local/bin/concord
 Restart=always
 RestartSec=3
 LimitNOFILE=65536

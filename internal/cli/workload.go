@@ -26,6 +26,7 @@ func newWorkloadCommand() *cobra.Command {
 		newWorkloadRunCommand(),
 		newWorkloadListCommand(),
 		newWorkloadInspectCommand(),
+		newWorkloadStatsCommand(),
 		newWorkloadStopCommand(),
 	)
 
@@ -214,6 +215,39 @@ func handleWorkloadInspect(ctx context.Context, stdout io.Writer, idArg string) 
 	}
 
 	_, _ = fmt.Fprintf(stdout, "%s\n", data) //nolint:errcheck // CLI output
+	return nil
+}
+
+func newWorkloadStatsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stats <id>",
+		Short: "Display live utilization for a workload",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return handleWorkloadStats(cmd.Context(), cmd.OutOrStdout(), args[0])
+		},
+	}
+}
+
+func handleWorkloadStats(ctx context.Context, stdout io.Writer, idArg string) error {
+	client, closeFn, err := dialIPCClient()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	targetID, err := resolveWorkloadID(ctx, client, idArg)
+	if err != nil {
+		return err
+	}
+
+	stats, err := client.Stats(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("get workload stats %s: %w", targetID, err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "CPU %d%% MEM %d%% (%d MB)\n", stats.CPUPercent, stats.MemPercent, stats.MemUsageMB)                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "NODE CPU %d%% MEM %d%% DISK %d%%\n", stats.Node.CPUPercent, stats.Node.MemPercent, stats.Node.DiskPercent) //nolint:errcheck // CLI output
 	return nil
 }
 

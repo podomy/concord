@@ -50,6 +50,11 @@ type NodeMetadata struct {
 	CPUMHz             float64 `json:"cpu_mhz"`
 	MemoryMB           uint64  `json:"memory_mb"`
 	Workloads          int     `json:"workload_count"`
+	// CPUPercent, MemPercent, and DiskPercent are 0-100 utilization sampled
+	// on the fast beat. Small by design: gossip caps metadata at 512 bytes.
+	CPUPercent  uint8 `json:"cpu_percent"`
+	MemPercent  uint8 `json:"mem_percent"`
+	DiskPercent uint8 `json:"disk_percent"`
 	// NoisePublicKey is this node's Noise static public key (32 raw bytes,
 	// base64 in JSON). Dialers use it as the IK handshake's pre-known peer
 	// key, so no dial path needs a key the gossip layer did not provide.

@@ -41,7 +41,7 @@ func run() error {
 
 	// If cli arguments were specified we run our cli instead
 	// of running the daemon.
-	if len(os.Args) > 1 && os.Args[1] != "daemon" {
+	if len(os.Args) > 1 {
 		if err := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 			return fmt.Errorf("cli: %w", err)
 		}

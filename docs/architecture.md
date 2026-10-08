@@ -140,7 +140,7 @@ stays at one node.
 
 ## Scheduling
 
-In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the peer with the fewest active workloads. When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below.
+In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the alive peer with the lowest pressure, breaking ties by fewest active workloads. When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below. Pressure sampling and placement order are detailed in `docs/metrics.md`.
 
 ---
 
@@ -152,7 +152,7 @@ Only the segment leader acts, via `internal/reconciler/scheduler.go:scheduleWork
 
 1. Read members and build the alive set. Zero alive members is a no-op; nothing is assigned or reassigned.
 2. Skip tombstones. A spec with `Removed=true` is never reassigned; a stop wins over any spec copy at any epoch.
-3. Assign unassigned. A spec with `AssignedNodeID == Nil` is assigned to the `pickNode` choice (alive preferred, then fewest active workloads) and recorded as one new `workload.spec` event. Initial assignments carry epoch zero.
+3. Assign unassigned. A spec with `AssignedNodeID == Nil` is assigned to the `pickNode` choice (alive preferred, then lowest pressure, then fewest active workloads) and recorded as one new `workload.spec` event. Initial assignments carry epoch zero.
 4. Skip healthy owners. A spec whose `AssignedNodeID` is in the alive set is left alone.
 5. Reassign orphans. The owner is not alive, so the spec is pointed at the alive `pickNode` choice, `AssignmentEpoch` is incremented by one, and one new `workload.spec` event is recorded through `RecordEventAndLog`. The next tick reads the new copy from the view, so each orphan is rewritten once per epoch.
 6. Guard the target. If the `pickNode` choice is not alive, the spec is skipped this tick.
@@ -166,10 +166,11 @@ An epoch is a reassignment count. Every time the scheduler moves a workload to a
 ## Reconciliation rhythm
 
 Every loop in concord is a tick, not a subscription. Peer sync pulls
-every 5 seconds, the reconciler compares desired against running every 5
-seconds, health follows the same beat. Each pass looks at the actual
-state, looks at the desired state, and closes the gap. Nothing waits to
-be notified.
+every 5 seconds and the reconciler compares desired against running
+every 5 seconds, while health checks and pressure sampling run a local
+500ms beat beside them (`internal/reconciler/fastpath.go`). Each pass
+looks at the actual state, looks at the desired state, and closes the
+gap. Nothing waits to be notified.
 
 That is level-driven reconciliation, and it matches the failure model
 on purpose. A missed notification, a crashed handler, a partition

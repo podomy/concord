@@ -57,9 +57,10 @@ func handleNodeList(ctx context.Context, stdout io.Writer) error {
 	}
 
 	tw := newTableWriter(stdout)
-	_, _ = fmt.Fprintln(tw, "NODE ID\tADDRESS\tSTATE\tWIREGUARD PUBLIC KEY") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(tw, "NODE ID\tADDRESS\tSTATE\tWIREGUARD PUBLIC KEY\tPRESSURE") //nolint:errcheck // CLI output
 	for _, n := range nodes {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", n.ID, n.Address, n.State, dashIfEmpty(n.WireGuardPublicKey)) //nolint:errcheck // CLI output
+		pressure := max(n.CPUPercent, n.MemPercent, n.DiskPercent)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d%%\n", n.ID, n.Address, n.State, dashIfEmpty(n.WireGuardPublicKey), pressure) //nolint:errcheck // CLI output
 	}
 
 	if err := tw.Flush(); err != nil {
