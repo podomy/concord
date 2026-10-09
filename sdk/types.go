@@ -87,6 +87,14 @@ type TrailPoint struct {
 	Lon float64   `json:"lon"`
 }
 
+// Position is one position fix in decimal degrees. It is the wire format
+// for the self-position setter, shared by client and server so the
+// endpoint body has exactly one definition.
+type Position struct {
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+}
+
 // Node represents a cluster member node and its current health state.
 type Node struct {
 	ID                 uuid.UUID `json:"id"`

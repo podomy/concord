@@ -287,10 +287,7 @@ func (s *Server) handleSetPosition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input struct {
-		Lat float64 `json:"lat"`
-		Lon float64 `json:"lon"`
-	}
+	var input sdk.Position
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "decode position: "+err.Error())
 		return

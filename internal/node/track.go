@@ -48,7 +48,7 @@ func trackLogPath() (string, error) {
 }
 
 // OpenTrackLog opens (creating when absent) the local track log for appends.
-func OpenTrackLog() (_ *TrackLog, err error) {
+func OpenTrackLog() (*TrackLog, error) {
 	path, err := trackLogPath()
 	if err != nil {
 		return nil, err

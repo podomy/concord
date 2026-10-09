@@ -268,6 +268,7 @@ func TestIPCSetPosition(t *testing.T) {
 
 	assertPositionedTrail(t, ctx, h.client, 1)
 	assertPositionedGossip(t, peerService)
+	assertPositionedPersisted(t)
 
 	if err := h.client.SetPosition(ctx, 91, 0); err == nil {
 		t.Fatal("expected error for out-of-planet fix")
@@ -290,6 +291,21 @@ func assertPositionedTrail(t *testing.T, ctx context.Context, client sdk.Client,
 		if p.Lat != 47.6 || p.Lon != 8.9 {
 			t.Fatalf("trail = %+v", trail)
 		}
+	}
+}
+
+// assertPositionedPersisted checks the fix reached config.json, so the
+// next boot republishes it. Without this the persist half of the write
+// path would be unverified.
+func assertPositionedPersisted(t *testing.T) {
+	t.Helper()
+
+	config, err := node.LoadOrCreateNodeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Position == nil || config.Position.Lat != 47.6 || config.Position.Lon != 8.9 {
+		t.Fatalf("persisted position = %+v", config.Position)
 	}
 }
 

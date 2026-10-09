@@ -60,10 +60,12 @@ so the file always holds everything the ring does and more.
   they cover far more. Time span is unbounded; memory is flat forever.
   Ephemeral: rebuilt fresh on every boot.
 * File (`~/.config/concord/track.jsonl`, `internal/node/track.go`): one
-  JSON line per gated point, fsynced per append, never truncated or
-  rotated by the daemon. Rotation and archival are operator-owned, same
-  as `journal.jsonl`. This is the full mission history: ring overwrite
-  and restarts lose nothing here.
+  JSON line per gated point (`{"At":"...","Lat":47.6,"Lon":8.9}`),
+  fsynced per append, never truncated or rotated by the daemon.
+  Rotation and archival are operator-owned, same as `journal.jsonl`.
+  This is the full mission history: ring overwrite and restarts lose
+  nothing here. Keys stay Go-case like every other local JSON-lines
+  payload; the SDK's snake_case is the API's, not the file's.
 
 The recovery story follows from that split. A node that partitions and
 keeps running replays its dark-period roam from memory with no journal
@@ -72,13 +74,15 @@ only a lost disk loses the roam.
 
 ## Read paths
 
-Three doors, same memory:
+Four doors, one writer. Every fix enters through the IPC setter; each
+door serves a different depth:
 
 ```
-sampler ring (memory only)
-  ├── Trail() ──▶ GET /v1/nodes/self/trail ──▶ concord node trail (oldest-first, timestamped)
-  ├── gossip latest ──▶ node list LAT/LON (fleet map, one point per node)
-  └── gossip latest ──▶ concord_node_latitude/longitude gauges ──▶ scrapers keep history
+PUT /v1/nodes/self/position (one fix)
+  ├── gossip atomics ──▶ node list LAT/LON (fleet map, latest per node)
+  ├── gossip atomics ──▶ concord_node_latitude/longitude gauges ──▶ scrapers keep history
+  ├── sampler ring ──▶ GET /v1/nodes/self/trail ──▶ concord node trail (since boot, oldest-first)
+  └── track.jsonl (every gated point, full history, grepped)
 ```
 
 * `concord node trail` prints `RFC3339 lat lon` oldest-first, one line
@@ -105,10 +109,12 @@ sampler ring (memory only)
 | Transport         | memberlist meta (microdegrees)| IPC / metrics               | file grep                    |
 | Loss on restart   | no, reloads from config      | yes, memory only             | no                           |
 | Unknown           | 0, 0                         | empty                        | absent                       |
-| Consumer          | scheduler anchor ordering, fleet map | operator replay, scraper history | audit, crash forensics |
+| Consumer          | anchor ordering, fleet map | operator replay, scraper history | audit, crash forensics |
 
-Anchor ordering reads the gossip position (`AnchorResolver{Self: pos}`),
-never the trail. The trail never influences placement.
+Anchor ordering reads the freshest fix (`LastPosition` on the sampler),
+never gossip and never the trail: gossip lags a broadcast behind, the
+trail skips sub-10m jitter, ordering wants every fix. The trail never
+influences placement.
 
 ## Edge cases
 
@@ -117,6 +123,9 @@ never the trail. The trail never influences placement.
   boot fix comes from the persisted config position when one exists.
 * Invalid fix: rejected at the endpoint with 400, previous fix kept, no
   trail append. Callers retry with a real fix.
+* Unknown fix (exact 0,0): gossip clears, trail skips, anchor ordering
+  holds the last-known real fix instead of falling back to list order.
+  A fix that was never known leaves ordering on list order.
 * Sub-10m moves: gossip still updates (peers see the crawl), trail does
   not append (history skips jitter). `node list` and `node trail` can
   therefore disagree on the freshest point by design.

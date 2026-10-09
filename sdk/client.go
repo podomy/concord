@@ -334,10 +334,7 @@ func (c *unixClient) Trail(ctx context.Context) ([]TrailPoint, error) {
 
 // SetPosition applies one live position fix on the local daemon.
 func (c *unixClient) SetPosition(ctx context.Context, lat, lon float64) error {
-	data, err := json.Marshal(struct {
-		Lat float64 `json:"lat"`
-		Lon float64 `json:"lon"`
-	}{Lat: lat, Lon: lon})
+	data, err := json.Marshal(Position{Lat: lat, Lon: lon})
 	if err != nil {
 		return fmt.Errorf("marshal position: %w", err)
 	}
