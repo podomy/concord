@@ -63,8 +63,13 @@ type Client interface {
 	// Metrics returns sampler state in Prometheus text exposition format.
 	Metrics(ctx context.Context) (string, error)
 
-	// Trail returns our recorded positions oldest-first.
+	// Trail returns our recorded positions since boot, oldest-first.
+	// Bounded by the 720-point ring; full history lives in track.jsonl.
 	Trail(ctx context.Context) ([]TrailPoint, error)
+
+	// SetPosition applies one live position fix: persisted for reboot,
+	// gossiped to the fleet, and recorded to trail and track log.
+	SetPosition(ctx context.Context, lat, lon float64) error
 
 	// Nodes lists all known cluster nodes and their network status.
 	Nodes(ctx context.Context) ([]Node, error)
@@ -325,6 +330,40 @@ func (c *unixClient) Trail(ctx context.Context) ([]TrailPoint, error) {
 	}
 
 	return trailResp.Trail, nil
+}
+
+// SetPosition applies one live position fix on the local daemon.
+func (c *unixClient) SetPosition(ctx context.Context, lat, lon float64) error {
+	data, err := json.Marshal(struct {
+		Lat float64 `json:"lat"`
+		Lon float64 `json:"lon"`
+	}{Lat: lat, Lon: lon})
+	if err != nil {
+		return fmt.Errorf("marshal position: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, unixSocketHost+"/v1/nodes/self/position", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("position request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 type listResponse struct {

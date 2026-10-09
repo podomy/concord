@@ -146,10 +146,18 @@ without it the anchor list order decides instead of distance. Each
 anchor names coordinates alongside a stable memberlist address;
 out-of-planet coordinates never order anything but still dial fine.
 An anchor must hold still with stable backhaul for as long as it
-anchors; a parked truck counts, a roaming one does not. The file is the
-position API: every discovery round (5s) reloads position and anchors
-together, so edits take effect without a restart at the cost of poll
-latency. How moves become trail points, and why the trail is memory-only,
+anchors; a parked truck counts, a roaming one does not.
+
+Live fixes arrive over IPC, never through this file:
+
+```bash
+concord node position set --lat 47.6 --lon 8.9
+```
+
+The daemon persists the fix here for the next boot, gossips it to the
+fleet, and records it to trail and track log in one operation. Anchor
+lists still reload from this file every discovery round. How moves
+become trail points, and how the ring differs from the track file,
 lives in `docs/trail.md`.
 
 Provision addresses in the config file, where surveyed positions

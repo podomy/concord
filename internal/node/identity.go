@@ -126,6 +126,22 @@ func createNodeConfig() (*NodeConfig, error) {
 	return config, nil
 }
 
+// PersistPosition stores a live position fix into the node config so the
+// next boot publishes it. The file is storage, not an interface: live
+// updates arrive over IPC and call this; nothing polls the file back.
+// Load-modify-write preserves anchors, the anchor flag, and identity.
+func PersistPosition(lat, lon float64) error {
+	config, err := LoadOrCreateNodeConfig()
+	if err != nil {
+		return err
+	}
+	config.Position = &geo.Point{Lat: lat, Lon: lon}
+	if _, err := UpdateNodeConfig(config); err != nil {
+		return err
+	}
+	return nil
+}
+
 // UpdateNodeConfig returns a pointer to the written result if the update
 // was successful, otherwise it returns an error.
 func UpdateNodeConfig(config *NodeConfig) (_ *NodeConfig, err error) {

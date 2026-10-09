@@ -280,8 +280,8 @@ func (m *MemberService) SetPressure(cpu, mem, disk uint8) {
 // SetPosition updates the geographic position reported in node gossip
 // metadata. Out-of-planet coordinates are ignored, keeping the previous
 // position: callers retry with a real fix next beat. This moves gossip
-// only; history needs Sampler.RecordPosition too. The discovery round
-// does both together via refreshDiscoveryState.
+// only; history needs Sampler.RecordPosition too. The IPC position
+// setter applies both together.
 func (m *MemberService) SetPosition(lat, lon float64) {
 	if m == nil || m.delegate == nil {
 		return
@@ -292,17 +292,6 @@ func (m *MemberService) SetPosition(lat, lon float64) {
 	}
 	m.delegate.lat.Store(degToMicro(lat))
 	m.delegate.lon.Store(degToMicro(lon))
-}
-
-// ClearPosition resets gossiped coordinates to unknown (zeros). Called
-// when config decodes without a position: without it a removed position
-// would gossip its last fix forever, and the fleet map would lie.
-func (m *MemberService) ClearPosition() {
-	if m == nil || m.delegate == nil {
-		return
-	}
-	m.delegate.lat.Store(0)
-	m.delegate.lon.Store(0)
 }
 
 // Publish pushes current metadata to the mesh when anything volatile

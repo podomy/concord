@@ -122,12 +122,13 @@ collectors. Trends hold the window, exposition serves points, the journal
 carries neither: history that never converges stays out of the log by
 the same rule as samples. Position trails follow the same split at
 coarser grain: the sampler records on 10m moves, `node trail` replays
-the roam, and no coordinate ever enters the journal. Position gauges ride
+the roam since boot from the ring, the track file keeps the full
+history, and no coordinate ever enters the journal. Position gauges ride
 the same exposition so scrapers keep trails: where a node went is a
-scraper query over `concord_node_latitude` and
-`concord_node_longitude`, never a journal replay. Full trail behavior,
-including memory-only lifetime and the gossip/trail split, lives in
-`docs/trail.md`.
+track file first, a scraper query over `concord_node_latitude` and
+`concord_node_longitude` second (lossy between scrapes), never a journal
+replay. Full trail behavior, including the ring/file split and the
+gossip/trail split, lives in `docs/trail.md`.
 
 ## What stays out
 

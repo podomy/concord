@@ -19,10 +19,10 @@ import (
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
 
-// Rewriting position in config shows up in gossip after one refresh,
-// without a restart.
-func TestRefreshPosition(t *testing.T) {
-	svc := startPositionedService(t, 47.6, 8.9)
+// Boot publishes the persisted config position without any live fix:
+// the file seeds the first gossip, IPC moves it after.
+func TestBootPositionPublished(t *testing.T) {
+	svc, sampler := startPositionedService(t, 47.6, 8.9)
 
 	members, err := svc.Members()
 	if err != nil {
@@ -31,73 +31,37 @@ func TestRefreshPosition(t *testing.T) {
 	if math.Abs(members[0].Metadata.Lat-47.6) > 1e-6 || math.Abs(members[0].Metadata.Lon-8.9) > 1e-6 {
 		t.Fatalf("position = %v/%v", members[0].Metadata.Lat, members[0].Metadata.Lon)
 	}
+	if trail := sampler.Trail(); len(trail) != 1 || trail[0].Pos.Lat != 47.6 {
+		t.Fatalf("boot trail = %+v", trail)
+	}
 }
 
-// Moving means rewriting the file; the next refresh follows.
-func TestRefreshPositionFollowsMoves(t *testing.T) {
-	svc := startPositionedService(t, 47.6, 8.9)
+// Rewriting anchors in config shows up on the next refresh: the
+// discovery round never uses a boot snapshot past its fallback.
+func TestRefreshAnchorsFollowsRewrites(t *testing.T) {
+	startPositionedService(t, 47.6, 8.9)
 
 	config, err := node.LoadOrCreateNodeConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Position = &geo.Point{Lat: 48.0, Lon: 9.0}
+	config.Anchors = []node.AnchorEntry{
+		{Name: "rim", Addr: netip.MustParseAddrPort("192.168.100.11:7946"), Lat: 47.0, Lon: 8.0},
+	}
 	if _, err := node.UpdateNodeConfig(config); err != nil {
 		t.Fatal(err)
 	}
-	refreshPosition(zap.NewNop(), svc)
-	if err := svc.Publish(); err != nil {
-		t.Fatal(err)
-	}
 
-	members, err := svc.Members()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if math.Abs(members[0].Metadata.Lat-48.0) > 1e-6 {
-		t.Fatalf("moved lat = %v", members[0].Metadata.Lat)
-	}
-}
-
-// refreshPosition is a test-only wrapper over refreshDiscoveryState: it
-// reloads position from config and gossips it, discarding anchors.
-// Production code calls refreshDiscoveryState directly so position and
-// anchors refresh on the same read.
-func refreshPosition(logger *zap.Logger, peerService *peerdiscovery.MemberService) *geo.Point {
-	pos, _ := refreshDiscoveryState(logger, peerService, nil)
-	return pos
-}
-
-// Removing position from config clears gossip to unknown instead of
-// leaving the last fix converging forever.
-func TestRefreshPositionRemovalClears(t *testing.T) {
-	svc := startPositionedService(t, 47.6, 8.9)
-
-	config, err := node.LoadOrCreateNodeConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.Position = nil
-	if _, err := node.UpdateNodeConfig(config); err != nil {
-		t.Fatal(err)
-	}
-	refreshPosition(zap.NewNop(), svc)
-	if err := svc.Publish(); err != nil {
-		t.Fatal(err)
-	}
-
-	members, err := svc.Members()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if members[0].Metadata.Lat != 0 || members[0].Metadata.Lon != 0 {
-		t.Fatalf("cleared position = %v/%v, want 0/0", members[0].Metadata.Lat, members[0].Metadata.Lon)
+	live := refreshAnchors(zap.NewNop(), nil)
+	if len(live) != 1 || live[0].Name != "rim" {
+		t.Fatalf("anchors = %+v", live)
 	}
 }
 
 // startPositionedService provisions temp config with a gossip key,
-// writes the given position, and starts one loopback member.
-func startPositionedService(t *testing.T, lat, lon float64) *peerdiscovery.MemberService {
+// writes the given position, and starts one loopback member with the
+// boot position published and the trail seeded.
+func startPositionedService(t *testing.T, lat, lon float64) (*peerdiscovery.MemberService, *node.Sampler) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -116,7 +80,8 @@ func startPositionedService(t *testing.T, lat, lon float64) *peerdiscovery.Membe
 		t.Fatal(err)
 	}
 	config.Position = &geo.Point{Lat: lat, Lon: lon}
-	if _, err := node.UpdateNodeConfig(config); err != nil {
+	nodeConfig, err := node.UpdateNodeConfig(config)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,7 +98,8 @@ func startPositionedService(t *testing.T, lat, lon float64) *peerdiscovery.Membe
 		}
 	})
 
-	refreshPosition(zap.NewNop(), svc)
+	sampler := node.NewSampler()
+	publishPosition(nodeConfig, svc, sampler)
 	if err := svc.Publish(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,5 +110,5 @@ func startPositionedService(t *testing.T, lat, lon float64) *peerdiscovery.Membe
 	if len(members) != 1 {
 		t.Fatalf("members = %d, want 1", len(members))
 	}
-	return svc
+	return svc, sampler
 }

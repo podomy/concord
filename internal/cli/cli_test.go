@@ -6,6 +6,8 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,9 +24,28 @@ import (
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
+	"github.com/podomy/concord/internal/peerdiscovery"
 )
 
+// setupCLITest starts the CLI test server without a peer service, so
+// handlers degrade to their unavailable branches (empty node list,
+// 503 trail). Tests needing gossip use setupCLIPositionedTest.
 func setupCLITest(t *testing.T) *node.Sampler {
+	t.Helper()
+
+	sampler, _ := setupCLIServer(t, false)
+	return sampler
+}
+
+// setupCLIPositionedTest starts the CLI test server with a real loopback
+// member service, so position tests cover gossip end to end.
+func setupCLIPositionedTest(t *testing.T) (*node.Sampler, *peerdiscovery.MemberService) {
+	t.Helper()
+
+	return setupCLIServer(t, true)
+}
+
+func setupCLIServer(t *testing.T, withPeers bool) (*node.Sampler, *peerdiscovery.MemberService) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -35,26 +56,23 @@ func setupCLITest(t *testing.T) *node.Sampler {
 		t.Fatalf("create socket dir: %v", err)
 	}
 
+	var peerService *peerdiscovery.MemberService
+	if withPeers {
+		peerService = startCLIPeers(t, socketDir)
+	}
+
 	socketPath := filepath.Join(socketDir, "concord.sock")
 	dbPath := filepath.Join(tempDir, "test.db")
 	journalPath := filepath.Join(tempDir, "journal.jsonl")
 
-	kv, err := kvstore.OpenDBPath(dbPath)
-	if err != nil {
-		t.Fatalf("open kv store: %v", err)
-	}
-
-	j, err := journal.OpenJSONLPath(journalPath)
-	if err != nil {
-		t.Fatalf("open journal: %v", err)
-	}
+	kv, j := openCLITestStores(t, dbPath, journalPath)
 
 	workloads := journalview.NewWorkloads(kv)
 	views := []journalview.View{workloads}
 
 	nodeID := uuid.New()
 	sampler := node.NewSampler()
-	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop(), sampler)
+	server := ipc.NewServer(nodeID, j, views, workloads, peerService, zap.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -64,6 +82,11 @@ func setupCLITest(t *testing.T) *node.Sampler {
 
 	t.Cleanup(func() {
 		cancel()
+		if peerService != nil {
+			if err := peerService.Shutdown(); err != nil {
+				t.Logf("shutdown peer service: %v", err)
+			}
+		}
 		if err := server.Shutdown(context.Background()); err != nil {
 			t.Logf("shutdown server: %v", err)
 		}
@@ -75,7 +98,46 @@ func setupCLITest(t *testing.T) *node.Sampler {
 		}
 	})
 
-	return sampler
+	return sampler, peerService
+}
+
+// openCLITestStores opens the kv and journal backing the CLI test server.
+func openCLITestStores(t *testing.T, dbPath, journalPath string) (*kvstore.KVStore, *journal.JSONL) {
+	t.Helper()
+
+	kv, err := kvstore.OpenDBPath(dbPath)
+	if err != nil {
+		t.Fatalf("open kv store: %v", err)
+	}
+
+	j, err := journal.OpenJSONLPath(journalPath)
+	if err != nil {
+		t.Fatalf("open journal: %v", err)
+	}
+	return kv, j
+}
+
+// startCLIPeers provisions a gossip key and starts one loopback member
+// for CLI tests that cover gossip end to end.
+func startCLIPeers(t *testing.T, socketDir string) *peerdiscovery.MemberService {
+	t.Helper()
+
+	keyDir := filepath.Join(socketDir, "memberservice")
+	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		t.Fatalf("create gossip key dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keyDir, "secret.key"), bytes.Repeat([]byte{0x07}, 32), 0o600); err != nil {
+		t.Fatalf("write gossip key: %v", err)
+	}
+
+	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+		ID:      uuid.New(),
+		Address: netip.MustParseAddrPort("127.0.0.1:0"),
+	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})
+	if err != nil {
+		t.Fatalf("start peer service: %v", err)
+	}
+	return peerService
 }
 
 func TestCLIMainHelp(t *testing.T) {
@@ -249,6 +311,39 @@ func TestCLINodeListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "No cluster nodes found") {
 		t.Fatalf("expected empty nodes message, got:\n%s", stdout.String())
+	}
+}
+
+// Setting a live fix through the CLI lands in gossip and the trail,
+// and persists for the next boot.
+func TestCLINodePositionSet(t *testing.T) {
+	sampler, peerService := setupCLIPositionedTest(t)
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"node", "position", "set", "--lat", "47.6", "--lon", "8.9"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("node position set failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "47.600000 8.900000") {
+		t.Fatalf("expected confirmation, got:\n%s", out)
+	}
+
+	if trail := sampler.Trail(); len(trail) != 1 || trail[0].Pos.Lat != 47.6 {
+		t.Fatalf("trail = %+v", trail)
+	}
+	members, err := peerService.Members()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(members[0].Metadata.Lat-47.6) > 1e-6 || math.Abs(members[0].Metadata.Lon-8.9) > 1e-6 {
+		t.Fatalf("gossip = %+v", members[0].Metadata)
+	}
+
+	var out2, err2 bytes.Buffer
+	err = cli.Execute(ctx, []string{"node", "position", "set", "--lat", "91", "--lon", "0"}, &out2, &err2)
+	if err == nil {
+		t.Fatal("expected error for out-of-planet fix")
 	}
 }
 

@@ -64,6 +64,14 @@ type Sampler struct {
 	samples    map[uuid.UUID]WorkloadSample
 	workTrends map[uuid.UUID]*trend
 	path       *trail
+	// track is the durable trail sink. Nil in tests and when the log
+	// cannot open; RecordPosition then keeps memory only.
+	track *TrackLog
+	// lastFix is the latest valid position handed to RecordPosition,
+	// gated or not. Anchor ordering reads this, not the trail: the trail
+	// skips sub-10m jitter while ordering wants the freshest fix.
+	lastFix geo.Point
+	haveFix bool
 }
 
 // NewSampler creates an empty pressure sampler.
@@ -152,17 +160,46 @@ func (s *Sampler) DropWorkload(id uuid.UUID) {
 // position always records. Invalid positions never record, and neither
 // does the exact zero point: zeros mean unknown across gossip, gauges,
 // and node list, so recording them would plant a Null Island waypoint
-// no node ever visited.
+// no node ever visited. Gated points land in the ring and the track log
+// together, so the file always holds everything the ring does and more.
 func (s *Sampler) RecordPosition(pos geo.Point) {
 	if !pos.Valid() || (pos.Lat == 0 && pos.Lon == 0) {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lastFix = pos
+	s.haveFix = true
 	if last, ok := s.path.last(); ok && geo.DistanceKM(last.Pos, pos) < trailMoveKM {
 		return
 	}
-	s.path.add(trailPoint{At: time.Now(), Pos: pos})
+	now := time.Now()
+	s.path.add(trailPoint{At: now, Pos: pos})
+	if s.track != nil {
+		// Best-effort: the track log is an audit trail, not coordination.
+		// A failed append (full disk) must not break gossip or the ring;
+		// disk trouble already surfaces loudly through journal appends.
+		_ = s.track.Append(now, pos.Lat, pos.Lon) //nolint:errcheck // best-effort audit write
+	}
+}
+
+// LastPosition returns the latest valid position fix, or nil when none
+// was ever recorded. Freshest fix, not trail-gated.
+func (s *Sampler) LastPosition() *geo.Point {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.haveFix {
+		return nil
+	}
+	pos := s.lastFix
+	return &pos
+}
+
+// SetTrackLog attaches the durable trail sink. Nil detaches.
+func (s *Sampler) SetTrackLog(t *TrackLog) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.track = t
 }
 
 // Trail returns the recorded positions oldest-first.

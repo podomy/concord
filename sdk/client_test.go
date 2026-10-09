@@ -167,6 +167,41 @@ func TestClient_Trail(t *testing.T) {
 	}
 }
 
+func TestClient_SetPosition(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/nodes/self/position", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		var got struct {
+			Lat float64 `json:"lat"`
+			Lon float64 `json:"lon"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		if got.Lat != 47.6 || got.Lon != 8.9 {
+			t.Errorf("body = %+v", got)
+		}
+		writeJSONResponse(t, w, http.StatusOK, map[string]any{"lat": got.Lat, "lon": got.Lon})
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	if err := client.SetPosition(context.Background(), 47.6, 8.9); err != nil {
+		t.Fatalf("unexpected set position error: %v", err)
+	}
+}
+
 func TestClient_Submit(t *testing.T) {
 	t.Parallel()
 

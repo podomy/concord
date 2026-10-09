@@ -11,8 +11,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
+	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/workload"
 	"github.com/podomy/concord/sdk"
 )
@@ -24,6 +26,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
 	mux.HandleFunc("GET /v1/nodes/self/trail", s.handleNodeTrail)
+	mux.HandleFunc("PUT /v1/nodes/self/position", s.handleSetPosition)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", s.handleDeleteWorkload)
 	mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
@@ -255,9 +258,10 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleNodeTrail returns our recorded positions oldest-first. The trail
-// is local memory only (see docs/trail.md): it replays this node's roam
-// while the process kept running, never via journal replay.
+// handleNodeTrail returns our recorded positions oldest-first, from the
+// ring: the roam since boot, not the full track file (see docs/trail.md).
+// Memory-only by design here; durability lives in track.jsonl, and
+// nothing reaches the journal either way.
 func (s *Server) handleNodeTrail(w http.ResponseWriter, _ *http.Request) {
 	if s.sampler == nil {
 		writeError(w, http.StatusServiceUnavailable, "trail unavailable")
@@ -270,6 +274,46 @@ func (s *Server) handleNodeTrail(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, trailResponse{Trail: trail})
+}
+
+// handleSetPosition applies one live position fix through the single write
+// path: persist to config first so the fix survives restarts, then gossip,
+// trail, and track log together. Persist failure applies nothing, keeping
+// the operation all-or-nothing. Invalid coordinates are a 400; the exact
+// zero point is allowed and means unknown, matching gossip convention.
+func (s *Server) handleSetPosition(w http.ResponseWriter, r *http.Request) {
+	if s.sampler == nil || s.peerService == nil {
+		writeError(w, http.StatusServiceUnavailable, "position unavailable")
+		return
+	}
+
+	var input struct {
+		Lat float64 `json:"lat"`
+		Lon float64 `json:"lon"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "decode position: "+err.Error())
+		return
+	}
+	pos := geo.Point{Lat: input.Lat, Lon: input.Lon}
+	if !pos.Valid() {
+		writeError(w, http.StatusBadRequest, "position outside the planet")
+		return
+	}
+
+	if err := node.PersistPosition(pos.Lat, pos.Lon); err != nil {
+		s.logger.Error("persist position", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "persist position: "+err.Error())
+		return
+	}
+
+	s.peerService.SetPosition(pos.Lat, pos.Lon)
+	s.sampler.RecordPosition(pos)
+	if err := s.peerService.Publish(); err != nil {
+		s.logger.Debug("publish position", zap.Error(err))
+	}
+
+	writeJSON(w, http.StatusOK, input)
 }
 
 // handleListNodes queries the peer discovery service for all known cluster nodes.

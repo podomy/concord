@@ -155,14 +155,24 @@ concord node trail
 ```
 
 Prints this node's recorded positions oldest-first, one timestamped
-coordinate per line. Positions record on 10m moves from node config.
-The trail is local memory only and empties on restart; full behavior
-lives in `docs/trail.md`:
+coordinate per line. Positions record on 10m moves. The ring holds the
+roam since boot (720 points); full history lives in `track.jsonl`.
+Full behavior lives in `docs/trail.md`:
 
 ```
 2026-10-09T10:00:00Z 47.600000 8.900000
 2026-10-09T10:05:00Z 47.610000 8.910000
 ```
+
+### Node Position
+```bash
+concord node position set --lat 47.6 --lon 8.9
+```
+
+Applies one live position fix: persisted for reboot, gossiped to the
+fleet, recorded to trail and track log. Out-of-planet coordinates are
+rejected. This is the only position writer; the config file is storage,
+never polled.
 
 ---
 

@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+
+	"github.com/podomy/concord/internal/geo"
 )
 
 // Configs decode anchors and position; old configs without them stay valid
@@ -80,5 +82,35 @@ func TestAnchorEntryInvalidPoint(t *testing.T) {
 	a := AnchorEntry{Addr: netip.MustParseAddrPort("192.168.100.10:7946"), Lat: 91, Lon: 0}
 	if _, ok := a.AnchorPoint(); ok {
 		t.Fatal("invalid coordinates should not order")
+	}
+}
+
+// PersistPosition stores the fix for the next boot and preserves the
+// rest of the config: anchors and identity survive the rewrite.
+func TestPersistPosition(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	old, err := LoadOrCreateNodeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Anchors = []AnchorEntry{{Name: "depot", Addr: netip.MustParseAddrPort("192.168.100.10:7946")}}
+	if _, err := UpdateNodeConfig(old); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PersistPosition(47.6, 8.9); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadOrCreateNodeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Position == nil || *got.Position != (geo.Point{Lat: 47.6, Lon: 8.9}) {
+		t.Fatalf("position = %+v", got.Position)
+	}
+	if len(got.Anchors) != 1 || got.ID != old.ID {
+		t.Fatalf("config not preserved: %+v", got)
 	}
 }

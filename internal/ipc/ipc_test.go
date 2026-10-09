@@ -4,8 +4,11 @@
 package ipc_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +25,7 @@ import (
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
+	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/sdk"
 )
 
@@ -35,7 +39,7 @@ type testHarness struct {
 	sampler    *node.Sampler
 }
 
-func setupTestServer(t *testing.T) *testHarness {
+func setupTestServer(t *testing.T, peerService ...*peerdiscovery.MemberService) *testHarness {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -58,7 +62,11 @@ func setupTestServer(t *testing.T) *testHarness {
 
 	nodeID := uuid.New()
 	sampler := node.NewSampler()
-	server := ipc.NewServer(nodeID, j, views, workloads, nil, zap.NewNop(), sampler)
+	var peers *peerdiscovery.MemberService
+	if len(peerService) > 0 {
+		peers = peerService[0]
+	}
+	server := ipc.NewServer(nodeID, j, views, workloads, peers, zap.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -246,6 +254,97 @@ func TestIPCTrail(t *testing.T) {
 	if trail[0].At.IsZero() || trail[1].At.Before(trail[0].At) {
 		t.Fatalf("trail not time-ordered: %+v", trail)
 	}
+}
+
+// A live fix lands in gossip and the trail together through the single
+// write path; out-of-planet fixes are a 400 and apply nothing.
+func TestIPCSetPosition(t *testing.T) {
+	h, peerService := setupPositionedServer(t)
+	ctx := context.Background()
+
+	if err := h.client.SetPosition(ctx, 47.6, 8.9); err != nil {
+		t.Fatalf("set position: %v", err)
+	}
+
+	assertPositionedTrail(t, ctx, h.client, 1)
+	assertPositionedGossip(t, peerService)
+
+	if err := h.client.SetPosition(ctx, 91, 0); err == nil {
+		t.Fatal("expected error for out-of-planet fix")
+	}
+	assertPositionedTrail(t, ctx, h.client, 1)
+}
+
+// assertPositionedTrail checks the trail holds exactly n points at the fix.
+func assertPositionedTrail(t *testing.T, ctx context.Context, client sdk.Client, n int) {
+	t.Helper()
+
+	trail, err := client.Trail(ctx)
+	if err != nil {
+		t.Fatalf("trail: %v", err)
+	}
+	if len(trail) != n {
+		t.Fatalf("trail = %+v", trail)
+	}
+	for _, p := range trail {
+		if p.Lat != 47.6 || p.Lon != 8.9 {
+			t.Fatalf("trail = %+v", trail)
+		}
+	}
+}
+
+// assertPositionedGossip checks the member service gossips the fix.
+func assertPositionedGossip(t *testing.T, peerService *peerdiscovery.MemberService) {
+	t.Helper()
+
+	members, err := peerService.Members()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || math.Abs(members[0].Metadata.Lat-47.6) > 1e-6 || math.Abs(members[0].Metadata.Lon-8.9) > 1e-6 {
+		t.Fatalf("gossip = %+v", members)
+	}
+}
+
+// Without a peer service the setter is unavailable, not silently dropped.
+func TestIPCSetPositionUnavailable(t *testing.T) {
+	h := setupTestServer(t)
+	if err := h.client.SetPosition(context.Background(), 47.6, 8.9); err == nil {
+		t.Fatal("expected unavailable error")
+	}
+}
+
+// setupPositionedServer starts a real member service on loopback and
+// wires it into the IPC server, so position tests cover gossip and
+// persistence, not just the sampler half.
+func setupPositionedServer(t *testing.T) (*testHarness, *peerdiscovery.MemberService) {
+	t.Helper()
+
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	keyDir := filepath.Join(dir, "concord", "memberservice")
+	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(keyDir, "secret.key"), bytes.Repeat([]byte{0x07}, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+		ID:      uuid.New(),
+		Address: netip.MustParseAddrPort("127.0.0.1:0"),
+	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := peerService.Shutdown(); err != nil {
+			t.Errorf("shutdown peer service: %v", err)
+		}
+	})
+
+	return setupTestServer(t, peerService), peerService
 }
 
 func TestIPCList(t *testing.T) {

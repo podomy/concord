@@ -23,6 +23,7 @@ func newNodeCommand() *cobra.Command {
 
 	nodeCmd.AddCommand(newNodeListCommand())
 	nodeCmd.AddCommand(newNodeTrailCommand())
+	nodeCmd.AddCommand(newNodePositionCommand())
 	nodeCmd.AddCommand(newNodeRotateKeyCommand())
 
 	return nodeCmd
@@ -105,6 +106,55 @@ func handleNodeTrail(ctx context.Context, stdout io.Writer) error {
 		_, _ = fmt.Fprintf(stdout, "%s %.6f %.6f\n", p.At.Format(time.RFC3339), p.Lat, p.Lon) //nolint:errcheck // CLI output
 	}
 
+	return nil
+}
+
+// newNodePositionCommand creates the 'concord node position' command group.
+func newNodePositionCommand() *cobra.Command {
+	posCmd := &cobra.Command{
+		Use:   "position",
+		Short: "Report this node's geographic position",
+	}
+
+	setCmd := &cobra.Command{
+		Use:   "set",
+		Short: "Apply one live position fix",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			lat, err := cmd.Flags().GetFloat64("lat")
+			if err != nil {
+				return fmt.Errorf("read --lat flag: %w", err)
+			}
+			lon, err := cmd.Flags().GetFloat64("lon")
+			if err != nil {
+				return fmt.Errorf("read --lon flag: %w", err)
+			}
+			return handleNodePositionSet(cmd.Context(), cmd.OutOrStdout(), lat, lon)
+		},
+	}
+	setCmd.Flags().Float64("lat", 0, "latitude in decimal degrees")
+	setCmd.Flags().Float64("lon", 0, "longitude in decimal degrees")
+	_ = setCmd.MarkFlagRequired("lat") //nolint:errcheck // required-flag setup cannot fail usefully here
+	_ = setCmd.MarkFlagRequired("lon") //nolint:errcheck // required-flag setup cannot fail usefully here
+	posCmd.AddCommand(setCmd)
+
+	return posCmd
+}
+
+// handleNodePositionSet applies one live fix through the daemon: persisted
+// for reboot, gossiped to the fleet, recorded to trail and track log.
+// This is the only position writer; the config file is never polled.
+func handleNodePositionSet(ctx context.Context, stdout io.Writer, lat, lon float64) error {
+	client, closeFn, err := dialIPCClient()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	if err := client.SetPosition(ctx, lat, lon); err != nil {
+		return fmt.Errorf("set node position: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "Position set to %.6f %.6f.\n", lat, lon) //nolint:errcheck // CLI output
 	return nil
 }
 

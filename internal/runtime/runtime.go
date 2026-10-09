@@ -17,7 +17,6 @@ import (
 	"github.com/podomy/concord/internal/cn"
 	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/dnsserver"
-	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -99,12 +98,19 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	defer shutdownPeerService(logger, peerService)
 
 	// The sampler is shared between the reconciler fast beat (writes),
-	// the discovery beat (position trail), and the IPC server (reads).
+	// the IPC position setter (fixes), and the IPC server (reads).
 	sampler := node.NewSampler()
 
-	// Publish our configured position for geo-scoped discovery and the
-	// fleet map. Absent when the operator provisioned none.
-	publishPosition(nodeConfig, peerService)
+	// The track log holds every trail point durably. A log that cannot
+	// open degrades to memory-only trail; the node still runs.
+	track := openTrackSink(logger)
+	defer closeTrackLog(logger, track)
+	sampler.SetTrackLog(track)
+
+	// Publish our persisted position for geo-scoped discovery and the
+	// fleet map. Absent when the operator provisioned none. Recording it
+	// also seeds anchor ordering and the trail with the known fix.
+	publishPosition(nodeConfig, peerService, sampler)
 	peerService.SetAnchor(nodeConfig.Anchor)
 
 	// Peerdiscovery is split: ObserveMemberlistPeers is
@@ -214,14 +220,40 @@ func initNodeConfig() (*node.NodeConfig, error) {
 	return nodeConfig, nil
 }
 
-// publishPosition gossips the configured position, if any. Absent
+// openTrackSink opens the durable trail file, or nil for memory-only
+// trail when it cannot open. The node runs either way; the caller passes
+// the result straight to SetTrackLog and closeTrackLog, both nil-tolerant.
+func openTrackSink(logger *zap.Logger) *node.TrackLog {
+	track, err := node.OpenTrackLog()
+	if err != nil {
+		logger.Warn("open track log; continuing memory-only", zap.Error(err))
+		return nil
+	}
+	return track
+}
+
+// publishPosition gossips the persisted position, if any, and records it
+// so anchor ordering and the trail start from the known fix. Absent
 // position means LAN-only identity: the node still discovers over mDNS,
 // it just never orders anchors by distance.
-func publishPosition(nodeConfig *node.NodeConfig, peerService *peerdiscovery.MemberService) {
+func publishPosition(nodeConfig *node.NodeConfig, peerService *peerdiscovery.MemberService, sampler *node.Sampler) {
 	if nodeConfig.Position == nil {
 		return
 	}
 	peerService.SetPosition(nodeConfig.Position.Lat, nodeConfig.Position.Lon)
+	sampler.RecordPosition(*nodeConfig.Position)
+}
+
+// closeTrackLog releases the durable trail file, tolerating nil for the
+// memory-only degraded path. Failures log and nothing else: the ring
+// already holds the recent points in memory.
+func closeTrackLog(logger *zap.Logger, track *node.TrackLog) {
+	if track == nil {
+		return
+	}
+	if err := track.Close(); err != nil {
+		logger.Warn("close track log", zap.Error(err))
+	}
 }
 
 func teardownNetworking(logger *zap.Logger) {
@@ -597,37 +629,24 @@ func runDiscoveryLoop(
 	}
 }
 
-// refreshDiscoveryState reloads geographic position and anchor list from
-// node config and gossips the position. The file is the single source:
-// whoever moves us rewrites it, and the next discovery round publishes.
-// Load failures keep the previous position and fall back to the boot
-// anchors. Absent position publishes nothing. It returns the loaded
-// position for the sampler trail and the anchor list for this round, so
-// config edits to either take effect without a restart.
-func refreshDiscoveryState(logger *zap.Logger, peerService *peerdiscovery.MemberService, fallbackAnchors []node.AnchorEntry) (*geo.Point, []node.AnchorEntry) {
+// refreshAnchors reloads the anchor list from node config for this
+// discovery round, so reprovisioned anchors take effect without a
+// restart. Load failures fall back to the boot list. Position no longer
+// reloads here: live fixes arrive over IPC (SetPosition), persist to
+// config for the next boot, and the file is never polled.
+func refreshAnchors(logger *zap.Logger, fallbackAnchors []node.AnchorEntry) []node.AnchorEntry {
 	config, err := node.LoadOrCreateNodeConfig()
 	if err != nil {
-		logger.Warn("reload node config for discovery", zap.Error(err))
-		return nil, fallbackAnchors
+		logger.Warn("reload node config for anchors", zap.Error(err))
+		return fallbackAnchors
 	}
-	if config.Position != nil {
-		peerService.SetPosition(config.Position.Lat, config.Position.Lon)
-		return config.Position, config.Anchors
-	}
-	// Deliberately absent position clears gossip to unknown. Load failures
-	// above keep the previous fix; a clean decode without one means the
-	// operator removed it, and the old coordinates must stop converging.
-	peerService.ClearPosition()
-	return nil, config.Anchors
+	return config.Anchors
 }
 
 // discoverAndJoin performs one discovery round: mDNS LAN candidates plus
-// configured anchors ordered nearest-first, filtered, and Join. It also
-// refreshes position and anchors from config, so roaming members and
-// reprovisioned anchor lists update without a restart: whoever rewrites the
-// file (operator, autonomy stack) sees it gossiped within one round. The
-// 5s poll latency and the 10m trail threshold are the write path until a
-// dedicated position feed exists; see docs/trail.md.
+// configured anchors ordered nearest-first, filtered, and Join. Anchors
+// reload from config every round; position arrives over IPC instead, so
+// the file is never polled for it. See docs/trail.md.
 func discoverAndJoin(
 	ctx context.Context,
 	logger *zap.Logger,
@@ -635,12 +654,10 @@ func discoverAndJoin(
 	anchors []node.AnchorEntry,
 	sampler *node.Sampler,
 ) {
-	// Config loads fresh every round: gossip, trail, and anchor ordering
-	// all follow file rewrites together, never a boot snapshot.
-	pos, liveAnchors := refreshDiscoveryState(logger, peerService, anchors)
-	if pos != nil {
-		sampler.RecordPosition(*pos)
-	}
+	// Anchor edits take effect without a restart; a boot snapshot is
+	// never used past the first round's fallback.
+	liveAnchors := refreshAnchors(logger, anchors)
+	pos := sampler.LastPosition()
 	if err := peerService.Publish(); err != nil {
 		logger.Debug("publish metadata", zap.Error(err))
 	}
