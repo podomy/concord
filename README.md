@@ -34,6 +34,8 @@ reunion, and scheduling.
 - [Noise Transport](./docs/noise.md)
 - [Journal Sync](./docs/cursors.md)
 - [Metrics and Pressure](./docs/metrics.md)
+- [Position Trail](./docs/trail.md)
+- [IPC Reference](./docs/ipc.md)
 - [CLI Reference](./docs/cli.md)
 - [Go SDK Reference](./docs/sdk.md)
 - [Deployment Guide](./docs/deployment.md)
