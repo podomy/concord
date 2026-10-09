@@ -108,7 +108,7 @@ func scheduleWorkloads(
 		if spec.AssignedNodeID == uuid.Nil {
 			chosenMember := pickNode(members)
 			spec.AssignedNodeID = chosenMember.ID
-			recordAssignment(ctx, logger, j, views, nodeID, spec)
+			recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec assigned")
 			continue
 		}
 
@@ -122,7 +122,7 @@ func scheduleWorkloads(
 		}
 		spec.AssignedNodeID = chosenMember.ID
 		spec.AssignmentEpoch++
-		recordAssignment(ctx, logger, j, views, nodeID, spec)
+		recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec reassigned")
 	}
 }
 
@@ -138,8 +138,10 @@ func aliveNodeIDs(members []peerdiscovery.Node) map[uuid.UUID]struct{} {
 	return alive
 }
 
-// recordAssignment writes one workload.spec copy carrying its current assignment.
-func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, nodeID uuid.UUID, spec workload.Spec) {
+// recordAssignment writes one workload.spec copy carrying its current
+// assignment. The message names the action so initial assignments and
+// orphan reassignments read apart in logs.
+func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, nodeID uuid.UUID, spec workload.Spec, message string) {
 	payload, err := json.Marshal(spec)
 	if err != nil {
 		logger.Error("json marshal", zap.Error(err))
@@ -147,7 +149,10 @@ func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal
 	}
 
 	event := journal.NewEvent(nodeID, "workload.spec", payload)
-	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.spec")
+	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, message,
+		zap.String("workload_id", spec.ID.String()),
+		zap.String("assigned_node", spec.AssignedNodeID.String()),
+	)
 	if err != nil {
 		logger.Error("record workload.spec event", zap.Error(err))
 	}

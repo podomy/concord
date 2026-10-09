@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
+
+	"github.com/podomy/concord/internal/geo"
 )
 
 type NodeConfig struct {
@@ -23,6 +25,37 @@ type NodeConfig struct {
 	// picks one from the bind address or a non-loopback interface.
 	AdvertiseAddress netip.Addr `json:"advertise_address"`
 	ID               uuid.UUID  `json:"id"`
+	// Anchor marks this node as a rendezvous anchor: stable, reachable,
+	// and safe for newcomers to join. Provisioned with concord --anchor.
+	Anchor bool `json:"anchor,omitempty"`
+	// Position is this node's geographic position, or nil when unknown.
+	// Anchors use it to order nearest-first; without it the anchor list
+	// order decides. Operator-provisioned; anchors are stationary so
+	// theirs never goes stale.
+	Position *geo.Point `json:"position,omitempty"`
+	// Anchors are rendezvous addresses tried in order (nearest first when
+	// Position is known). Empty means LAN-only discovery via mDNS.
+	Anchors []AnchorEntry `json:"anchors,omitempty"`
+}
+
+// AnchorEntry is one rendezvous anchor: a stable reachable address plus
+// the coordinates that order it against the others.
+type AnchorEntry struct {
+	// Name labels the anchor for operators (depot, rim-mast). Unused by code.
+	Name string         `json:"name,omitempty"`
+	Addr netip.AddrPort `json:"address"`
+	Lat  float64        `json:"lat"`
+	Lon  float64        `json:"lon"`
+}
+
+// AnchorPoint returns the entry's coordinates, or false when they are
+// outside the planet and must not order anything.
+func (a AnchorEntry) AnchorPoint() (geo.Point, bool) {
+	p := geo.Point{Lat: a.Lat, Lon: a.Lon}
+	if !p.Valid() {
+		return geo.Point{}, false
+	}
+	return p, true
 }
 
 // getNodeConfigPath returns the auto-determined path for the local node config.

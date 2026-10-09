@@ -112,11 +112,54 @@ The file must hold 16, 24, or 32 raw bytes (AES-128/192/256); Concord refuses to
 
 ## Multi-Node Cluster Discovery
 
-Concord nodes automatically discover each other over the local subnet using SWIM gossip (UDP port `17946`).
+Concord nodes discover each other two ways, and need exactly one of
+them to make first contact. On a broadcast LAN, mDNS finds peers with
+no configuration. Beyond broadcast reach, rendezvous anchors do: stable
+reachable members the whole swarm knows in advance. See
+`Discovery` in `docs/architecture.md` for the doctrine.
 
 When a node starts:
 1. It initializes its Noise identity from `~/.config/concord/noise/` and `~/.config/concord/certs/`.
-2. It listens for gossip announcements from peer nodes on the local network.
-3. Once discovered, nodes establish an encrypted WireGuard mesh and sync journal events over Noise.
+2. It listens for gossip announcements on the local network and dials
+   its configured anchors nearest-first.
+3. Once any single member is reached, gossip hands it the whole mesh;
+   nodes establish an encrypted WireGuard mesh and sync journal events over Noise.
 
 No central master server, control plane, or external database is required.
+
+### Rendezvous Anchors
+
+Anchors live in `~/.config/concord/config.json` next to the node id:
+
+```json
+{
+  "position": {"lat": 47.6, "lon": 8.9},
+  "anchors": [
+    {"name": "depot", "address": "192.168.100.10:7946", "lat": 47.61, "lon": 8.91},
+    {"name": "rim-mast", "address": "192.168.100.11:7946", "lat": 47.0, "lon": 8.0}
+  ]
+}
+```
+
+`position` is this node's own coordinates, or absent when unknown;
+without it the anchor list order decides instead of distance. Each
+anchor names coordinates alongside a stable memberlist address;
+out-of-planet coordinates never order anything but still dial fine.
+An anchor must hold still with stable backhaul for as long as it
+anchors; a parked truck counts, a roaming one does not. The file is the
+position API: every discovery round (5s) reloads position and anchors
+together, so edits take effect without a restart at the cost of poll
+latency. How moves become trail points, and why the trail is memory-only,
+lives in `docs/trail.md`.
+
+Provision addresses in the config file, where surveyed positions
+belong; mark the node itself an anchor from the command line:
+
+```bash
+concord --anchor
+```
+
+The flag persists `anchor` into `config.json` and the node gossips the
+role from its next start. No addresses on the command line: off-LAN
+anchor addresses live in the file only, keeping swarm addressing out of
+process invocations.

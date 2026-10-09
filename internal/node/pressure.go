@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/podomy/concord/internal/geo"
 )
 
 // ErrNoCPULine indicates that the aggregate cpu line could not be found in /proc/stat.
@@ -61,6 +63,7 @@ type Sampler struct {
 	prev       map[uuid.UUID]workloadPrev
 	samples    map[uuid.UUID]WorkloadSample
 	workTrends map[uuid.UUID]*trend
+	path       *trail
 }
 
 // NewSampler creates an empty pressure sampler.
@@ -69,6 +72,7 @@ func NewSampler() *Sampler {
 		prev:       make(map[uuid.UUID]workloadPrev),
 		samples:    make(map[uuid.UUID]WorkloadSample),
 		workTrends: make(map[uuid.UUID]*trend),
+		path:       newTrail(),
 	}
 }
 
@@ -134,13 +138,38 @@ func (s *Sampler) SampleWorkload(id uuid.UUID, cpuTotal, memUsageBytes, memLimit
 	return sample
 }
 
-// DropWorkload forgets a workload's counters, latest sample, and history.
+// DropWorkload forgets a workload's counters, latest sample, and trend.
 func (s *Sampler) DropWorkload(id uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.prev, id)
 	delete(s.samples, id)
 	delete(s.workTrends, id)
+}
+
+// RecordPosition appends to the position trail when the node moved at
+// least trailMoveKM since the last recorded point. The first valid
+// position always records. Invalid positions never record, and neither
+// does the exact zero point: zeros mean unknown across gossip, gauges,
+// and node list, so recording them would plant a Null Island waypoint
+// no node ever visited.
+func (s *Sampler) RecordPosition(pos geo.Point) {
+	if !pos.Valid() || (pos.Lat == 0 && pos.Lon == 0) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if last, ok := s.path.last(); ok && geo.DistanceKM(last.Pos, pos) < trailMoveKM {
+		return
+	}
+	s.path.add(trailPoint{At: time.Now(), Pos: pos})
+}
+
+// Trail returns the recorded positions oldest-first.
+func (s *Sampler) Trail() []trailPoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.path.points()
 }
 
 // Workloads returns a copy of the latest per-workload samples.

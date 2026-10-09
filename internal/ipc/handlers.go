@@ -23,6 +23,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workloads", s.handleListWorkloads)
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
+	mux.HandleFunc("GET /v1/nodes/self/trail", s.handleNodeTrail)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", s.handleDeleteWorkload)
 	mux.HandleFunc("GET /v1/nodes", s.handleListNodes)
@@ -39,6 +40,10 @@ type listResponse struct {
 
 type nodesResponse struct {
 	Nodes []sdk.Node `json:"nodes"`
+}
+
+type trailResponse struct {
+	Trail []sdk.TrailPoint `json:"trail"`
 }
 
 type errorResponse struct {
@@ -250,6 +255,23 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleNodeTrail returns our recorded positions oldest-first. The trail
+// is local memory only (see docs/trail.md): it replays this node's roam
+// while the process kept running, never via journal replay.
+func (s *Server) handleNodeTrail(w http.ResponseWriter, _ *http.Request) {
+	if s.sampler == nil {
+		writeError(w, http.StatusServiceUnavailable, "trail unavailable")
+		return
+	}
+
+	trail := make([]sdk.TrailPoint, 0)
+	for _, p := range s.sampler.Trail() {
+		trail = append(trail, sdk.TrailPoint{At: p.At, Lat: p.Pos.Lat, Lon: p.Pos.Lon})
+	}
+
+	writeJSON(w, http.StatusOK, trailResponse{Trail: trail})
+}
+
 // handleListNodes queries the peer discovery service for all known cluster nodes.
 func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 	if s.peerService == nil {
@@ -274,6 +296,9 @@ func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 			CPUPercent:         m.Metadata.CPUPercent,
 			MemPercent:         m.Metadata.MemPercent,
 			DiskPercent:        m.Metadata.DiskPercent,
+			Lat:                m.Metadata.Lat,
+			Lon:                m.Metadata.Lon,
+			Anchor:             m.Metadata.Anchor,
 		})
 	}
 

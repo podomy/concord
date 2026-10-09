@@ -47,6 +47,12 @@ type ContainerAndProcess struct {
 	Spec         workload.Spec
 	Stopping     bool
 	restartCount int
+	// unhealthyReported is edge-triggered dedup for workload.unhealthy: the
+	// fast beat runs every 500ms, so without it a still-sick workload would
+	// append one journal event per beat. Set on first report, cleared on
+	// recovery. Memory-only: a daemon restart re-reports a still-sick
+	// workload once, which is the correct edge after the state loss.
+	unhealthyReported bool
 }
 
 // ExitEvent carries a process exit status paired with its workload ID to the main loop channel.

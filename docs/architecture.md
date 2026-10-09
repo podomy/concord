@@ -67,9 +67,7 @@ Node Discovery
      │
      ├──► mDNS (LAN Multicast)
      │         │
-     ├──► SWIM Gossip (UDP :17946)
-     │         │
-     └──► DNS Server (SRV/A :15353)
+     └──► SWIM Gossip (UDP :17946)
                │
                ▼
      Peer Memberlist
@@ -135,6 +133,94 @@ node. Overlay stays `10.0.0.0/16` inside each netns. If the
 tun is `10.0.0.1` / `10.0.0.2`, Concord cannot tell underlay
 from `cn0`, Join hits the local bridge, and membership
 stays at one node.
+
+---
+
+## Discovery
+
+Discovery is the first-contact problem and nothing more. Once a node
+reaches any single member, gossip hands it the whole mesh transitively;
+memberlist already does that. Everything below exists only to produce
+that first peer.
+
+There are exactly two ways first contact happens, and no third. Either
+both sides share a broadcast domain and one shouts, or both sides know
+one stable address in advance. Fully automatic global discovery with
+zero priors is impossible: DHTs, blockchains, and libp2p all ship
+bootstrap lists for this reason. Concord implements both: mDNS on the
+LAN, anchors everywhere routed:
+
+* mDNS on the LAN. Nodes advertise and browse `_concord._udp`; whoever
+  hears answers. Covers the bench, the warehouse floor, any single
+  broadcast domain. Dies the moment multicast does.
+* Rendezvous anchors for everything routed. Rendezvous means a
+  pre-agreed meeting place: two parties who cannot find each other both
+  go to the spot they already know. Anchors are stable, reachable fleet
+  members that signal the role: provisioned with `concord --anchor`,
+  gossiped as `anchor` in memberlist metadata, visible in `node list`.
+  A base station, a depot server, a relay mast. Newcomers join the
+  nearest configured anchor, learn the mesh, gossip takes over. One
+  anchor is enough functionally; two or three cover anchor downtime,
+  since a dead anchor blocks new joins but never hurts the existing
+  mesh. Provisioning is detailed under `Rendezvous Anchors`
+  in `docs/deployment.md`.
+
+Anchors carry geography, because a flat ordered list makes no sense
+across distance. Each anchor entry names coordinates alongside the
+address, and a node tries the nearest anchor first: a truck in the
+north pit dials the north depot while its own anchor sits next door,
+instead of burning a dead link toward a far anchor that happens to sit
+first in the list. Without geo scoping the list order decides for the
+whole planet, which is no decision at all.
+
+An anchor holds still and keeps its backhaul: same position, same
+address, same route in, for as long as it anchors. That is a role, not
+hardware. A parked truck can anchor for a shift, but holding still is
+operationally the hard part: the moment it drives off, every address
+pointing at it goes stale and newcomers dial nothing. Prefer anchors
+that cannot wander, the depot office, the rim relay mast, the site
+server container, and treat a wheeled anchor as a temporary one with an
+expiry, not a fixture.
+
+Concrete shape, an open-pit mine. The rim is the pit's top edge;
+a relay mast there sees the whole pit by line-of-sight:
+
+```
+              pit rim (fiber + power)
+             ┌─────────────────────────┐
+             │  depot office           │
+             │  ┌─────────┐            │
+             │  │ anchor  │◀── fiber ──┼── to internet / HQ
+             │  └────┬────┘            │
+             └───────┼─────────────────┘
+                     │ wireless coverage
+        ┌────────────┼────────────┐
+        │            │            │
+   haul truck   drill rig    haul truck
+   (roams)      (roams)      (in dead zone:
+                               partitioned,
+                               keeps working
+                               local-first)
+```
+
+A truck rolling into coverage joins through the depot anchor, learns
+the mesh, and runs. Rolling into a dead zone it partitions and keeps
+working local-first; rolling back out it rejoins through the anchor or
+depot-LAN mDNS, whichever answers first. If the depot anchor itself
+dies, covered members keep gossiping undisturbed while new arrivals
+fall through to the rim mast, the nearest entry after the dead one.
+The mast covers exactly the depot's gap because geography ordered the
+list, not luck.
+
+What anchors are not: dedicated infrastructure or a special protocol.
+An anchor joins a memberlist like any other member; stable and
+reachable is the whole requirement. Robots sharing no routable path
+need nothing at all: they are separate fleets by definition, and no
+discovery mechanism fixes physics.
+
+The embedded DNS server (`:15353`) serves names to workloads, not to
+discovery. Nodes find each other through the two ways above; nothing
+queries anyone's DNS to bootstrap, and no external DNS is ever required.
 
 ---
 

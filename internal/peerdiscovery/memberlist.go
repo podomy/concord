@@ -9,17 +9,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/memberlist"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/internal/geo"
 	nodepackage "github.com/podomy/concord/internal/node"
 )
 
@@ -181,10 +185,17 @@ func Start(
 			CPUPercent:      clampPressure(delegate.cpu.Load()),
 			MemPercent:      clampPressure(delegate.mem.Load()),
 			DiskPercent:     clampPressure(delegate.disk.Load()),
+			Lat:             microToDeg(delegate.lat.Load()),
+			Lon:             microToDeg(delegate.lon.Load()),
+			Anchor:          delegate.anchor.Load(),
 			NoisePublicKey:  identity.Pub,
 			NoiseGeneration: identity.Generation,
 		}
 	}
+	// Seed published with the initial snapshot so the first Publish is a
+	// no-op: memberlist already gossips this meta on join, an immediate
+	// UpdateNode would rebroadcast identical bytes.
+	delegate.published = delegate.meta()
 
 	config.Delegate = delegate
 
@@ -264,6 +275,79 @@ func (m *MemberService) SetPressure(cpu, mem, disk uint8) {
 	m.delegate.cpu.Store(uint32(cpu))
 	m.delegate.mem.Store(uint32(mem))
 	m.delegate.disk.Store(uint32(disk))
+}
+
+// SetPosition updates the geographic position reported in node gossip
+// metadata. Out-of-planet coordinates are ignored, keeping the previous
+// position: callers retry with a real fix next beat. This moves gossip
+// only; history needs Sampler.RecordPosition too. The discovery round
+// does both together via refreshDiscoveryState.
+func (m *MemberService) SetPosition(lat, lon float64) {
+	if m == nil || m.delegate == nil {
+		return
+	}
+	p := geo.Point{Lat: lat, Lon: lon}
+	if !p.Valid() {
+		return
+	}
+	m.delegate.lat.Store(degToMicro(lat))
+	m.delegate.lon.Store(degToMicro(lon))
+}
+
+// ClearPosition resets gossiped coordinates to unknown (zeros). Called
+// when config decodes without a position: without it a removed position
+// would gossip its last fix forever, and the fleet map would lie.
+func (m *MemberService) ClearPosition() {
+	if m == nil || m.delegate == nil {
+		return
+	}
+	m.delegate.lat.Store(0)
+	m.delegate.lon.Store(0)
+}
+
+// Publish pushes current metadata to the mesh when anything volatile
+// changed since the last push. Static identity never differs, so it is
+// not compared; see equalVolatile for the compared set. Unchanged values
+// skip the broadcast entirely. Callers are the fast beat (after sampling)
+// and the discovery beat (after config refresh), hence the mutex: Set*
+// stay lock-free atomics for the gossip hot path while Publish serializes
+// the read-compare-broadcast sequence.
+func (m *MemberService) Publish() error {
+	if m == nil || m.delegate == nil || m.list == nil {
+		return nil
+	}
+	d := m.delegate
+	d.pubMu.Lock()
+	defer d.pubMu.Unlock()
+
+	current := d.meta()
+	if current.equalVolatile(d.published) {
+		return nil
+	}
+	err := m.list.UpdateNode(publishTimeout)
+	if err != nil {
+		return fmt.Errorf("update node metadata: %w", err)
+	}
+	d.published = current
+	return nil
+}
+
+// degToMicro stores decimal degrees as microdegrees for atomic storage.
+func degToMicro(v float64) int32 {
+	return int32(math.Round(v * 1e6))
+}
+
+// microToDeg renders stored microdegrees back to decimal degrees.
+func microToDeg(v int32) float64 {
+	return float64(v) / 1e6
+}
+
+// SetAnchor marks this node as a rendezvous anchor in gossip metadata.
+func (m *MemberService) SetAnchor(anchored bool) {
+	if m == nil || m.delegate == nil {
+		return
+	}
+	m.delegate.anchor.Store(anchored)
 }
 
 // clampPressure narrows a stored 0-100 utilization to uint8.
@@ -524,17 +608,31 @@ func memberState(state memberlist.NodeStateType) NodeState {
 	}
 }
 
-// nodeMetadataDelegate implements memberlist.Delegate to
-// serialize and gossip local node metadata (CPU, Memory,
-// utilization pressure, and active container workload counts)
-// across cluster peers.
+// nodeMetadataDelegate implements memberlist.Delegate to serialize and
+// gossip local node metadata (pressure trio, workload count, position, and
+// anchor role) across cluster peers. Volatile fields stay lock-free
+// atomics so memberlist's gossip thread (NodeMeta) never blocks; pubMu
+// serializes only Publish's read-compare-broadcast, which runs on the fast
+// beat and the discovery beat concurrently.
 type nodeMetadataDelegate struct {
 	meta      func() NodeMetadata
 	workloads atomic.Int32
 	cpu       atomic.Uint32
 	mem       atomic.Uint32
 	disk      atomic.Uint32
+	lat       atomic.Int32
+	lon       atomic.Int32
+	anchor    atomic.Bool
+	// pubMu guards published only.
+	pubMu sync.Mutex
+	// published is the last metadata pushed to the mesh. Compared with
+	// equalVolatile on every Publish so unchanged values never rebroadcast.
+	published NodeMetadata
 }
+
+// publishTimeout bounds one metadata broadcast. The wait covers queueing
+// the alive message, not a full gossip round.
+const publishTimeout = time.Second
 
 // NodeMeta produces JSON-serialized metadata for this node
 // to be included

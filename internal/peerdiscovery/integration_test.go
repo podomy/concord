@@ -4,19 +4,15 @@
 package peerdiscovery_test
 
 import (
-	"context"
-	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/podomy/concord/internal/dnsserver"
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
 
@@ -55,31 +51,44 @@ func TestTwoNodesJoin(t *testing.T) {
 	waitForMembers(t, svcB, 2)
 }
 
-func TestTwoNodesDNSDiscovery(t *testing.T) {
+// Set values stay local until Publish pushes them: Members reads the last
+// broadcast metadata, never the live atomics.
+func TestPublishPropagates(t *testing.T) {
 	t.Parallel()
 
-	svcA, addrA := startNode(t, nil)
-	dnsPort := freeUDPPort(t)
+	svc, _ := startNode(t, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	if err := dnsserver.Start(ctx, svcA, zap.NewNop(), "127.0.0.1:"+dnsPort); err != nil {
-		t.Fatalf("start dns: %v", err)
+	svc.SetPressure(30, 40, 50)
+	if got := selfMeta(t, svc); got.CPUPercent != 0 {
+		t.Fatalf("unpublished pressure leaked: %+v", got)
 	}
-	time.Sleep(50 * time.Millisecond)
 
-	got, err := (&peerdiscovery.DNSSRVResolver{
-		Bootstrap: []netip.AddrPort{addrA},
-		Timeout:   time.Second,
-		QueryPort: dnsPort,
-	}).Resolve(context.Background())
+	if err := svc.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	got := selfMeta(t, svc)
+	if got.CPUPercent != 30 || got.MemPercent != 40 || got.DiskPercent != 50 {
+		t.Fatalf("pressure = %d/%d/%d", got.CPUPercent, got.MemPercent, got.DiskPercent)
+	}
+
+	var nilService *peerdiscovery.MemberService
+	if err := nilService.Publish(); err != nil {
+		t.Fatalf("nil publish: %v", err)
+	}
+}
+
+// selfMeta returns the local member's metadata or fails.
+func selfMeta(t *testing.T, svc *peerdiscovery.MemberService) peerdiscovery.NodeMetadata {
+	t.Helper()
+
+	members, err := svc.Members()
 	if err != nil {
-		t.Fatalf("dns srv resolve: %v", err)
+		t.Fatal(err)
 	}
-	if !containsPort(got, addrA.Port()) {
-		t.Fatalf("discovered %v, expected port of A %v", got, addrA)
+	if len(members) != 1 {
+		t.Fatalf("members = %d, want 1", len(members))
 	}
+	return members[0].Metadata
 }
 
 func startNode(t *testing.T, join []netip.AddrPort) (*peerdiscovery.MemberService, netip.AddrPort) {
@@ -125,34 +134,4 @@ func waitForMembers(t *testing.T, svc *peerdiscovery.MemberService, minCount int
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-}
-
-func freeUDPPort(t *testing.T) string {
-	t.Helper()
-
-	var lc net.ListenConfig
-	pc, err := lc.ListenPacket(context.Background(), "udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() {
-		if err := pc.Close(); err != nil {
-			t.Errorf("close: %v", err)
-		}
-	}()
-
-	udpAddr, ok := pc.LocalAddr().(*net.UDPAddr)
-	if !ok {
-		t.Fatalf("unexpected addr type %T", pc.LocalAddr())
-	}
-	return strconv.Itoa(udpAddr.Port)
-}
-
-func containsPort(addrs []netip.AddrPort, port uint16) bool {
-	for _, addr := range addrs {
-		if addr.Port() == port {
-			return true
-		}
-	}
-	return false
 }

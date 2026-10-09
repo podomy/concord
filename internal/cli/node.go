@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -21,6 +22,7 @@ func newNodeCommand() *cobra.Command {
 	}
 
 	nodeCmd.AddCommand(newNodeListCommand())
+	nodeCmd.AddCommand(newNodeTrailCommand())
 	nodeCmd.AddCommand(newNodeRotateKeyCommand())
 
 	return nodeCmd
@@ -57,14 +59,50 @@ func handleNodeList(ctx context.Context, stdout io.Writer) error {
 	}
 
 	tw := newTableWriter(stdout)
-	_, _ = fmt.Fprintln(tw, "NODE ID\tADDRESS\tSTATE\tWIREGUARD PUBLIC KEY\tPRESSURE") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(tw, "NODE ID\tADDRESS\tSTATE\tWIREGUARD PUBLIC KEY\tPRESSURE\tLAT\tLON\tANCHOR") //nolint:errcheck // CLI output
 	for _, n := range nodes {
 		pressure := max(n.CPUPercent, n.MemPercent, n.DiskPercent)
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d%%\n", n.ID, n.Address, n.State, dashIfEmpty(n.WireGuardPublicKey), pressure) //nolint:errcheck // CLI output
+		anchor := "-"
+		if n.Anchor {
+			anchor = "yes"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d%%\t%.4f\t%.4f\t%s\n", n.ID, n.Address, n.State, dashIfEmpty(n.WireGuardPublicKey), pressure, n.Lat, n.Lon, anchor) //nolint:errcheck // CLI output
 	}
 
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush node table: %w", err)
+	}
+
+	return nil
+}
+
+// newNodeTrailCommand creates the 'concord node trail' subcommand.
+func newNodeTrailCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "trail",
+		Short: "Show this node's recorded positions oldest-first",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return handleNodeTrail(cmd.Context(), cmd.OutOrStdout())
+		},
+	}
+}
+
+// handleNodeTrail prints timestamped coordinates, one per line. Empty
+// trail prints nothing and succeeds: a stationary node has nowhere to go.
+func handleNodeTrail(ctx context.Context, stdout io.Writer) error {
+	client, closeFn, err := dialIPCClient()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	trail, err := client.Trail(ctx)
+	if err != nil {
+		return fmt.Errorf("get node trail: %w", err)
+	}
+
+	for _, p := range trail {
+		_, _ = fmt.Fprintf(stdout, "%s %.6f %.6f\n", p.At.Format(time.RFC3339), p.Lat, p.Lon) //nolint:errcheck // CLI output
 	}
 
 	return nil

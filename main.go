@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"go.uber.org/zap"
@@ -39,14 +40,34 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// If cli arguments were specified we run our cli instead
-	// of running the daemon.
-	if len(os.Args) > 1 {
-		if err := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			return fmt.Errorf("cli: %w", err)
-		}
+	// Leading flags belong to the daemon (currently only --anchor, which
+	// marks this node as a rendezvous anchor). Anything else goes
+	// to the CLI, including --help.
+	if len(os.Args) == 1 || (strings.HasPrefix(os.Args[1], "-") && os.Args[1] != "-h" && os.Args[1] != "--help") {
+		return runDaemon(ctx, os.Args[1:])
+	}
 
-		return nil
+	if err := cli.Execute(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		return fmt.Errorf("cli: %w", err)
+	}
+
+	return nil
+}
+
+// runDaemon provisions anchor mode when flagged, then starts the node.
+func runDaemon(ctx context.Context, args []string) error {
+	anchor, err := parseDaemonFlags(args)
+	if err != nil {
+		return err
+	}
+	if anchor {
+		changed, err := provisionAnchor()
+		if err != nil {
+			return err
+		}
+		if changed {
+			_, _ = fmt.Fprintln(os.Stdout, "provisioned as rendezvous anchor") //nolint:errcheck // startup output
+		}
 	}
 
 	return startDaemon(ctx)

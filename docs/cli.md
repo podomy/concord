@@ -11,6 +11,17 @@ Concord uses a noun-first command structure: `concord <noun> <action> [flags]`.
 concord
 ```
 
+### Serve as a Rendezvous Anchor
+```bash
+# Mark this node as an anchor in config.json, then start
+concord --anchor
+```
+
+The flag persists `anchor` into the node config and the node gossips
+the role from its next start. Anchor addresses for off-LAN joins live
+in the config file only, never on the command line. Provisioning is
+detailed under `Rendezvous Anchors` in `docs/deployment.md`.
+
 ---
 
 ## Workload Commands
@@ -118,8 +129,8 @@ concord node list
 
 **Output:**
 ```
-NODE ID                                ADDRESS             STATE    WIREGUARD PUBLIC KEY    PRESSURE
-a1b2c3d4-e5f6-7890-abcd-ef1234567890   192.168.1.10:17946  alive    +abc123xyz...           23%
+NODE ID                                ADDRESS             STATE    WIREGUARD PUBLIC KEY    PRESSURE    LAT       LON        ANCHOR
+a1b2c3d4-e5f6-7890-abcd-ef1234567890   192.168.1.10:17946  alive    +abc123xyz...           23%         47.6000   8.9000     yes
 ```
 
 PRESSURE is the highest of the node's gossiped CPU, memory, and disk
@@ -137,6 +148,21 @@ concord node rotate-key
 Deletes the static key and bumps the generation counter. Local file ops
 only, no daemon involved: restart the daemon to apply. The full
 procedure and the pin rules live in `docs/noise.md`.
+
+### Node Trail
+```bash
+concord node trail
+```
+
+Prints this node's recorded positions oldest-first, one timestamped
+coordinate per line. Positions record on 10m moves from node config.
+The trail is local memory only and empties on restart; full behavior
+lives in `docs/trail.md`:
+
+```
+2026-10-09T10:00:00Z 47.600000 8.900000
+2026-10-09T10:05:00Z 47.610000 8.910000
+```
 
 ---
 

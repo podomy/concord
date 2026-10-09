@@ -17,6 +17,7 @@ import (
 	"github.com/podomy/concord/internal/cn"
 	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/dnsserver"
+	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -97,10 +98,19 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 	defer shutdownPeerService(logger, peerService)
 
+	// The sampler is shared between the reconciler fast beat (writes),
+	// the discovery beat (position trail), and the IPC server (reads).
+	sampler := node.NewSampler()
+
+	// Publish our configured position for geo-scoped discovery and the
+	// fleet map. Absent when the operator provisioned none.
+	publishPosition(nodeConfig, peerService)
+	peerService.SetAnchor(nodeConfig.Anchor)
+
 	// Peerdiscovery is split: ObserveMemberlistPeers is
 	// passive, it only polls the already-joined memberlist
 	// and records peer.seen/updated/lost. runDiscoveryLoop
-	// is active, it re-queries mDNS and DNS SRV for new
+	// is active, it re-queries mDNS and anchors for new
 	// candidates and calls Join. Without the loop a node
 	// that booted alone would never discover later peers.
 	go peerdiscovery.ObserveMemberlistPeers(
@@ -111,7 +121,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		st.journal,
 		views,
 	)
-	go runDiscoveryLoop(ctx, logger, peerService)
+	go runDiscoveryLoop(ctx, logger, peerService, nodeConfig.Anchors, sampler)
 
 	err = dnsserver.Start(ctx, peerService, logger, "")
 	if err != nil {
@@ -142,9 +152,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	)
 	logger.Info("peer sync pull loop started")
 
-	// Start the workload infrastructure and network. The sampler is shared
-	// between the reconciler fast beat (writes) and the IPC server (reads).
-	sampler := node.NewSampler()
+	// Start the workload infrastructure and network.
 	ocireg, err := startWorkloadAndNetwork(
 		ctx,
 		nodeConfig.ID,
@@ -204,6 +212,16 @@ func initNodeConfig() (*node.NodeConfig, error) {
 		)
 	}
 	return nodeConfig, nil
+}
+
+// publishPosition gossips the configured position, if any. Absent
+// position means LAN-only identity: the node still discovers over mDNS,
+// it just never orders anchors by distance.
+func publishPosition(nodeConfig *node.NodeConfig, peerService *peerdiscovery.MemberService) {
+	if nodeConfig.Position == nil {
+		return
+	}
+	peerService.SetPosition(nodeConfig.Position.Lat, nodeConfig.Position.Lon)
 }
 
 func teardownNetworking(logger *zap.Logger) {
@@ -554,7 +572,7 @@ func setupViews(
 }
 
 // runDiscoveryLoop is the active discovery path. It
-// periodically queries mDNS and DNS SRV for bootstrap
+// periodically queries mDNS and anchors for bootstrap
 // candidates that are not yet in the memberlist and
 // attempts to join them. It complements
 // ObserveMemberlistPeers, which only watches already-joined
@@ -563,8 +581,10 @@ func runDiscoveryLoop(
 	ctx context.Context,
 	logger *zap.Logger,
 	peerService *peerdiscovery.MemberService,
+	anchors []node.AnchorEntry,
+	sampler *node.Sampler,
 ) {
-	discoverAndJoin(ctx, logger, peerService)
+	discoverAndJoin(ctx, logger, peerService, anchors, sampler)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -572,18 +592,59 @@ func runDiscoveryLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			discoverAndJoin(ctx, logger, peerService)
+			discoverAndJoin(ctx, logger, peerService, anchors, sampler)
 		}
 	}
 }
 
-// discoverAndJoin performs one discovery round: resolve via
-// MultiResolver (mDNS + DNS SRV), log candidates, and Join.
+// refreshDiscoveryState reloads geographic position and anchor list from
+// node config and gossips the position. The file is the single source:
+// whoever moves us rewrites it, and the next discovery round publishes.
+// Load failures keep the previous position and fall back to the boot
+// anchors. Absent position publishes nothing. It returns the loaded
+// position for the sampler trail and the anchor list for this round, so
+// config edits to either take effect without a restart.
+func refreshDiscoveryState(logger *zap.Logger, peerService *peerdiscovery.MemberService, fallbackAnchors []node.AnchorEntry) (*geo.Point, []node.AnchorEntry) {
+	config, err := node.LoadOrCreateNodeConfig()
+	if err != nil {
+		logger.Warn("reload node config for discovery", zap.Error(err))
+		return nil, fallbackAnchors
+	}
+	if config.Position != nil {
+		peerService.SetPosition(config.Position.Lat, config.Position.Lon)
+		return config.Position, config.Anchors
+	}
+	// Deliberately absent position clears gossip to unknown. Load failures
+	// above keep the previous fix; a clean decode without one means the
+	// operator removed it, and the old coordinates must stop converging.
+	peerService.ClearPosition()
+	return nil, config.Anchors
+}
+
+// discoverAndJoin performs one discovery round: mDNS LAN candidates plus
+// configured anchors ordered nearest-first, filtered, and Join. It also
+// refreshes position and anchors from config, so roaming members and
+// reprovisioned anchor lists update without a restart: whoever rewrites the
+// file (operator, autonomy stack) sees it gossiped within one round. The
+// 5s poll latency and the 10m trail threshold are the write path until a
+// dedicated position feed exists; see docs/trail.md.
 func discoverAndJoin(
 	ctx context.Context,
 	logger *zap.Logger,
 	peerService *peerdiscovery.MemberService,
+	anchors []node.AnchorEntry,
+	sampler *node.Sampler,
 ) {
+	// Config loads fresh every round: gossip, trail, and anchor ordering
+	// all follow file rewrites together, never a boot snapshot.
+	pos, liveAnchors := refreshDiscoveryState(logger, peerService, anchors)
+	if pos != nil {
+		sampler.RecordPosition(*pos)
+	}
+	if err := peerService.Publish(); err != nil {
+		logger.Debug("publish metadata", zap.Error(err))
+	}
+
 	localAddress, err := peerService.LocalAddr()
 	if err != nil {
 		logger.Warn("peer service local addr failed",
@@ -600,24 +661,33 @@ func discoverAndJoin(
 		return
 	}
 
+	// Each source fails independently: mDNS fails off-LAN by design, and
+	// anchors must work exactly there, so neither failure stops the other.
+	var addrs []netip.AddrPort
 	mdnsResolver := peerdiscovery.MDNSResolver{
 		Timeout: 5 * time.Second,
 	}
-	dnsSrvResolver := peerdiscovery.DNSSRVResolver{
-		Timeout: 5 * time.Second,
+	mdnsAddrs, err := mdnsResolver.Resolve(ctx)
+	if err != nil {
+		// Debug, not warn: mDNS fails off-LAN by design on every round,
+		// and a warning that fires forever warns about nothing.
+		logger.Debug(
+			"mdns resolve failed",
+			zap.Error(err),
+		)
+	} else {
+		addrs = append(addrs, mdnsAddrs...)
 	}
-	multi := peerdiscovery.NewMultiResolver(
-		&mdnsResolver,
-		&dnsSrvResolver,
-	)
-	addrs, err := multi.Resolve(ctx)
+	anchorAddrs, err := peerdiscovery.AnchorResolver{Self: pos, Anchors: liveAnchors}.Resolve(ctx)
 	if err != nil {
 		logger.Warn(
-			"peer discovery resolve failed",
+			"anchor resolve failed",
 			zap.Error(err),
 		)
 		return
 	}
+	addrs = append(addrs, anchorAddrs...)
+	addrs = dedupeAddrs(addrs)
 	if len(addrs) == 0 {
 		logger.Debug("peer discovery: no candidates")
 		logMemberlist(logger, peerService)
@@ -639,7 +709,9 @@ func discoverAndJoin(
 	for _, a := range addrs {
 		strs = append(strs, a.String())
 	}
-	logger.Info(
+	// Candidates list at debug: unjoined addresses retry every round, so
+	// info here would repeat forever. The success line below stays info.
+	logger.Debug(
 		"peer discovery candidates",
 		zap.Strings("candidates", strs),
 	)
@@ -689,6 +761,22 @@ func logMemberlist(
 		"memberlist content",
 		zap.Strings("members", strs),
 	)
+}
+
+// dedupeAddrs drops duplicate candidates from merged sources: mDNS and
+// anchors overlap on LAN, and redialing the same address every round
+// wastes the Join.
+func dedupeAddrs(addrs []netip.AddrPort) []netip.AddrPort {
+	seen := make(map[netip.AddrPort]struct{}, len(addrs))
+	out := addrs[:0]
+	for _, addr := range addrs {
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
 }
 
 // filterJoinCandidates drops addresses we must not Join:

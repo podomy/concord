@@ -5,7 +5,6 @@ package peerdiscovery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -55,6 +54,14 @@ type NodeMetadata struct {
 	CPUPercent  uint8 `json:"cpu_percent"`
 	MemPercent  uint8 `json:"mem_percent"`
 	DiskPercent uint8 `json:"disk_percent"`
+	// Lat and Lon are this node's geographic position in decimal degrees.
+	// Operator-provisioned and stationary in practice; members without a
+	// known position gossip zeros, which never order anything.
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+	// Anchor marks a rendezvous anchor: a stable reachable member newcomers
+	// may join. Provisioned with concord --anchor.
+	Anchor bool `json:"anchor"`
 	// NoisePublicKey is this node's Noise static public key (32 raw bytes,
 	// base64 in JSON). Dialers use it as the IK handshake's pre-known peer
 	// key, so no dial path needs a key the gossip layer did not provide.
@@ -64,6 +71,21 @@ type NodeMetadata struct {
 	// NoiseGeneration is the rotation counter of NoisePublicKey. Highest
 	// generation seen for a node wins.
 	NoiseGeneration uint64 `json:"noise_generation,omitempty"`
+}
+
+// equalVolatile reports whether the gossip-volatile subset matches: workload
+// count, pressure trio, position, and anchor role. Static identity (keys,
+// capacities) is excluded on purpose: it never changes at runtime, so
+// comparing it would rebroadcast on every Publish. Add new volatile fields
+// here, not at the call site, so Publish can never forget them.
+func (m NodeMetadata) equalVolatile(o NodeMetadata) bool {
+	return m.Workloads == o.Workloads &&
+		m.CPUPercent == o.CPUPercent &&
+		m.MemPercent == o.MemPercent &&
+		m.DiskPercent == o.DiskPercent &&
+		m.Lat == o.Lat &&
+		m.Lon == o.Lon &&
+		m.Anchor == o.Anchor
 }
 
 // NoiseIdentity is this node's Noise identity for gossip: the static public
@@ -78,7 +100,7 @@ type NoiseIdentity struct {
 // Resolver discovers candidate peer addresses for
 // bootstrapping memberlist membership. Different
 // implementations cover different discovery mechanisms such
-// as LAN broadcast, DNS SRV records, or a rendezvous point.
+// as LAN broadcast or a rendezvous anchor.
 //
 // Resolve must be safe for concurrent calls from multiple
 // goroutines.
@@ -95,70 +117,6 @@ func (f ResolverFunc) Resolve(
 	ctx context.Context,
 ) ([]netip.AddrPort, error) {
 	return f(ctx)
-}
-
-// MultiResolver merges candidates from multiple resolvers.
-// Each resolver is called and results are deduplicated by
-// their string representation.
-type MultiResolver struct {
-	resolvers []Resolver
-}
-
-// NewMultiResolver returns a resolver that queries all
-// provided resolvers.
-func NewMultiResolver(
-	resolvers ...Resolver,
-) *MultiResolver {
-	return &MultiResolver{resolvers: resolvers}
-}
-
-// Resolve calls every configured resolver and deduplicates
-// the results.
-func (m *MultiResolver) Resolve(
-	ctx context.Context,
-) ([]netip.AddrPort, error) {
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf(
-			"context cancellation: %w",
-			ctx.Err(),
-		)
-	default:
-	}
-
-	// All of the addresses we will get from the
-	// resolvers will be stored here.
-	addresses := make(map[netip.AddrPort]struct{}, 0)
-
-	// We fail only if all of the resolvers fail.
-	var errs []error
-	for _, resolver := range m.resolvers {
-		tempAddresses, err := resolver.Resolve(ctx)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		for _, address := range tempAddresses {
-			addresses[address] = struct{}{}
-		}
-
-	}
-
-	if len(addresses) == 0 && len(errs) > 0 {
-		combinedError := errors.Join(errs...)
-		return nil, fmt.Errorf(
-			"all resolvers failed: %w",
-			combinedError,
-		)
-	}
-
-	result := make([]netip.AddrPort, 0, len(addresses))
-	for address := range addresses {
-		result = append(result, address)
-	}
-
-	return result, nil
 }
 
 // MDNSAdvertise publishes this node on the local network
@@ -226,10 +184,9 @@ func MDNSAdvertise(
 // themselves via multicast.
 // Other nodes discover them by browsing for this service.
 //
-// * DNSService (_concord._udp) is also used for DNS SRV
-// record discovery. Nodes query each other's embedded DNS
-// servers to discover the full memberlist, extending reach
-// beyond the local network segment.
+// * DNSService (_concord._udp) names the embedded DNS server's service.
+// Workloads resolve peer names against it; member discovery no longer
+// queries it, gossip carries membership instead.
 var (
 	DNSService = "_concord._udp"
 	DNSPort    = "8053"

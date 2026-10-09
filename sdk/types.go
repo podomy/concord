@@ -4,6 +4,8 @@
 package sdk
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -78,6 +80,13 @@ type NodeStatus struct {
 	DiskPercent uint8     `json:"disk_percent"`
 }
 
+// TrailPoint is one recorded position with its timestamp.
+type TrailPoint struct {
+	At  time.Time `json:"at"`
+	Lat float64   `json:"lat"`
+	Lon float64   `json:"lon"`
+}
+
 // Node represents a cluster member node and its current health state.
 type Node struct {
 	ID                 uuid.UUID `json:"id"`
@@ -87,4 +96,7 @@ type Node struct {
 	CPUPercent         uint8     `json:"cpu_percent,omitempty"`
 	MemPercent         uint8     `json:"mem_percent,omitempty"`
 	DiskPercent        uint8     `json:"disk_percent,omitempty"`
+	Lat                float64   `json:"lat,omitempty"`
+	Lon                float64   `json:"lon,omitempty"`
+	Anchor             bool      `json:"anchor,omitempty"`
 }

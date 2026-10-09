@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -215,12 +216,35 @@ func TestIPCMetrics(t *testing.T) {
 		"# HELP concord_node_cpu_percent",
 		"# TYPE concord_node_cpu_percent gauge",
 		"concord_node_disk_percent",
+		"concord_node_latitude",
 		`concord_workload_cpu_percent{id="` + id.String() + `"}`,
 		"concord_workload_mem_usage_mb",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+func TestIPCTrail(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	h.sampler.RecordPosition(geo.Point{Lat: 47.6, Lon: 8.9})
+	h.sampler.RecordPosition(geo.Point{Lat: 47.61, Lon: 8.91})
+
+	trail, err := h.client.Trail(ctx)
+	if err != nil {
+		t.Fatalf("trail: %v", err)
+	}
+	if len(trail) != 2 {
+		t.Fatalf("len = %d, want 2", len(trail))
+	}
+	if trail[0].Lat != 47.6 || trail[1].Lat != 47.61 {
+		t.Fatalf("trail = %+v", trail)
+	}
+	if trail[0].At.IsZero() || trail[1].At.Before(trail[0].At) {
+		t.Fatalf("trail not time-ordered: %+v", trail)
 	}
 }
 

@@ -136,6 +136,37 @@ func TestClient_Metrics(t *testing.T) {
 	}
 }
 
+func TestClient_Trail(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/nodes/self/trail", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONResponse(t, w, http.StatusOK, map[string]any{
+			"trail": []any{
+				map[string]any{"at": "2026-10-09T10:00:00Z", "lat": 47.6, "lon": 8.9},
+				map[string]any{"at": "2026-10-09T10:05:00Z", "lat": 47.61, "lon": 8.91},
+			},
+		})
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	trail, err := client.Trail(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected trail error: %v", err)
+	}
+	if len(trail) != 2 || trail[0].Lat != 47.6 || trail[1].Lon != 8.91 {
+		t.Fatalf("trail = %+v", trail)
+	}
+}
+
 func TestClient_Submit(t *testing.T) {
 	t.Parallel()
 

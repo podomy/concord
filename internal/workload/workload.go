@@ -54,6 +54,15 @@ type Instance struct {
 	PID    int
 }
 
+// Unhealthy is the payload of a workload.unhealthy event: the signal
+// action's falling edge. It names the workload so the event converges
+// fleet-wide with the subject attached; an empty payload could never say
+// which workload went sick. Keys stay Go-case like every other journal
+// payload (Spec, Instance), not the SDK's snake_case.
+type Unhealthy struct {
+	WorkloadID uuid.UUID
+}
+
 type State string
 
 const (

@@ -49,6 +49,7 @@ func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.U
 		healthy := cr.CheckHealth(ctx, logger, entry.Spec)
 		// Check liveness.
 		if healthy {
+			entry.unhealthyReported = false
 			continue
 		}
 
@@ -58,16 +59,33 @@ func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.U
 			logger.Warn("restarting unhealthy workload")
 			destroyContainer(ctx, logger, entry.Spec, running)
 		case workload.HealthActionSignal:
-			logger.Warn("signaling unhealthy workload")
-			// Emmitting a journal event.
-			event := journal.NewEvent(nodeID, "workload.unhealthy", json.RawMessage{})
-			err := journalview.RecordEvent(ctx, j, views, event)
-			if err != nil {
-				logger.Error("record event failed", zap.Error(err))
-				continue
-			}
+			signalUnhealthy(ctx, logger, entry, j, views, nodeID)
 		}
 	}
+}
+
+// signalUnhealthy appends one workload.unhealthy edge for a sick workload.
+// The unhealthyReported flag keeps it edge-triggered: without it the 500ms
+// beat would append one event per beat for the whole sickness.
+func signalUnhealthy(ctx context.Context, logger *zap.Logger, entry *ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+	if entry.unhealthyReported {
+		return
+	}
+	logger.Warn("signaling unhealthy workload")
+	payload, err := json.Marshal(workload.Unhealthy{WorkloadID: entry.Spec.ID})
+	if err != nil {
+		logger.Error("marshal unhealthy event", zap.Error(err))
+		return
+	}
+	event := journal.NewEvent(nodeID, "workload.unhealthy", payload)
+	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.unhealthy",
+		zap.String("workload_id", entry.Spec.ID.String()),
+	)
+	if err != nil {
+		logger.Error("record event failed", zap.Error(err))
+		return
+	}
+	entry.unhealthyReported = true
 }
 
 // samplePressure refreshes host and per-workload utilization and gossips the
@@ -80,6 +98,9 @@ func samplePressure(logger *zap.Logger, sampler *node.Sampler, running map[uuid.
 		logger.Debug("sample host pressure", zap.Error(err))
 	} else {
 		peerService.SetPressure(pressure.CPU, pressure.Mem, pressure.Disk)
+		if err := peerService.Publish(); err != nil {
+			logger.Debug("publish metadata", zap.Error(err))
+		}
 	}
 
 	for _, entry := range running {

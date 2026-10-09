@@ -63,6 +63,9 @@ type Client interface {
 	// Metrics returns sampler state in Prometheus text exposition format.
 	Metrics(ctx context.Context) (string, error)
 
+	// Trail returns our recorded positions oldest-first.
+	Trail(ctx context.Context) ([]TrailPoint, error)
+
 	// Nodes lists all known cluster nodes and their network status.
 	Nodes(ctx context.Context) ([]Node, error)
 
@@ -289,6 +292,39 @@ func (c *unixClient) Metrics(ctx context.Context) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+// Trail returns our recorded positions oldest-first.
+func (c *unixClient) Trail(ctx context.Context) ([]TrailPoint, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, unixSocketHost+"/v1/nodes/self/trail", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("trail request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var trailResp struct {
+		Trail []TrailPoint `json:"trail"`
+	}
+	err = json.Unmarshal(body, &trailResp)
+	if err != nil {
+		return nil, fmt.Errorf("decode trail: %w", err)
+	}
+
+	return trailResp.Trail, nil
 }
 
 type listResponse struct {

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/podomy/concord/internal/geo"
 )
 
 // First host sample establishes the CPU baseline: CPU 0, memory and disk
@@ -134,5 +136,28 @@ func TestDropWorkload(t *testing.T) {
 	got := s.SampleWorkload(id, 9_000_000_000, 0, 0, t0.Add(time.Second))
 	if got.CPUPercent != 0 {
 		t.Fatalf("CPU = %d, want 0", got.CPUPercent)
+	}
+}
+
+// First valid position records; sub-10m moves do not; real roams append
+// oldest-first; invalid positions and the zero unknown-point never record.
+func TestRecordPositionTrail(t *testing.T) {
+	t.Parallel()
+
+	s := NewSampler()
+	home := geo.Point{Lat: 47.6, Lon: 8.9}
+	s.RecordPosition(home)
+	s.RecordPosition(geo.Point{Lat: 47.60001, Lon: 8.9})
+	s.RecordPosition(geo.Point{Lat: 91, Lon: 0})
+	s.RecordPosition(geo.Point{Lat: 0, Lon: 0})
+	away := geo.Point{Lat: 47.61, Lon: 8.91}
+	s.RecordPosition(away)
+
+	trail := s.Trail()
+	if len(trail) != 2 {
+		t.Fatalf("len = %d, want 2", len(trail))
+	}
+	if trail[0].Pos != home || trail[1].Pos != away {
+		t.Fatalf("trail = %+v", trail)
 	}
 }

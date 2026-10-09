@@ -77,7 +77,10 @@ A percent says how full a node is, never how much room it has. Percents
 normalize across heterogeneous hardware and fit the 512-byte gossip cap;
 the capacity they normalize against (`CPUMHz`, `MemoryMB`) travels
 beside them, so absolutes are always derivable and never transmitted.
-Full formulas live in `internal/node/pressure.go`.
+Full formulas live in `internal/node/pressure.go`. Sampling writes
+atomics; `Publish` broadcasts only on change, so steady values never
+rebroadcast and `Members` always reads the last broadcast, never live
+counters.
 
 ## Placement, worked
 
@@ -117,7 +120,14 @@ the live reading, and `GET /metrics` (plus `concord metrics`) serves
 everything in Prometheus text exposition format for external
 collectors. Trends hold the window, exposition serves points, the journal
 carries neither: history that never converges stays out of the log by
-the same rule as samples.
+the same rule as samples. Position trails follow the same split at
+coarser grain: the sampler records on 10m moves, `node trail` replays
+the roam, and no coordinate ever enters the journal. Position gauges ride
+the same exposition so scrapers keep trails: where a node went is a
+scraper query over `concord_node_latitude` and
+`concord_node_longitude`, never a journal replay. Full trail behavior,
+including memory-only lifetime and the gossip/trail split, lives in
+`docs/trail.md`.
 
 ## What stays out
 

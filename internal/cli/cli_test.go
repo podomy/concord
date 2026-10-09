@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/internal/cli"
+	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -218,6 +219,22 @@ func TestCLIMetrics(t *testing.T) {
 	}
 	if out := stdout.String(); !strings.Contains(out, "concord_node_cpu_percent") {
 		t.Fatalf("expected exposition output, got:\n%s", out)
+	}
+}
+
+func TestCLINodeTrail(t *testing.T) {
+	sampler := setupCLITest(t)
+	ctx := context.Background()
+
+	sampler.RecordPosition(geo.Point{Lat: 47.6, Lon: 8.9})
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"node", "trail"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("node trail failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "47.600000 8.900000") {
+		t.Fatalf("expected coordinates in output, got:\n%s", out)
 	}
 }
 
