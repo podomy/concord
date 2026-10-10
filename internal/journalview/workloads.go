@@ -119,7 +119,7 @@ func (e *Workloads) Apply(ctx context.Context, event journal.Event) error {
 		return err
 	}
 
-	if event.Type != "workload.spec" {
+	if event.Type != EventTypeWorkloadSpec {
 		// We simply ignore anything that has incorrect type.
 		// Apply is always used for every single element in a journal.
 		return nil
@@ -165,7 +165,7 @@ func (e *Workloads) replayEvents(ctx context.Context, jr journalreader.Reader, b
 		if event == nil {
 			return nil
 		}
-		if event.Type != "workload.spec" {
+		if event.Type != EventTypeWorkloadSpec {
 			// We simply ignore any event that has an incorrect type.
 			continue
 		}

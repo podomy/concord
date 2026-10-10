@@ -103,7 +103,7 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event := journal.NewEvent(s.nodeID, "workload.spec", payload)
+	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEvent(r.Context(), s.journal, s.views, event)
 	if err != nil {
 		s.logger.Error("failed to commit workload event to journal", zap.Error(err))
@@ -247,7 +247,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event := journal.NewEvent(s.nodeID, "workload.spec", payload)
+	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEvent(r.Context(), s.journal, s.views, event)
 	if err != nil {
 		s.logger.Error("failed to commit tombstone event to journal", zap.Error(err))

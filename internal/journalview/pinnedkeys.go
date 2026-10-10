@@ -28,10 +28,6 @@ import (
 // 4. Rebuild replays the journal in order and converges with live Apply.
 // 5. Malformed peer.keypinned payloads return an error.
 
-// EventTypePeerKeyPinned records one node's first sight of a peer's Noise
-// identity: the peer's static public key at a rotation generation.
-const EventTypePeerKeyPinned = "peer.keypinned"
-
 const bucketNamePinnedKeys = "pinnedkeys"
 
 // KeyPin is one pinned Noise identity: the peer's node ID, static public key,

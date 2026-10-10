@@ -66,7 +66,7 @@ func RunPullLoop(
 	j journal.Journal,
 	views []journalview.View,
 	byID EventByID,
-	cursorStore *cursorStore,
+	cursorStore CursorStore,
 ) {
 	previous := map[uuid.UUID]peerdiscovery.Node{}
 	cursors := newCursorSet()
@@ -110,7 +110,7 @@ type pullState struct {
 	byID        EventByID
 	port        uint16
 	cursors     cursorSet
-	cursorStore *cursorStore
+	cursorStore CursorStore
 }
 
 // pullTick runs one reconciliation pass: list members, meet pulls, periodic pulls.

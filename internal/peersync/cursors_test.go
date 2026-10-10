@@ -6,7 +6,9 @@ package peersync
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,8 +19,8 @@ import (
 	"github.com/podomy/concord/internal/transport"
 )
 
-// testCursorStore opens an isolated cursor store for cursor unit tests.
-func testCursorStore(t *testing.T) *cursorStore {
+// testCursorStore opens an isolated bbolt cursor store for store unit tests.
+func testCursorStore(t *testing.T) CursorStore {
 	t.Helper()
 	kv, err := kvstore.OpenDBPath(filepath.Join(t.TempDir(), "bbolt.db"))
 	if err != nil {
@@ -103,6 +105,46 @@ func TestCursorStoreOverwriteAndRemove(t *testing.T) {
 	}
 }
 
+// memoryCursorStore is an in-memory CursorStore for pull-loop tests: no
+// database, no disk, hermetic by construction.
+type memoryCursorStore struct {
+	mu      sync.Mutex
+	cursors cursorSet
+}
+
+// newMemoryCursorStore creates an empty in-memory cursor store.
+func newMemoryCursorStore() *memoryCursorStore {
+	return &memoryCursorStore{cursors: newCursorSet()}
+}
+
+// load returns a copy of the stored cursors.
+func (m *memoryCursorStore) load() (cursorSet, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := newCursorSet()
+	maps.Copy(out, m.cursors)
+	return out, nil
+}
+
+// save stores peer's cursor.
+func (m *memoryCursorStore) save(peer uuid.UUID, cursor string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cursors[peer] = cursor
+	return nil
+}
+
+// remove drops peer's cursor. A missing entry is not an error.
+func (m *memoryCursorStore) remove(peer uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.cursors, peer)
+	return nil
+}
+
 // A successful syncOne persists the advanced cursor through the store.
 func TestSyncOnePersistsCursor(t *testing.T) {
 	t.Parallel()
@@ -116,7 +158,7 @@ func TestSyncOnePersistsCursor(t *testing.T) {
 			Events:     []journal.Event{ev},
 		},
 	}
-	cursorStore := testCursorStore(t)
+	cursorStore := newMemoryCursorStore()
 	j := &memJournal{}
 	state := pullState{
 		syncer:      fake,
@@ -145,7 +187,7 @@ func TestSyncOneFailedApplyPersistsNothing(t *testing.T) {
 
 	peerID := uuid.New()
 	member := keyedNode(peerID, "192.0.2.10:7946")
-	cursorStore := testCursorStore(t)
+	cursorStore := newMemoryCursorStore()
 	j := &memJournal{}
 	state := pullState{
 		syncer:      &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w", Events: []journal.Event{mustEvent()}}},

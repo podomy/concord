@@ -77,7 +77,7 @@ func signalUnhealthy(ctx context.Context, logger *zap.Logger, entry *ContainerAn
 		logger.Error("marshal unhealthy event", zap.Error(err))
 		return
 	}
-	event := journal.NewEvent(nodeID, "workload.unhealthy", payload)
+	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadUnhealthy, payload)
 	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.unhealthy",
 		zap.String("workload_id", entry.Spec.ID.String()),
 	)

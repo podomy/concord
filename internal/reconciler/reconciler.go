@@ -107,14 +107,14 @@ func RunLoop(
 			return
 
 		case ev := <-exitEvents:
-			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs, peerService)
+			handleExitEvent(ctx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs, peerService, views)
 
 		case <-ticker.C:
 			if isLeader(nodeID, peerService) {
 				scheduleWorkloads(ctx, logger, j, workloads, peerService, nodeID, views)
 			}
 
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService, views)
 
 		case <-fastTicker.C:
 			runFastTick(ctx, logger, sampler, running, j, views, nodeID, peerService)
@@ -138,6 +138,7 @@ func reconcileTick(
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
+	views []journalview.View,
 ) {
 	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
@@ -146,7 +147,7 @@ func reconcileTick(
 	}
 
 	for _, spec := range workloadSpecs {
-		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService)
+		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService, views)
 	}
 }
 
@@ -184,6 +185,7 @@ func reconcileWorkloadSpec(
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
+	views []journalview.View,
 ) {
 	if spec.AssignedNodeID != nodeID {
 		return
@@ -219,7 +221,7 @@ func reconcileWorkloadSpec(
 	}
 
 	// 4. Start new container instance.
-	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService)
+	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views)
 }
 
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.
@@ -282,6 +284,7 @@ func startContainer(
 	ipAndCIDRs map[uuid.UUID]string,
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
+	views []journalview.View,
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
@@ -330,7 +333,7 @@ func startContainer(
 	// forward process termination events back to the main loop via exitEvents channel.
 	go monitorProcessExit(ctx, spec.ID, processHandle, exitEvents)
 
-	recordInstanceEvent(ctx, logger, j, spec, nodeID, workload.StateRunning, processHandle.NamespacePID())
+	recordInstanceEvent(ctx, logger, j, views, spec, nodeID, workload.StateRunning, processHandle.NamespacePID())
 }
 
 // monitorProcessExit waits on ProcessHandle.Exited() and forwards the exit status to exitEvents.
@@ -462,6 +465,7 @@ func handleExitEvent(
 	running map[uuid.UUID]*ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 	peerService *peerdiscovery.MemberService,
+	views []journalview.View,
 ) {
 	entry, exists := running[id]
 	if !exists || entry == nil {
@@ -475,7 +479,7 @@ func handleExitEvent(
 	entry.restartCount++
 	entry.restartAfter = clock.Now().Add(backOff(entry.restartCount))
 
-	recordInstanceEvent(ctx, logger, j, entry.Spec, nodeID, workload.StateStopped, 0)
+	recordInstanceEvent(ctx, logger, j, views, entry.Spec, nodeID, workload.StateStopped, 0)
 	peerService.SetWorkloadCount(countRunning(running))
 }
 
@@ -511,11 +515,15 @@ func buildProcess(spec workload.Spec, result *cr.PullResult) *libcontainer.Proce
 	return proc
 }
 
-// recordInstanceEvent writes a workload instance state event to the journal.
+// recordInstanceEvent writes a workload instance state event to the journal
+// and applies it to views, like every other recorded event. Instance
+// events previously appended journal bytes without applying views, so
+// live generic indexes missed them until the next rebuild.
 func recordInstanceEvent(
 	ctx context.Context,
 	logger *zap.Logger,
 	j journal.Journal,
+	views []journalview.View,
 	spec workload.Spec,
 	nodeID uuid.UUID,
 	state workload.State,
@@ -535,9 +543,9 @@ func recordInstanceEvent(
 		return
 	}
 
-	event := journal.NewEvent(nodeID, "workload.instance."+string(state), payload)
-	if err := j.Append(ctx, event); err != nil {
-		logger.Error("append instance event", zap.Error(err))
+	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadInstancePrefix+string(state), payload)
+	if err := journalview.RecordEvent(ctx, j, views, event); err != nil {
+		logger.Error("record instance event", zap.Error(err))
 	}
 }
 

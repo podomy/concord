@@ -97,14 +97,14 @@ func recordSeenOrUpdatedPeers(
 	for id, member := range current {
 		old, exists := previous[id]
 		if !exists {
-			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, "peer.seen", member); err != nil {
+			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerSeen, member); err != nil {
 				logger.Error("record peer.seen", zap.Error(err))
 			}
 			continue
 		}
 
 		if old.Address != member.Address || old.State != member.State {
-			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, "peer.updated", member); err != nil {
+			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerUpdated, member); err != nil {
 				logger.Error("record peer.updated", zap.Error(err))
 			}
 		}
@@ -122,24 +122,18 @@ func recordLostPeers(
 ) {
 	for id, old := range previous {
 		if _, exists := current[id]; !exists {
-			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, "peer.lost", old); err != nil {
+			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerLost, old); err != nil {
 				logger.Error("record peer.lost", zap.Error(err))
 			}
 		}
 	}
 }
 
-type peerEventPayload struct {
-	Address string    `json:"address"`
-	State   NodeState `json:"state"`
-	PeerID  uuid.UUID `json:"peer_id"`
-}
-
 func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, localNodeID uuid.UUID, eventType string, peer Node) error {
-	payload, err := json.Marshal(peerEventPayload{
+	payload, err := json.Marshal(journalview.PeerEvent{
 		PeerID:  peer.ID,
 		Address: peer.Address.String(),
-		State:   peer.State,
+		State:   string(peer.State),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal peer event payload: %w", err)

@@ -46,6 +46,21 @@ func (c cursorSet) advance(peer uuid.UUID, next string) bool {
 // bucketNameCursors is the bbolt bucket holding persisted sync cursors.
 const bucketNameCursors = "synccursors"
 
+// CursorStore persists per-peer sync cursors so a restart resumes
+// mid-history instead of re-pulling from event zero. The bbolt
+// implementation below is the production one; tests and future
+// segment-scoped stores supply their own. A nil store (not an
+// implementation) keeps RAM-only behavior.
+type CursorStore interface {
+	// load reads all persisted cursors.
+	load() (cursorSet, error)
+	// save persists peer's cursor.
+	save(peer uuid.UUID, cursor string) error
+	// remove drops peer's persisted cursor. A missing entry is not
+	// an error.
+	remove(peer uuid.UUID) error
+}
+
 // cursorStore persists per-peer sync cursors in bbolt so a restart
 // resumes mid-history instead of re-pulling every peer journal from
 // event zero. The store is local progress only: cursors never enter
@@ -55,7 +70,7 @@ type cursorStore struct {
 }
 
 // NewCursorStore creates a cursor store backed by the given KVStore.
-func NewCursorStore(kv *kvstore.KVStore) *cursorStore {
+func NewCursorStore(kv *kvstore.KVStore) CursorStore {
 	return &cursorStore{kvStore: kv}
 }
 

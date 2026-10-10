@@ -148,7 +148,7 @@ func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal
 		return
 	}
 
-	event := journal.NewEvent(nodeID, "workload.spec", payload)
+	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, message,
 		zap.String("workload_id", spec.ID.String()),
 		zap.String("assigned_node", spec.AssignedNodeID.String()),

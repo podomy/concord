@@ -15,7 +15,7 @@ import (
 	"github.com/podomy/concord/internal/kvstore"
 )
 
-func TestRecordEvent(t *testing.T) {
+func TestRecordEventUnknownType(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -39,6 +39,9 @@ func TestRecordEvent(t *testing.T) {
 		}
 	})
 
+	// Unknown types record: the journal stays complete regardless of
+	// reader version. Typed views skip them; the generic indexes keep
+	// their bytes.
 	event := journal.NewEvent(uuid.New(), "node started", json.RawMessage(`{}`))
 
 	eventsByID := NewEventsByID(kv)
@@ -50,6 +53,28 @@ func TestRecordEvent(t *testing.T) {
 		t.Fatalf("record event: %v", err)
 	}
 	requireRecordedEvent(t, ctx, eventsByID, eventsByNode, eventsByType, event)
+}
+
+// A known type with a malformed payload fails before the journal append,
+// so producer bugs surface at write time instead of diverging views.
+func TestRecordEventRejectsMalformedKnownPayload(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	j, err := journal.OpenJSONLPath(filepath.Join(t.TempDir(), "journal.jsonl"))
+	if err != nil {
+		t.Fatalf("open jsonl: %v", err)
+	}
+	t.Cleanup(func() {
+		if err = j.Close(); err != nil {
+			t.Fatalf("close journal: %v", err)
+		}
+	})
+
+	event := journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, json.RawMessage(`[1,2]`))
+	if err := RecordEvent(ctx, j, nil, event); err == nil {
+		t.Fatal("expected payload validation error")
+	}
 }
 
 func TestRecordEventCancelledContext(t *testing.T) {
