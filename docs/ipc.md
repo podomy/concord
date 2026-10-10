@@ -72,7 +72,7 @@ the SDK uses `http://unix`). Only the path matters.
 
 ## Endpoints
 
-### `POST /v1/workloads` — submit a workload
+### `POST /v1/workloads`: submit a workload
 
 Body is a workload spec; only `image` is required. Returns `201` with
 the assigned id:
@@ -91,17 +91,17 @@ Full spec fields: `id`, `image`, `command[]`, `env{}`, `resources`
 or missing image. The spec commits to the journal and converges; placement
 follows the scheduler, not this call.
 
-### `GET /v1/workloads` — list active workloads
+### `GET /v1/workloads`: list active workloads
 
 `200 {"workloads":[...]}` with full specs. Tombstoned (stopped) ones are
 excluded, not marked.
 
-### `GET /v1/workloads/{id}` — inspect one workload
+### `GET /v1/workloads/{id}`: inspect one workload
 
 `200` with the full spec. `400` on malformed UUID, `404` when unknown
 or stopped.
 
-### `GET /v1/workloads/{id}/stats` — live utilization
+### `GET /v1/workloads/{id}/stats`: live utilization
 
 In-memory sampler readings, never the journal. `404` when never sampled
 (still starting), already stopped, or the sampler is missing:
@@ -117,12 +117,12 @@ In-memory sampler readings, never the journal. `404` when never sampled
 `avg_*` fold the 5s trend window; the rest is the latest beat. `node`
 is always the local node: stats exist only where the workload runs.
 
-### `DELETE /v1/workloads/{id}` — stop a workload
+### `DELETE /v1/workloads/{id}`: stop a workload
 
 Commits a tombstone; the reconciler reaps the container. `204` empty on
 success, `404` when unknown or already stopped.
 
-### `GET /v1/nodes` — list cluster nodes
+### `GET /v1/nodes`: list cluster nodes
 
 Memberlist view with gossiped metadata. Empty list (not 503) when the
 peer service is missing:
@@ -139,7 +139,7 @@ peer service is missing:
 `state` is `alive`, `suspect`, `dead`, `left`, or `unknown`. Pressure
 fields are 0-100 utilization; `lat`/`lon` are 0 when unknown.
 
-### `GET /v1/nodes/self/trail` — this node's trail
+### `GET /v1/nodes/self/trail`: this node's trail
 
 Ring contents since boot, oldest-first. `503` when the sampler is
 missing:
@@ -151,7 +151,7 @@ missing:
 Empty trail is `{"trail": []}`, not an error. Full mission history is
 the local `track.jsonl`, not this endpoint; see `docs/trail.md`.
 
-### `PUT /v1/nodes/self/position` — apply a position fix
+### `PUT /v1/nodes/self/position`: apply a position fix
 
 The only position writer. Persisted for reboot, gossiped, recorded to
 trail and track log in one operation:
@@ -165,7 +165,7 @@ trail and track log in one operation:
 (previous fix kept, nothing applied); `503` without sampler or peer
 service. Exact `0,0` is allowed and means unknown. See `docs/trail.md`.
 
-### `GET /metrics` — Prometheus exposition
+### `GET /metrics`: Prometheus exposition
 
 Point readings from memory for scrapers: node trio, position gauges,
 per-workload series. `Content-Type: text/plain; version=0.0.4`.

@@ -127,6 +127,17 @@ When a node starts:
 
 No central master server, control plane, or external database is required.
 
+### Plan density
+
+Keep mutually reachable clusters in the tens. Spread machines past
+radio range wherever operations allow it: distance turns one big
+mesh into natural partitions, and partitions are Concord's normal
+operating mode (each keeps placing and executing, journals converge on
+reunion). Do not park hundreds of nodes in one broadcast domain and
+expect the protocol to absorb it; that capacity planning belongs to
+the site, same as WiFi AP placement. One flat segment holds to about
+200 nodes; the numbers and the reasoning live in `docs/scaling.md`.
+
 ### Rendezvous Anchors
 
 Anchors live in `~/.config/concord/config.json` next to the node id:

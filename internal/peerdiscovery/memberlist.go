@@ -128,6 +128,17 @@ func Start(
 	config.BindAddr = node.Address.Addr().String()
 	config.BindPort = int(node.Address.Port())
 
+	// Production runs on real WLANs, not loopback: relax the probe path
+	// toward LAN values so jitter spikes stop false-suspecting healthy
+	// peers (see docs/scaling.md). Deliberately not the full LAN preset:
+	// TCPTimeout stays 1s so dead anchors and TCP pings fail fast,
+	// SuspicionMult stays 3 for quick orphan failover, push/pull stays
+	// 15s for fast healing.
+	config.ProbeTimeout = 500 * time.Millisecond
+	config.IndirectChecks = 3
+	config.RetransmitMult = 4
+	config.GossipInterval = 200 * time.Millisecond
+
 	// Gossip encryption uses a provisioned cluster-wide secret, identical
 	// on every node. Both verify flags enforce encrypted-only gossip in
 	// their direction.

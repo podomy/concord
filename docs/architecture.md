@@ -224,6 +224,34 @@ queries anyone's DNS to bootstrap, and no external DNS is ever required.
 
 ---
 
+## One flat segment, no hierarchy
+
+There is exactly one memberlist segment per fleet, and no hierarchy of
+segments above it. "Segment" elsewhere in this document means a network
+partition (a split half), never a hierarchy level: there are no
+super-nodes, no representatives, no cross-segment sync protocol.
+
+Keep one flat segment up to about 200 nodes. Past that, still do not
+add hierarchy on speculation: the revisit trigger is sustained fleets
+past ~200 with pull-tick saturation in metrics (see
+`docs/scaling.md`). The practical ceiling is low hundreds, so 200 keeps
+margin while the system keeps one topology, one merge path, and one
+failure model.
+
+Concrete example. A depot anchor serves a 40-truck pit: the anchor
+holds still with backhaul, trucks join through it or over depot-LAN
+mDNS, gossip costs each truck ~2 KB/s, and a pressure update reaches
+every truck in ~200ms. A surveyor robot 50km out in the exploration
+field joins the same segment through the same anchor over its long
+link: it dials one address, learns the mesh, syncs the journal, and
+runs. Distance changes nothing about membership. A hierarchy would
+insert a representative layer between the surveyor and the pit to save
+bandwidth that is not scarce, while the surveyor still needs its long
+link to reach anything at all. Flat is simpler, and layering gains
+nothing.
+
+---
+
 ## Scheduling
 
 In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads to the alive peer with the lowest pressure, breaking ties by fewest active workloads. When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below. Pressure sampling and placement order are detailed in `docs/metrics.md`.
