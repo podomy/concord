@@ -1,0 +1,73 @@
+# QoS: Who Gets the Node
+
+QoS ranks workloads for two decisions: who places first, and who gives
+way when nothing fits. Three classes, no more:
+
+```
+guaranteed    places first, never gives way
+burstable     preempts best-effort, yields to guaranteed
+besteffort    runs when room allows, gives way to everything (the default)
+```
+
+```bash
+concord workload run perception:latest --qos guaranteed --memory 2048
+concord workload run logger:latest  # best-effort unless stated
+```
+
+Empty means best-effort, so every old spec behaves exactly as before.
+Unknown classes are rejected at submit; a misspelling must never
+schedule by surprise.
+
+## What the name does and does not mean
+
+This QoS ranks **compute**: placement order and preemption. ROS-style
+DDS QoS governs **packets**: reliability, durability, deadlines,
+liveliness on message delivery. Same acronym, different layers, and
+they compose freely: a guaranteed workload still sets its DDS
+reliability separately, and best-effort compute says nothing about
+how its messages travel. Confusing the two buys misconfigured fleets.
+
+## Giving way, precisely
+
+When a workload fits nowhere, the leader may displace exactly one
+lower-class running workload to make room:
+
+- Strictly downward only: guaranteed displaces burstable and
+  best-effort, burstable displaces best-effort, equals never displace
+  each other. Eviction loops are impossible by construction, because
+  displacement always flows one way and terminates.
+- One victim, and it must cover the deficit: its freed request plus
+  node free memory must fit the arrival. Otherwise everyone waits.
+- The victim is unassigned with an epoch bump through the normal spec
+  envelope: highest epoch wins, tombstones still dominate, no new event
+  type, no new view. The arrival itself waits for the next tick, when
+  the freed request counts.
+- The victim's node stops the container on the next reconciler tick
+  (the reaper): a live spec pointing elsewhere is shut down, an exited
+  one is dropped from tracking. Without this the victim would run
+  forever with nobody owning it.
+- Memory math is approximate: node free is real usage, requests are
+  reservations, and the overlap drains as the victim stops.
+
+Starvation is accepted and documented: under constant higher-class
+churn, best-effort waits indefinitely. No aging, no fairness
+scheduler. If everything is guaranteed, nothing is: ranks only mean
+something relative to lower ones.
+
+## Ordering and admission, together
+
+Each tick the leader handles orphans first (they were running and lost
+their owner), then the unassigned highest class first. Admission still
+applies to every placement: a request nothing fits waits even at
+guaranteed, and preemption is the only way it moves. Within one tick,
+reservations make admission exact: two half-node requests on room for
+one place the first and queue the second, regardless of view order.
+
+## Where it lives
+
+Classes and ranks (`QoS` in `internal/workload/workload.go`), submit
+validation (`internal/ipc/handlers.go`), tick ordering and victim
+selection (`pendingIndexes`, `tryPreempt` in
+`internal/reconciler/scheduler.go`), the reaper (`reapDisplaced` in
+`internal/reconciler/reconciler.go`), flags (`--qos` in
+`internal/cli/workload.go`), SDK (`QoS` in `sdk/types.go`).

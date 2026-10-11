@@ -52,4 +52,4 @@ fmt.Printf("Workload submitted: %s\n", id)
 | `client.SetPosition(ctx, lat, lon)` | Apply one live position fix |
 | `client.Nodes(ctx)` | List cluster nodes |
 
-Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.
+Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `DependsOn`, `QoS`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.

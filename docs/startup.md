@@ -1,0 +1,49 @@
+# Startup Order
+
+Some workloads only make sense after others are up: a planner that
+consumes perception should not start until perception runs.
+`DependsOn` lists workload IDs that must be running on the same node
+first. The reconciler starts a gated workload only when every listed
+dependency runs; until then it waits quietly, one debug line per tick.
+
+```bash
+# Start the planner only after perception runs here
+concord workload run planner:latest --depends-on 4b8d7a12
+```
+
+IDs accept full UUIDs or short prefixes, resolved at submit like every
+other workload reference. Repeat the flag per dependency.
+
+## Rules that prevent stalls
+
+**Cycles are rejected at submit.** A waiting on B waiting on A would
+start nothing, ever. The daemon checks the new dependency graph
+against live specs and answers 400 on a loop, self-loops included.
+Direct-socket submitters get the same check; the CLI cannot bypass it.
+
+**Only live same-node dependencies gate.** Unknown IDs (never
+submitted), tombstoned IDs, unassigned IDs, and IDs assigned to other
+nodes are ignored, never waited on. Waiting on something that will
+never run here is a stall, not patience. Cross-node ordering does not
+exist: "wait for perception on another truck" hangs across partitions,
+and un-hanging it needs leader coordination this system deliberately
+does not have. If two workloads must order, place them to meet: same
+node, listed dependency.
+
+**Running, not healthy.** The gate checks running, not passing health
+checks. Health flaps; a flapping gate would stall dependents in
+sympathy every time a dependency coughed.
+
+**No cascades.** If a dependency dies later, dependents keep running.
+The gate orders starts; it does not supervise lifetimes. A sick
+dependency reports through health edges, and placement may move things,
+but nothing is stopped on another's behalf except by preemption (see
+`docs/qos.md`).
+
+## Where it lives
+
+Dependency field (`DependsOn` in `internal/workload/workload.go`),
+cycle check (`CheckNoCycle`, same package, pure and unit-tested),
+submit validation (`internal/ipc/handlers.go`), the start gate
+(`depsReady` in `internal/reconciler/reconciler.go`), flags
+(`--depends-on` in `internal/cli/workload.go`).

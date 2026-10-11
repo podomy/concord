@@ -88,8 +88,8 @@ Full spec fields: `id`, `image`, `command[]`, `env{}`, `resources`
 (`cpu_shares`, `memory_mb`), `restart` (`always`, `never`,
 `on_failure`), `host_port`, `container_port`, `stop_timeout_seconds`,
 `health_action` (0 restart, 1 signal), `health_path`, `health_probe`
-(`http`, `tcp`, `exec`), `health_command[]`. `400` on bad JSON
-or missing image. The spec commits to the journal and converges; placement
+(`http`, `tcp`, `exec`), `health_command[]`, `depends_on[]`, `qos`.
+`400` on bad JSON or missing image. The spec commits to the journal and converges; placement
 follows the scheduler, not this call.
 
 ### `GET /v1/workloads`: list active workloads

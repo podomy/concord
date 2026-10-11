@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -100,57 +101,177 @@ func scheduleWorkloads(
 		return
 	}
 
-	for _, spec := range specs {
-		scheduleOne(ctx, logger, j, views, nodeID, members, alive, spec)
+	// Orphans were running somewhere and lost their owner; they go
+	// first. The unassigned follow highest class first so important
+	// arrivals claim room before the best-effort crowd. Both orders are
+	// stable: view order decides within a class.
+	pending := pendingIndexes(specs, alive)
+	reserved := make(map[uuid.UUID]uint64)
+	for _, i := range pending {
+		schedulePending(ctx, logger, j, views, nodeID, members, specs, reserved, i)
 	}
 }
 
-// scheduleOne assigns one unassigned spec or reassigns one orphan. Specs
-// with healthy owners, tombstones, or no fitting node are left alone:
-// placement that cannot fit waits for the next tick instead of landing
-// where it cannot run.
-func scheduleOne(
+// pendingIndexes returns spec indexes needing placement: orphans first,
+// then unassigned highest class first. Healthy, removed, and unknown
+// specs never enter.
+func pendingIndexes(specs []workload.Spec, alive map[uuid.UUID]struct{}) []int {
+	var orphans, unassigned []int
+	for i := range specs {
+		spec := &specs[i]
+		if spec.Removed {
+			continue
+		}
+		if spec.AssignedNodeID == uuid.Nil {
+			unassigned = append(unassigned, i)
+			continue
+		}
+		if _, ok := alive[spec.AssignedNodeID]; !ok {
+			orphans = append(orphans, i)
+		}
+	}
+	sort.SliceStable(unassigned, func(a, b int) bool {
+		return specs[unassigned[a]].QoS.Rank() > specs[unassigned[b]].QoS.Rank()
+	})
+	return append(orphans, unassigned...)
+}
+
+// schedulePending assigns one unassigned spec or reassigns one orphan at
+// specs[i]. A fitting node takes it; a higher class with nowhere to fit
+// displaces one lower victim; anything else waits for the next tick.
+// Writes update specs in place so later candidates in the same tick see
+// earlier placements.
+func schedulePending(
 	ctx context.Context,
 	logger *zap.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	nodeID uuid.UUID,
 	members []peerdiscovery.Node,
-	alive map[uuid.UUID]struct{},
-	spec workload.Spec,
+	specs []workload.Spec,
+	reserved map[uuid.UUID]uint64,
+	i int,
 ) {
-	if spec.Removed {
-		return
-	}
+	spec := &specs[i]
+	initial := spec.AssignedNodeID == uuid.Nil
 
-	if spec.AssignedNodeID == uuid.Nil {
-		chosenMember, ok := pickNode(members, spec)
-		if !ok {
-			logger.Debug("no node fits workload memory request, leaving unassigned",
-				zap.String("workload_id", spec.ID.String()))
+	chosenMember, ok := pickNode(members, *spec, reserved)
+	if !ok {
+		if tryPreempt(ctx, logger, j, views, nodeID, members, specs, reserved, i) {
 			return
 		}
-		spec.AssignedNodeID = chosenMember.ID
-		recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec assigned")
-		return
-	}
-
-	if _, ok := alive[spec.AssignedNodeID]; ok {
-		return
-	}
-
-	chosenMember, ok := pickNode(members, spec)
-	if !ok {
-		logger.Debug("no node fits orphan memory request, leaving orphaned",
+		logger.Debug("no node fits workload, leaving for next tick",
 			zap.String("workload_id", spec.ID.String()))
 		return
 	}
-	if chosenMember.State != peerdiscovery.NodeStateAlive {
+	if !initial && chosenMember.State != peerdiscovery.NodeStateAlive {
 		return
 	}
 	spec.AssignedNodeID = chosenMember.ID
+	if spec.Resources.MemoryMB > 0 {
+		reserved[chosenMember.ID] += uint64(spec.Resources.MemoryMB)
+	}
+	if initial {
+		recordAssignment(ctx, logger, j, views, nodeID, *spec, "workload.spec assigned")
+		return
+	}
 	spec.AssignmentEpoch++
-	recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec reassigned")
+	recordAssignment(ctx, logger, j, views, nodeID, *spec, "workload.spec reassigned")
+}
+
+// tryPreempt displaces one lower-class running workload to make room for
+// the unplaceable spec at specs[i]. It scans live assigned specs for the
+// lowest class whose freed request covers the deficit on its node, writes
+// that victim's unassignment (empty node, epoch plus one), and leaves the
+// arrival for the next tick, when the freed request counts. Single
+// victim, strictly downward, so displacement terminates; equal classes
+// keep first-come-first-served. Memory math is approximate: node free is
+// real usage, requests are reservations, and the overlap drains as the
+// victim stops. It reports whether it evicted.
+func tryPreempt(
+	ctx context.Context,
+	logger *zap.Logger,
+	j journal.Journal,
+	views []journalview.View,
+	nodeID uuid.UUID,
+	members []peerdiscovery.Node,
+	specs []workload.Spec,
+	reserved map[uuid.UUID]uint64,
+	i int,
+) bool {
+	arrival := &specs[i]
+	if arrival.Resources.MemoryMB <= 0 {
+		return false
+	}
+
+	victim := -1
+	for j := range specs {
+		if !victimCovers(members, &specs[j], arrival, reserved) {
+			continue
+		}
+		candidate := &specs[j]
+		if victim < 0 || candidate.QoS.Rank() < specs[victim].QoS.Rank() ||
+			(candidate.QoS.Rank() == specs[victim].QoS.Rank() && candidate.Resources.MemoryMB > specs[victim].Resources.MemoryMB) {
+			victim = j
+		}
+	}
+	if victim < 0 {
+		return false
+	}
+
+	evicted := &specs[victim]
+	evicted.AssignedNodeID = uuid.Nil
+	evicted.AssignmentEpoch++
+	recordAssignment(ctx, logger, j, views, nodeID, *evicted, "workload.spec preempted")
+	return true
+}
+
+// victimCovers reports whether a live spec assigned to an alive node may
+// give way to the arrival: strictly lower class, a provable request, and
+// freed memory covering the deficit.
+func victimCovers(members []peerdiscovery.Node, candidate, arrival *workload.Spec, reserved map[uuid.UUID]uint64) bool {
+	if candidate.Removed || candidate.AssignedNodeID == uuid.Nil {
+		return false
+	}
+	if candidate.QoS.Rank() >= arrival.QoS.Rank() {
+		return false
+	}
+	candidateMB := candidate.Resources.MemoryMB
+	arrivalMB := arrival.Resources.MemoryMB
+	if candidateMB <= 0 || arrivalMB <= 0 {
+		return false
+	}
+	node, ok := memberByID(members, candidate.AssignedNodeID)
+	if !ok || node.State != peerdiscovery.NodeStateAlive {
+		return false
+	}
+	free := effectiveFreeMemory(node, reserved[node.ID])
+	return free+uint64(candidateMB) >= uint64(arrivalMB)
+}
+
+// memberByID finds a member by ID.
+func memberByID(members []peerdiscovery.Node, id uuid.UUID) (peerdiscovery.Node, bool) {
+	for _, member := range members {
+		if member.ID == id {
+			return member, true
+		}
+	}
+	return peerdiscovery.Node{}, false
+}
+
+// nodeFreeMemory derives free megabytes from gossip totals and percents.
+// Unknown capacity reports zero free; callers treat that as unmeasurable,
+// never as room.
+func nodeFreeMemory(member peerdiscovery.Node) uint64 {
+	total := member.Metadata.MemoryMB
+	if total == 0 {
+		return 0
+	}
+	used := total * uint64(member.Metadata.MemPercent) / 100
+	if used >= total {
+		return 0
+	}
+	return total - used
 }
 
 // aliveNodeIDs returns the set of member IDs currently observed as alive.
@@ -186,16 +307,16 @@ func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal
 }
 
 // pickNode selects the alive peer with the lowest pressure that fits the
-// workload's memory request, preferring healthy peers; fewest running
-// workloads breaks pressure ties. It reports false when no member fits,
-// and the caller leaves the spec for the next tick instead of placing
-// where it cannot run.
-func pickNode(members []peerdiscovery.Node, spec workload.Spec) (peerdiscovery.Node, bool) {
+// workload's memory request minus this tick's reservations, preferring
+// healthy peers; fewest running workloads breaks pressure ties. It
+// reports false when no member fits, and the caller leaves the spec for
+// the next tick instead of placing where it cannot run.
+func pickNode(members []peerdiscovery.Node, spec workload.Spec, reserved map[uuid.UUID]uint64) (peerdiscovery.Node, bool) {
 	var best peerdiscovery.Node
 	found := false
 
 	for _, member := range members {
-		if !fitsMemory(member, spec.Resources.MemoryMB) {
+		if !fitsMemory(member, spec.Resources.MemoryMB, reserved[member.ID]) {
 			continue
 		}
 		if !found {
@@ -226,24 +347,34 @@ func prefersNode(member, best peerdiscovery.Node) bool {
 	return member.Metadata.Workloads < best.Metadata.Workloads
 }
 
-// fitsMemory reports whether the member has the requested megabytes free.
-// No request (unlimited) always fits, and unknown node capacity never
-// blocks: missing data must not strand workloads. CPU shares are relative
-// weights and per-workload disk is unreported, so neither admits a fit
-// check; pressure already steers off hot nodes.
-func fitsMemory(member peerdiscovery.Node, requestedMB int64) bool {
+// fitsMemory reports whether the member has the requested megabytes free
+// after this tick's reservations. No request (unlimited) always fits,
+// and unknown node capacity never blocks: missing data must not strand
+// workloads. CPU shares are relative weights and per-workload disk is
+// unreported, so neither admits a fit check; pressure already steers off
+// hot nodes.
+func fitsMemory(member peerdiscovery.Node, requestedMB int64, reservedMB uint64) bool {
 	if requestedMB <= 0 {
 		return true
 	}
-	total := member.Metadata.MemoryMB
-	if total == 0 {
+	if member.Metadata.MemoryMB == 0 {
 		return true
 	}
-	used := total * uint64(member.Metadata.MemPercent) / 100
-	if used >= total {
+	free := nodeFreeMemory(member)
+	if reservedMB >= free {
 		return false
 	}
-	return uint64(requestedMB) <= total-used
+	return uint64(requestedMB) <= free-reservedMB
+}
+
+// effectiveFreeMemory subtracts this tick's reservations from gossip
+// free, floored at zero.
+func effectiveFreeMemory(member peerdiscovery.Node, reservedMB uint64) uint64 {
+	free := nodeFreeMemory(member)
+	if reservedMB >= free {
+		return 0
+	}
+	return free - reservedMB
 }
 
 // nodePressure reduces a member's utilization trio to one number: the max,

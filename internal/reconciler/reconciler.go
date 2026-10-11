@@ -148,8 +148,78 @@ func reconcileTick(
 	}
 
 	for _, spec := range workloadSpecs {
-		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
+		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler, specsByID(workloadSpecs))
 	}
+
+	reapDisplaced(ctx, logger, nodeID, workloadsView, running, peerService)
+}
+
+// reapDisplaced stops running containers whose live spec no longer points
+// here, and drops exited entries the view has moved on from. Preemption
+// unassigns live specs on live nodes; without this the victim container
+// would run forever with nobody owning it. Lookups that fail or miss
+// leave entries alone: uncertainty never kills.
+func reapDisplaced(
+	ctx context.Context,
+	logger *zap.Logger,
+	nodeID uuid.UUID,
+	workloadsView *journalview.Workloads,
+	running map[uuid.UUID]*ContainerAndProcess,
+	peerService *peerdiscovery.MemberService,
+) {
+	for id, entry := range running {
+		if entry == nil {
+			continue
+		}
+		spec, err := workloadsView.Get(ctx, id)
+		if err != nil {
+			logger.Debug("reap lookup failed, leaving entry", zap.String("id", id.String()), zap.Error(err))
+			continue
+		}
+		if spec == nil || spec.Removed || spec.AssignedNodeID == nodeID {
+			continue
+		}
+		if entry.ExitStatus == nil && !entry.Stopping {
+			destroyContainer(ctx, logger, entry.Spec, running)
+			continue
+		}
+		if entry.ExitStatus != nil {
+			delete(running, id)
+			peerService.SetWorkloadCount(countRunning(running))
+		}
+	}
+}
+
+// specsByID indexes listed specs for dependency gates.
+func specsByID(specs []workload.Spec) map[uuid.UUID]workload.Spec {
+	byID := make(map[uuid.UUID]workload.Spec, len(specs))
+	for _, spec := range specs {
+		byID[spec.ID] = spec
+	}
+	return byID
+}
+
+// depsReady reports whether spec's same-node dependencies are running. A
+// dependency gates only when it is live and assigned to this node:
+// unknown, removed, unassigned, or elsewhere-assigned IDs are ignored,
+// never waited on, and the spec itself is skipped so a hand-written
+// cycle cannot stall it forever. Health is not consulted: flapping
+// health must not stall dependents in sympathy.
+func depsReady(running map[uuid.UUID]*ContainerAndProcess, specs map[uuid.UUID]workload.Spec, nodeID uuid.UUID, spec workload.Spec) bool {
+	for _, dep := range spec.DependsOn {
+		if dep == spec.ID {
+			continue
+		}
+		depSpec, ok := specs[dep]
+		if !ok || depSpec.Removed || depSpec.AssignedNodeID != nodeID {
+			continue
+		}
+		entry, ok := running[dep]
+		if !ok || entry == nil || entry.ExitStatus != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // reconcileRemovedSpec handles cleanup for specs that have been marked as removed.
@@ -188,6 +258,7 @@ func reconcileWorkloadSpec(
 	peerService *peerdiscovery.MemberService,
 	views []journalview.View,
 	sampler *node.Sampler,
+	specs map[uuid.UUID]workload.Spec,
 ) {
 	if spec.AssignedNodeID != nodeID {
 		return
@@ -210,20 +281,34 @@ func reconcileWorkloadSpec(
 
 	// 3. Workload previously exited -> evaluate restart policy.
 	if exists && entry != nil && entry.ExitStatus != nil {
-		if !shouldRestartWorkload(spec.Restart, *entry.ExitStatus) {
-			return // Restart policy dictates no restart; retain exited status entry.
-		}
-		if entry.restartAfter.After(clock.Now()) {
-			// We are still cooling down, can't restart now.
+		if !evaluateRestart(entry, spec, running, peerService) {
 			return
 		}
-
-		delete(running, spec.ID) // Policy allows restart; clear old entry for new container start.
-		peerService.SetWorkloadCount(countRunning(running))
 	}
 
-	// 4. Start new container instance.
+	// 4. Start new container instance, gated on same-node dependencies.
+	if !depsReady(running, specs, nodeID, spec) {
+		logger.Debug("waiting on dependencies", zap.String("id", spec.ID.String()))
+		return
+	}
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
+}
+
+// evaluateRestart applies the restart policy to an exited entry. It
+// reports whether to start a new instance now, clearing the old entry
+// when policy allows. Cooling down or policy refusal both mean wait.
+func evaluateRestart(entry *ContainerAndProcess, spec workload.Spec, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) bool {
+	if !shouldRestartWorkload(spec.Restart, *entry.ExitStatus) {
+		return false // Restart policy dictates no restart; retain exited status entry.
+	}
+	if entry.restartAfter.After(clock.Now()) {
+		// We are still cooling down, can't restart now.
+		return false
+	}
+
+	delete(running, spec.ID) // Policy allows restart; clear old entry for new container start.
+	peerService.SetWorkloadCount(countRunning(running))
+	return true
 }
 
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.

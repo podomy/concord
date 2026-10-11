@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -133,6 +135,23 @@ func (b *Builder) HealthCheck(path string, action HealthAction) *Builder {
 func (b *Builder) HealthProbe(probe HealthProbe, command ...string) *Builder {
 	b.workload.HealthProbe = probe
 	b.workload.HealthCommand = command
+
+	return b
+}
+
+// DependsOn waits for the listed workloads to run on the same node
+// before this one starts. Unknown, removed, or elsewhere-assigned IDs
+// are ignored, never waited on.
+func (b *Builder) DependsOn(ids ...uuid.UUID) *Builder {
+	b.workload.DependsOn = append(b.workload.DependsOn, ids...)
+
+	return b
+}
+
+// QoS sets the compute allocation class: best-effort gives way to
+// everything, guaranteed gives way to nothing.
+func (b *Builder) QoS(qos QoS) *Builder {
+	b.workload.QoS = qos
 
 	return b
 }

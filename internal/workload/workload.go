@@ -3,7 +3,11 @@
 
 package workload
 
-import "github.com/google/uuid"
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
 
 type Spec struct {
 	Image          string // OCI reference, e.g. "docker.io/nginx:latest".
@@ -30,6 +34,89 @@ type Spec struct {
 	// HealthCommand is the argv run inside the container for exec
 	// probes. Required when HealthProbe is exec, ignored otherwise.
 	HealthCommand []string
+	// DependsOn lists workload IDs that must be running on the same node
+	// before this workload starts. Unknown, removed, or elsewhere-assigned
+	// IDs are ignored, never waited on. Empty means no ordering.
+	DependsOn []uuid.UUID
+	// QoS ranks the workload for placement order and preemption:
+	// best-effort gives way to everything, guaranteed gives way to
+	// nothing. Empty means best-effort. This is compute allocation
+	// (who gets the node), not message delivery: ROS-style DDS QoS
+	// governs packets, this governs placement. See docs/qos.md.
+	QoS QoS
+}
+
+// QoS is a workload's compute allocation class. Higher ranks place
+// first and displace lower ones; displacement flows strictly downward,
+// so eviction loops cannot form.
+type QoS string
+
+const (
+	// QoSBestEffort runs when room allows and gives way to everything.
+	QoSBestEffort QoS = "besteffort"
+	// QoSBurstable preempts best-effort and yields to guaranteed.
+	QoSBurstable QoS = "burstable"
+	// QoSGuaranteed places first and is never preempted.
+	QoSGuaranteed QoS = "guaranteed"
+)
+
+// Rank orders classes for placement and preemption. Empty and unknown
+// values rank zero: unspecified work stays best-effort, and a misspelled
+// class fails open instead of failing placed.
+func (q QoS) Rank() int {
+	switch q {
+	case QoSGuaranteed:
+		return 2
+	case QoSBurstable:
+		return 1
+	case QoSBestEffort, "":
+		return 0
+	default:
+		return 0
+	}
+}
+
+// Valid reports whether the class is empty or one of the three known
+// values. Submit rejects anything else, loudly.
+func (q QoS) Valid() bool {
+	switch q {
+	case "", QoSBestEffort, QoSBurstable, QoSGuaranteed:
+		return true
+	default:
+		return false
+	}
+}
+
+// CheckNoCycle rejects a spec whose dependency chain loops back to
+// itself through live specs. Unknown IDs have no dependencies, so only
+// known specs participate; the existing graph is assumed acyclic because
+// every submit passed this same check.
+func CheckNoCycle(live []Spec, newSpec Spec) error {
+	byID := make(map[uuid.UUID][]uuid.UUID, len(live)+1)
+	for _, spec := range live {
+		byID[spec.ID] = spec.DependsOn
+	}
+	byID[newSpec.ID] = newSpec.DependsOn
+
+	visiting := make(map[uuid.UUID]bool)
+	var visit func(id uuid.UUID) error
+	visit = func(id uuid.UUID) error {
+		if visiting[id] {
+			return fmt.Errorf("dependency cycle at workload %s", id)
+		}
+		visiting[id] = true
+		for _, dep := range byID[id] {
+			if _, ok := byID[dep]; !ok {
+				continue
+			}
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		delete(visiting, id)
+		return nil
+	}
+	return visit(newSpec.ID)
 }
 
 type HealthAction int

@@ -311,6 +311,67 @@ func TestBuildProcessAttachesLogWriters(t *testing.T) {
 	}
 }
 
+// A dependent waits while its same-node dependency is down, and starts
+// once it runs. The exited dependency itself never restarts here
+// (RestartNever), isolating the gate signal.
+func TestReconcileWaitsOnDependencies(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+
+	dep := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil, Restart: workload.RestartNever}
+	sub := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil, DependsOn: []uuid.UUID{dep.ID}}
+	writeSpecEvent(t, workloads, dep, uuid.Nil)
+	writeSpecEvent(t, workloads, sub, uuid.Nil)
+
+	running[dep.ID] = &ContainerAndProcess{Spec: dep, ExitStatus: &cr.ExitStatus{Code: 0}}
+	runTick(t, puller, runner, workloads, running, cidrs)
+	if runner.createCalled {
+		t.Fatal("dependent started while dependency down")
+	}
+
+	running[dep.ID] = &ContainerAndProcess{Spec: dep}
+	runner.createCalled = false
+	runTick(t, puller, runner, workloads, running, cidrs)
+	if !runner.createCalled {
+		t.Fatal("dependent did not start once dependency ran")
+	}
+}
+
+// Tombstoned, unknown, and elsewhere-assigned dependencies never gate:
+// only a live same-node dependency waits.
+func TestReconcileIgnoresIrrelevantDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dep  workload.Spec
+	}{
+		{"tombstoned", workload.Spec{ID: uuid.New(), Removed: true}},
+		{"unassigned-elsewhere", workload.Spec{ID: uuid.New(), AssignedNodeID: uuid.New()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+			puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+			writeSpecEvent(t, workloads, tc.dep, uuid.Nil)
+			sub := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil, DependsOn: []uuid.UUID{tc.dep.ID}}
+			writeSpecEvent(t, workloads, sub, uuid.Nil)
+
+			runTick(t, puller, runner, workloads, running, cidrs)
+			if !runner.createCalled {
+				t.Fatal("dependent stalled on irrelevant dependency")
+			}
+		})
+	}
+
+	// Unknown IDs are ignored the same way.
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+	sub := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil, DependsOn: []uuid.UUID{uuid.New()}}
+	writeSpecEvent(t, workloads, sub, uuid.Nil)
+	runTick(t, puller, runner, workloads, running, cidrs)
+	if !runner.createCalled {
+		t.Fatal("dependent stalled on unknown dependency")
+	}
+}
+
 func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
 	specDefault := workload.Spec{ID: uuid.New()}
 	specCustom := workload.Spec{ID: uuid.New(), StopTimeoutSeconds: 15}
@@ -329,7 +390,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryNever := &ContainerAndProcess{Spec: specNever, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningNever := map[uuid.UUID]*ContainerAndProcess{specNever.ID: entryNever}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
 	if _, exists := runningNever[specNever.ID]; !exists {
 		t.Error("expected RestartNever workload entry to be retained in running map")
 	}
@@ -339,7 +400,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryOnFailClean := &ContainerAndProcess{Spec: specOnFailClean, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningOnFailClean := map[uuid.UUID]*ContainerAndProcess{specOnFailClean.ID: entryOnFailClean}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
 	if _, exists := runningOnFailClean[specOnFailClean.ID]; !exists {
 		t.Error("expected RestartOnFailure with clean exit to be retained in running map")
 	}
@@ -350,8 +411,42 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	runningAlways := map[uuid.UUID]*ContainerAndProcess{specAlways.ID: entryAlways}
 	pullerAlways := &mockPuller{pullResult: &cr.PullResult{}}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
 	if !pullerAlways.pullCalled {
 		t.Error("expected RestartAlways workload to trigger startContainer on tick")
+	}
+}
+
+// A running container whose live spec points elsewhere gets SIGTERM;
+// preemption on a live node must not leak it.
+func TestReaperStopsDisplacedRunning(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+
+	spec := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.New()}
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
+	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1)}
+	running[spec.ID] = &ContainerAndProcess{Spec: spec, ProcessHandle: proc}
+
+	runTick(t, puller, runner, workloads, running, cidrs)
+
+	if len(proc.signals) != 1 || proc.signals[0] != syscall.SIGTERM {
+		t.Fatalf("signals = %v, want one SIGTERM", proc.signals)
+	}
+}
+
+// A displaced entry that already exited is dropped from the map so it
+// cannot linger or restart.
+func TestReaperDropsDisplacedExited(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+
+	spec := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.New()}
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
+	running[spec.ID] = &ContainerAndProcess{Spec: spec, ExitStatus: &cr.ExitStatus{Code: 0}}
+
+	runTick(t, puller, runner, workloads, running, cidrs)
+
+	if _, ok := running[spec.ID]; ok {
+		t.Fatal("displaced exited entry not dropped")
 	}
 }

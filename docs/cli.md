@@ -42,6 +42,8 @@ concord workload run [flags] <image> [command...]
 --health-action (default restart): action on failure restart or signal
 --health-probe (default http): check type http, tcp, or exec
 --health-cmd (default ""): exec probe command, split on whitespace
+--depends-on (default []): wait for this workload ID or prefix on the same node (repeatable)
+--qos (default besteffort): compute class besteffort, burstable, or guaranteed
 ```
 
 **Examples:**

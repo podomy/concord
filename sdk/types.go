@@ -48,6 +48,21 @@ const (
 	HealthProbeExec HealthProbe = "exec"
 )
 
+// QoS is a workload's compute allocation class: who places first and
+// who gives way. Empty means best-effort. This ranks compute, not
+// packets: ROS-style DDS QoS governs message delivery, this governs
+// placement. See docs/qos.md.
+type QoS string
+
+const (
+	// QoSBestEffort runs when room allows and gives way to everything.
+	QoSBestEffort QoS = "besteffort"
+	// QoSBurstable preempts best-effort and yields to guaranteed.
+	QoSBurstable QoS = "burstable"
+	// QoSGuaranteed places first and is never preempted.
+	QoSGuaranteed QoS = "guaranteed"
+)
+
 // Resources specifies compute limits for a container workload.
 type Resources struct {
 	CPUShares uint64 `json:"cpu_shares"` // Relative CPU weight (default 1024).
@@ -69,6 +84,8 @@ type Workload struct {
 	HealthPath         string            `json:"health_path,omitempty"`
 	HealthProbe        HealthProbe       `json:"health_probe,omitempty"`
 	HealthCommand      []string          `json:"health_command,omitempty"`
+	DependsOn          []uuid.UUID       `json:"depends_on,omitempty"`
+	QoS                QoS               `json:"qos,omitempty"`
 }
 
 // WorkloadStats reports live utilization for one running workload.

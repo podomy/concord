@@ -102,6 +102,22 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	spec := sdkToInternalWorkload(input)
+
+	if !spec.QoS.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid QoS class: "+string(spec.QoS))
+		return
+	}
+	live, err := s.workloads.List(r.Context())
+	if err != nil {
+		s.logger.Error("failed to list workloads for dependency check", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to check dependencies: "+err.Error())
+		return
+	}
+	if err := workload.CheckNoCycle(live, spec); err != nil {
+		writeError(w, http.StatusBadRequest, "dependency cycle: "+err.Error())
+		return
+	}
+
 	payload, err := json.Marshal(spec)
 	if err != nil {
 		s.logger.Error("failed to marshal workload spec", zap.Error(err))
@@ -406,6 +422,8 @@ func sdkToInternalWorkload(w sdk.Workload) workload.Spec {
 		HealthPath:         w.HealthPath,
 		HealthProbe:        workload.HealthProbe(w.HealthProbe),
 		HealthCommand:      w.HealthCommand,
+		DependsOn:          w.DependsOn,
+		QoS:                workload.QoS(w.QoS),
 	}
 }
 
@@ -427,5 +445,7 @@ func internalToSDKWorkload(s workload.Spec) sdk.Workload {
 		HealthPath:         s.HealthPath,
 		HealthProbe:        sdk.HealthProbe(s.HealthProbe),
 		HealthCommand:      s.HealthCommand,
+		DependsOn:          s.DependsOn,
+		QoS:                sdk.QoS(s.QoS),
 	}
 }

@@ -554,3 +554,40 @@ func TestIPCServerGracefulShutdown(t *testing.T) {
 		t.Fatalf("shutdown already closed server: %v", err)
 	}
 }
+
+// A resubmission closing a dependency loop is rejected: cycles would
+// stall every member of the loop forever.
+func TestIPCSubmitRejectsDependencyCycle(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	a := uuid.New()
+	b := uuid.New()
+	wa := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	wa.ID = a
+	mustSubmit(t, h.client, ctx, wa)
+	wb := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	wb.ID = b
+	wb.DependsOn = []uuid.UUID{a}
+	mustSubmit(t, h.client, ctx, wb)
+
+	loop := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	loop.ID = a
+	loop.DependsOn = []uuid.UUID{b}
+	if _, err := h.client.Submit(ctx, loop); err == nil {
+		t.Fatal("expected cycle rejection")
+	}
+}
+
+// Unknown QoS classes are rejected at submit, never scheduled by
+// surprise.
+func TestIPCSubmitRejectsUnknownQoS(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	w := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	w.QoS = "ultra"
+	if _, err := h.client.Submit(ctx, w); err == nil {
+		t.Fatal("expected QoS rejection")
+	}
+}

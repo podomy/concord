@@ -115,7 +115,7 @@ func TestPickNode(t *testing.T) {
 	}
 
 	members := []peerdiscovery.Node{node1, deadNode, node2}
-	chosen, ok := pickNode(members, workload.Spec{})
+	chosen, ok := pickNode(members, workload.Spec{}, nil)
 	if !ok {
 		t.Fatal("expected a fit")
 	}
@@ -159,7 +159,7 @@ func TestPickNodePrefersLowerPressure(t *testing.T) {
 		},
 	}
 
-	if chosen, ok := pickNode([]peerdiscovery.Node{loaded, idle}, workload.Spec{}); !ok || chosen.ID != idle.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{loaded, idle}, workload.Spec{}, nil); !ok || chosen.ID != idle.ID {
 		t.Fatalf("expected idle node, got %v", chosen.ID)
 	}
 }
@@ -185,7 +185,7 @@ func TestPickNodePressureTieAndBottleneck(t *testing.T) {
 			CPUPercent: 10,
 		},
 	}
-	if chosen, ok := pickNode([]peerdiscovery.Node{busy, idler}, workload.Spec{}); !ok || chosen.ID != busy.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{busy, idler}, workload.Spec{}, nil); !ok || chosen.ID != busy.ID {
 		t.Fatalf("expected fewer workloads on tie, got %v", chosen.ID)
 	}
 
@@ -204,7 +204,7 @@ func TestPickNodePressureTieAndBottleneck(t *testing.T) {
 			MemPercent: 20,
 		},
 	}
-	if chosen, ok := pickNode([]peerdiscovery.Node{diskFull, even}, workload.Spec{}); !ok || chosen.ID != even.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{diskFull, even}, workload.Spec{}, nil); !ok || chosen.ID != even.ID {
 		t.Fatalf("expected bottleneck to lose, got %v", chosen.ID)
 	}
 }
@@ -224,12 +224,12 @@ func TestPickNodeSkipsUnfit(t *testing.T) {
 	}
 
 	hungry := workload.Spec{Resources: workload.Resources{MemoryMB: 8192}}
-	if _, ok := pickNode([]peerdiscovery.Node{small}, hungry); ok {
+	if _, ok := pickNode([]peerdiscovery.Node{small}, hungry, nil); ok {
 		t.Fatal("expected no fit for 8GB on 512MB free")
 	}
 
 	exact := workload.Spec{Resources: workload.Resources{MemoryMB: 512}}
-	if chosen, ok := pickNode([]peerdiscovery.Node{small}, exact); !ok || chosen.ID != small.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{small}, exact, nil); !ok || chosen.ID != small.ID {
 		t.Fatal("expected exact fit to place")
 	}
 }
@@ -245,10 +245,10 @@ func TestPickNodeFitNeverBlocksUnknown(t *testing.T) {
 	}
 
 	hungry := workload.Spec{Resources: workload.Resources{MemoryMB: 1 << 20}}
-	if _, ok := pickNode([]peerdiscovery.Node{unknown}, hungry); !ok {
+	if _, ok := pickNode([]peerdiscovery.Node{unknown}, hungry, nil); !ok {
 		t.Fatal("expected unknown capacity to fit")
 	}
-	if _, ok := pickNode([]peerdiscovery.Node{unknown}, workload.Spec{}); !ok {
+	if _, ok := pickNode([]peerdiscovery.Node{unknown}, workload.Spec{}, nil); !ok {
 		t.Fatal("expected unlimited request to fit")
 	}
 }
@@ -392,5 +392,128 @@ func TestScheduleSkipsWhenNoAlive(t *testing.T) {
 
 	if len(rec.events) != 0 {
 		t.Fatalf("expected no events without alive nodes, got %d", len(rec.events))
+	}
+}
+
+// Orphans go first, unassigned follow highest class first; view order
+// decides within a class.
+func TestPendingIndexesOrder(t *testing.T) {
+	t.Parallel()
+
+	owner := uuid.New()
+	specs := []workload.Spec{
+		{ID: uuid.New()},
+		{ID: uuid.New(), AssignedNodeID: owner},
+		{ID: uuid.New(), Removed: true},
+		{ID: uuid.New(), AssignedNodeID: uuid.New()},
+		{ID: uuid.New(), QoS: workload.QoSGuaranteed},
+		{ID: uuid.New(), QoS: workload.QoSBurstable},
+	}
+	alive := map[uuid.UUID]struct{}{owner: {}}
+
+	got := pendingIndexes(specs, alive)
+	want := []int{3, 4, 5, 0}
+	if len(got) != len(want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
+// A guaranteed arrival that fits nowhere displaces one best-effort
+// victim: the victim unassigns with an epoch bump, the arrival waits.
+func TestSchedulePreemptsLowerClass(t *testing.T) {
+	t.Parallel()
+
+	node := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 90,
+		},
+	}
+	view := newSchedulerWorkloads(t)
+	victim := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: node.ID, QoS: workload.QoSBestEffort, Resources: workload.Resources{MemoryMB: 800}}
+	arrival := workload.Spec{ID: uuid.New(), Image: "x", QoS: workload.QoSGuaranteed, Resources: workload.Resources{MemoryMB: 800}}
+	seedSchedulerSpec(t, view, victim)
+	seedSchedulerSpec(t, view, arrival)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{node})
+
+	if len(rec.events) != 1 {
+		t.Fatalf("expected 1 preempt event, got %d", len(rec.events))
+	}
+	gotVictim, err := view.Get(t.Context(), victim.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotVictim == nil || gotVictim.AssignedNodeID != uuid.Nil || gotVictim.AssignmentEpoch != 1 {
+		t.Fatalf("victim = %+v", gotVictim)
+	}
+	gotArrival, err := view.Get(t.Context(), arrival.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotArrival == nil || gotArrival.AssignedNodeID != uuid.Nil {
+		t.Fatalf("arrival placed too early: %+v", gotArrival)
+	}
+}
+
+// Equal classes never displace: first-come-first-served, no eviction
+// loops by construction.
+func TestScheduleNeverPreemptsEqualClass(t *testing.T) {
+	t.Parallel()
+
+	node := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 90,
+		},
+	}
+	view := newSchedulerWorkloads(t)
+	occupant := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: node.ID, QoS: workload.QoSBestEffort, Resources: workload.Resources{MemoryMB: 800}}
+	arrival := workload.Spec{ID: uuid.New(), Image: "x", QoS: workload.QoSBestEffort, Resources: workload.Resources{MemoryMB: 800}}
+	seedSchedulerSpec(t, view, occupant)
+	seedSchedulerSpec(t, view, arrival)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{node})
+
+	if len(rec.events) != 0 {
+		t.Fatalf("expected no events, got %d", len(rec.events))
+	}
+}
+
+// Two fitting requests on room for one: the first places, the second
+// waits. Reservations make admission exact within a tick.
+func TestScheduleReservesWithinTick(t *testing.T) {
+	t.Parallel()
+
+	node := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 40,
+		},
+	}
+	view := newSchedulerWorkloads(t)
+	first := workload.Spec{ID: uuid.New(), Image: "x", Resources: workload.Resources{MemoryMB: 500}}
+	second := workload.Spec{ID: uuid.New(), Image: "x", Resources: workload.Resources{MemoryMB: 500}}
+	seedSchedulerSpec(t, view, first)
+	seedSchedulerSpec(t, view, second)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{node})
+
+	if len(rec.events) != 1 {
+		t.Fatalf("expected 1 assignment event, got %d", len(rec.events))
 	}
 }

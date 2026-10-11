@@ -86,7 +86,10 @@ counters.
 
 Pressure is the max of the trio: a node is as loaded as its most
 constrained resource. Lowest pressure wins, fewest workloads on draws,
-alive nodes preferred. Three candidates:
+alive nodes preferred, and only nodes with the requested memory free
+qualify at all. Class orders the queue: guaranteed places before
+burstable places before best-effort, orphans before all of them. Three
+candidates:
 
 ```
 A: cpu 70, mem 20, disk 10, workloads 1  → pressure 70

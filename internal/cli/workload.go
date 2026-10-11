@@ -46,6 +46,8 @@ type runFlags struct {
 	healthAction string
 	healthProbe  string
 	healthCmd    string
+	dependsOn    []string
+	qos          string
 }
 
 func newWorkloadRunCommand() *cobra.Command {
@@ -70,6 +72,8 @@ func newWorkloadRunCommand() *cobra.Command {
 	flags.StringVar(&rf.healthAction, "health-action", "restart", "Action on health check failure: 'restart' or 'signal'")
 	flags.StringVar(&rf.healthProbe, "health-probe", "http", "Health check type: 'http', 'tcp', or 'exec'")
 	flags.StringVar(&rf.healthCmd, "health-cmd", "", `Exec probe command, split on whitespace: --health-cmd "/bin/check --ready" runs /bin/check --ready`)
+	flags.StringArrayVar(&rf.dependsOn, "depends-on", nil, "Wait for this workload ID or prefix on the same node (repeatable)")
+	flags.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
 
 	return cmd
 }
@@ -122,6 +126,18 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 		return sdk.Workload{}, err
 	}
 
+	var qos sdk.QoS
+	switch strings.ToLower(strings.TrimSpace(rf.qos)) {
+	case "besteffort", "":
+		qos = sdk.QoSBestEffort
+	case "burstable":
+		qos = sdk.QoSBurstable
+	case "guaranteed":
+		qos = sdk.QoSGuaranteed
+	default:
+		return sdk.Workload{}, fmt.Errorf("invalid QoS class %q; must be 'besteffort', 'burstable', or 'guaranteed'", rf.qos)
+	}
+
 	builder := sdk.NewWorkload().
 		Image(image).
 		Command(command...).
@@ -129,7 +145,8 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 		CPUShares(rf.cpu).
 		MemoryMB(rf.memory).
 		HealthCheck(rf.healthPath, action).
-		HealthProbe(probe, healthCmd...)
+		HealthProbe(probe, healthCmd...).
+		QoS(qos)
 
 	if hostPort > 0 && containerPort > 0 {
 		builder = builder.Port(hostPort, containerPort)
@@ -158,6 +175,16 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 		return err
 	}
 	defer closeFn()
+
+	if len(rf.dependsOn) > 0 {
+		for _, dep := range rf.dependsOn {
+			depID, err := resolveWorkloadID(ctx, client, dep)
+			if err != nil {
+				return fmt.Errorf("resolve dependency %q: %w", dep, err)
+			}
+			workload.DependsOn = append(workload.DependsOn, depID)
+		}
+	}
 
 	id, err := client.Submit(ctx, workload)
 	if err != nil {
