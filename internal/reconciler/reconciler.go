@@ -114,7 +114,7 @@ func RunLoop(
 				scheduleWorkloads(ctx, logger, j, workloads, peerService, nodeID, views)
 			}
 
-			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService, views)
+			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
 
 		case <-fastTicker.C:
 			runFastTick(ctx, logger, sampler, running, j, views, nodeID, peerService)
@@ -139,6 +139,7 @@ func reconcileTick(
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
 	views []journalview.View,
+	sampler *node.Sampler,
 ) {
 	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
@@ -147,7 +148,7 @@ func reconcileTick(
 	}
 
 	for _, spec := range workloadSpecs {
-		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService, views)
+		reconcileWorkloadSpec(ctx, logger, nodeID, puller, runtime, j, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
 	}
 }
 
@@ -186,6 +187,7 @@ func reconcileWorkloadSpec(
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
 	views []journalview.View,
+	sampler *node.Sampler,
 ) {
 	if spec.AssignedNodeID != nodeID {
 		return
@@ -221,7 +223,7 @@ func reconcileWorkloadSpec(
 	}
 
 	// 4. Start new container instance.
-	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views)
+	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
 }
 
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.
@@ -285,6 +287,7 @@ func startContainer(
 	exitEvents chan<- ExitEvent,
 	peerService *peerdiscovery.MemberService,
 	views []journalview.View,
+	sampler *node.Sampler,
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
@@ -310,7 +313,7 @@ func startContainer(
 		return
 	}
 
-	proc := buildProcess(spec, pullResult)
+	proc := buildProcess(spec, pullResult, sampler)
 	processHandle, err := runtime.Start(ctr, proc)
 	if err != nil {
 		logger.Error("start container", zap.Error(err))
@@ -495,7 +498,9 @@ func countRunning(running map[uuid.UUID]*ContainerAndProcess) int {
 }
 
 // buildProcess constructs a libcontainer Process from the spec and image config.
-func buildProcess(spec workload.Spec, result *cr.PullResult) *libcontainer.Process {
+// Container output flows into the sampler's per-workload log rings; a nil
+// sampler leaves writers unset and output discards as before.
+func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampler) *libcontainer.Process {
 	env := result.Config.Config.Env
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
@@ -510,6 +515,10 @@ func buildProcess(spec workload.Spec, result *cr.PullResult) *libcontainer.Proce
 		Args: spec.Command,
 		Env:  env,
 		Cwd:  cwd,
+	}
+	if sampler != nil {
+		proc.Stdout = sampler.LogWriter(spec.ID, node.LogStdout)
+		proc.Stderr = sampler.LogWriter(spec.ID, node.LogStderr)
 	}
 
 	return proc

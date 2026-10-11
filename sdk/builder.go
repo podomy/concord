@@ -128,6 +128,15 @@ func (b *Builder) HealthCheck(path string, action HealthAction) *Builder {
 	return b
 }
 
+// HealthProbe selects the check type with an optional exec command.
+// An empty probe with no command keeps the default HTTP check.
+func (b *Builder) HealthProbe(probe HealthProbe, command ...string) *Builder {
+	b.workload.HealthProbe = probe
+	b.workload.HealthCommand = command
+
+	return b
+}
+
 // StopTimeout sets the graceful shutdown grace period before SIGKILL.
 func (b *Builder) StopTimeout(d time.Duration) *Builder {
 	secs := int(d.Seconds())

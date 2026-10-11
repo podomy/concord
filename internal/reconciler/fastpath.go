@@ -46,7 +46,7 @@ func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.U
 		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
 			continue
 		}
-		healthy := cr.CheckHealth(ctx, logger, entry.Spec)
+		healthy := cr.CheckHealth(ctx, logger, entry.Spec, entry.Container)
 		// Check liveness.
 		if healthy {
 			entry.unhealthyReported = false

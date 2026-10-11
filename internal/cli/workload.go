@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/podomy/concord/sdk"
@@ -27,6 +29,7 @@ func newWorkloadCommand() *cobra.Command {
 		newWorkloadListCommand(),
 		newWorkloadInspectCommand(),
 		newWorkloadStatsCommand(),
+		newWorkloadLogsCommand(),
 		newWorkloadStopCommand(),
 	)
 
@@ -41,6 +44,8 @@ type runFlags struct {
 	memory       int64
 	healthPath   string
 	healthAction string
+	healthProbe  string
+	healthCmd    string
 }
 
 func newWorkloadRunCommand() *cobra.Command {
@@ -63,8 +68,42 @@ func newWorkloadRunCommand() *cobra.Command {
 	flags.Int64Var(&rf.memory, "memory", 0, "Memory limit in MB (0 = unlimited)")
 	flags.StringVar(&rf.healthPath, "health-path", "/health", "HTTP health check endpoint")
 	flags.StringVar(&rf.healthAction, "health-action", "restart", "Action on health check failure: 'restart' or 'signal'")
+	flags.StringVar(&rf.healthProbe, "health-probe", "http", "Health check type: 'http', 'tcp', or 'exec'")
+	flags.StringVar(&rf.healthCmd, "health-cmd", "", `Exec probe command, split on whitespace: --health-cmd "/bin/check --ready" runs /bin/check --ready`)
 
 	return cmd
+}
+
+// parseHealthFlags validates the health flag trio into a probe, an action,
+// and the exec argv. Exec without a command fails here, at the edge,
+// instead of restart-looping a misconfigured workload later.
+func parseHealthFlags(rf *runFlags) (sdk.HealthProbe, sdk.HealthAction, []string, error) {
+	var action sdk.HealthAction
+	switch strings.ToLower(strings.TrimSpace(rf.healthAction)) {
+	case "restart", "":
+		action = sdk.HealthActionRestart
+	case "signal":
+		action = sdk.HealthActionSignal
+	default:
+		return "", 0, nil, fmt.Errorf("invalid health action %q; must be 'restart' or 'signal'", rf.healthAction)
+	}
+
+	var probe sdk.HealthProbe
+	switch strings.ToLower(strings.TrimSpace(rf.healthProbe)) {
+	case "http", "":
+		probe = sdk.HealthProbeHTTP
+	case "tcp":
+		probe = sdk.HealthProbeTCP
+	case "exec":
+		probe = sdk.HealthProbeExec
+	default:
+		return "", 0, nil, fmt.Errorf("invalid health probe %q; must be 'http', 'tcp', or 'exec'", rf.healthProbe)
+	}
+	if probe == sdk.HealthProbeExec && len(strings.Fields(rf.healthCmd)) == 0 {
+		return "", 0, nil, ErrHealthCommandRequired
+	}
+
+	return probe, action, strings.Fields(rf.healthCmd), nil
 }
 
 func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Workload, error) {
@@ -78,14 +117,9 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 		return sdk.Workload{}, err
 	}
 
-	var action sdk.HealthAction
-	switch strings.ToLower(strings.TrimSpace(rf.healthAction)) {
-	case "restart", "":
-		action = sdk.HealthActionRestart
-	case "signal":
-		action = sdk.HealthActionSignal
-	default:
-		return sdk.Workload{}, fmt.Errorf("invalid health action %q; must be 'restart' or 'signal'", rf.healthAction)
+	probe, action, healthCmd, err := parseHealthFlags(rf)
+	if err != nil {
+		return sdk.Workload{}, err
 	}
 
 	builder := sdk.NewWorkload().
@@ -94,7 +128,8 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 		Restart(sdk.RestartPolicy(rf.restart)).
 		CPUShares(rf.cpu).
 		MemoryMB(rf.memory).
-		HealthCheck(rf.healthPath, action)
+		HealthCheck(rf.healthPath, action).
+		HealthProbe(probe, healthCmd...)
 
 	if hostPort > 0 && containerPort > 0 {
 		builder = builder.Port(hostPort, containerPort)
@@ -227,6 +262,87 @@ func newWorkloadStatsCommand() *cobra.Command {
 			return handleWorkloadStats(cmd.Context(), cmd.OutOrStdout(), args[0])
 		},
 	}
+}
+
+// newWorkloadLogsCommand creates the 'concord workload logs' subcommand.
+func newWorkloadLogsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "logs <id>",
+		Short: "Show captured container output for a workload",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			tail, err := cmd.Flags().GetInt("tail")
+			if err != nil {
+				return fmt.Errorf("read --tail flag: %w", err)
+			}
+			follow, err := cmd.Flags().GetBool("follow")
+			if err != nil {
+				return fmt.Errorf("read --follow flag: %w", err)
+			}
+			return handleWorkloadLogs(cmd.Context(), cmd.OutOrStdout(), args[0], tail, follow)
+		},
+	}
+	cmd.Flags().Int("tail", 0, "show only the last N lines (0 means all)")
+	cmd.Flags().BoolP("follow", "f", false, "keep printing new lines until interrupted")
+	return cmd
+}
+
+// handleWorkloadLogs prints captured output lines oldest-first. Follow
+// polls the snapshot every second and prints lines newer than the last
+// printed timestamp; ring overwrites can only drop older lines, never
+// reorder or duplicate, so timestamp comparison is exact.
+func handleWorkloadLogs(ctx context.Context, stdout io.Writer, idArg string, tail int, follow bool) error {
+	client, closeFn, err := dialIPCClient()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	targetID, err := resolveWorkloadID(ctx, client, idArg)
+	if err != nil {
+		return err
+	}
+
+	printed, err := printLogLines(ctx, client, stdout, targetID, tail, time.Time{})
+	if err != nil {
+		return err
+	}
+	if !follow {
+		return nil
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			printed, err = printLogLines(ctx, client, stdout, targetID, 0, printed)
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// printLogLines prints lines newer than since and returns the newest
+// printed timestamp. Tail applies only to the first (snapshot) call:
+// follow-up polls fetch everything and filter by timestamp.
+func printLogLines(ctx context.Context, client sdk.Client, stdout io.Writer, targetID uuid.UUID, tail int, since time.Time) (time.Time, error) {
+	lines, err := client.Logs(ctx, targetID, tail)
+	if err != nil {
+		return since, fmt.Errorf("get workload logs %s: %w", targetID, err)
+	}
+
+	for _, line := range lines {
+		if !line.At.After(since) {
+			continue
+		}
+		_, _ = fmt.Fprintln(stdout, line.Line) //nolint:errcheck // CLI output
+		since = line.At
+	}
+	return since, nil
 }
 
 func handleWorkloadStats(ctx context.Context, stdout io.Writer, idArg string) error {

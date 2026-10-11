@@ -26,6 +26,9 @@ var (
 
 	// ErrMissingWorkloadID indicates an ID or prefix argument was not provided.
 	ErrMissingWorkloadID = errors.New("workload ID or prefix is required")
+
+	// ErrHealthCommandRequired indicates an exec probe was requested without a command.
+	ErrHealthCommandRequired = errors.New("exec probe requires --health-cmd")
 )
 
 // dialIPCClient connects to the Concord daemon IPC socket via the SDK.

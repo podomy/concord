@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
@@ -22,6 +23,7 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
+	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -146,7 +148,7 @@ func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.W
 func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, workloads *journalview.Workloads, running map[uuid.UUID]*ContainerAndProcess, cidrs map[uuid.UUID]string) {
 	t.Helper()
 	exitEvents := make(chan ExitEvent, 100)
-	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, exitEvents, nil, nil)
+	reconcileTick(t.Context(), zaptest.NewLogger(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, exitEvents, nil, nil, nil)
 }
 
 func writeSpecEvent(t *testing.T, workloads *journalview.Workloads, spec workload.Spec, nodeID uuid.UUID) {
@@ -247,6 +249,9 @@ func TestReconcilerHandleExitEvent(t *testing.T) {
 // Instance events reach live views, not just journal bytes: previously
 // they appended without applying, so generic indexes missed them until
 // the next rebuild.
+// Instance events reach live views, not just journal bytes: previously
+// they appended without applying, so generic indexes missed them until
+// the next rebuild.
 func TestRecordInstanceEventAppliesViews(t *testing.T) {
 	ctx := context.Background()
 	j, err := journal.OpenJSONLPath(filepath.Join(t.TempDir(), "journal.jsonl"))
@@ -289,6 +294,23 @@ func TestRecordInstanceEventAppliesViews(t *testing.T) {
 	}
 }
 
+// Container output flows into the sampler's log rings; a nil sampler
+// leaves writers unset and output discards as before.
+func TestBuildProcessAttachesLogWriters(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), Command: []string{"/bin/true"}}
+	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+
+	proc := buildProcess(spec, result, node.NewSampler())
+	if proc.Stdout == nil || proc.Stderr == nil {
+		t.Fatal("expected log writers attached")
+	}
+
+	plain := buildProcess(spec, result, nil)
+	if plain.Stdout != nil || plain.Stderr != nil {
+		t.Fatal("expected unset writers without sampler")
+	}
+}
+
 func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
 	specDefault := workload.Spec{ID: uuid.New()}
 	specCustom := workload.Spec{ID: uuid.New(), StopTimeoutSeconds: 15}
@@ -307,7 +329,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryNever := &ContainerAndProcess{Spec: specNever, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningNever := map[uuid.UUID]*ContainerAndProcess{specNever.ID: entryNever}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil, nil)
 	if _, exists := runningNever[specNever.ID]; !exists {
 		t.Error("expected RestartNever workload entry to be retained in running map")
 	}
@@ -317,7 +339,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryOnFailClean := &ContainerAndProcess{Spec: specOnFailClean, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningOnFailClean := map[uuid.UUID]*ContainerAndProcess{specOnFailClean.ID: entryOnFailClean}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil, nil)
 	if _, exists := runningOnFailClean[specOnFailClean.ID]; !exists {
 		t.Error("expected RestartOnFailure with clean exit to be retained in running map")
 	}
@@ -328,7 +350,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	runningAlways := map[uuid.UUID]*ContainerAndProcess{specAlways.ID: entryAlways}
 	pullerAlways := &mockPuller{pullResult: &cr.PullResult{}}
 
-	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), zaptest.NewLogger(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil, nil)
 	if !pullerAlways.pullCalled {
 		t.Error("expected RestartAlways workload to trigger startContainer on tick")
 	}

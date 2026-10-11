@@ -167,6 +167,40 @@ func TestClient_Trail(t *testing.T) {
 	}
 }
 
+func TestClient_Logs(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/workloads/"+id.String()+"/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("tail") != "1" {
+			t.Errorf("tail = %q, want 1", r.URL.Query().Get("tail"))
+		}
+		writeJSONResponse(t, w, http.StatusOK, map[string]any{
+			"logs": []any{
+				map[string]any{"at": "2026-10-09T10:00:00Z", "stream": "stderr", "line": "boom"},
+			},
+		})
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	logs, err := client.Logs(context.Background(), id, 1)
+	if err != nil {
+		t.Fatalf("unexpected logs error: %v", err)
+	}
+	if len(logs) != 1 || logs[0].Line != "boom" || logs[0].Stream != "stderr" {
+		t.Fatalf("logs = %+v", logs)
+	}
+}
+
 func TestClient_SetPosition(t *testing.T) {
 	t.Parallel()
 

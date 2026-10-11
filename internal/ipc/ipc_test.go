@@ -276,6 +276,43 @@ func TestIPCSetPosition(t *testing.T) {
 	assertPositionedTrail(t, ctx, h.client, 1)
 }
 
+// Captured container output serves oldest-first with tail support; a
+// workload with no ring reports not found like stats.
+func TestIPCWorkloadLogs(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+	id := uuid.New()
+
+	if _, err := h.client.Logs(ctx, id, 0); err == nil {
+		t.Fatal("expected not-found for unknown workload")
+	}
+
+	out := h.sampler.LogWriter(id, node.LogStdout)
+	if _, err := out.Write([]byte("hello\n")); err != nil {
+		t.Fatal(err)
+	}
+	errOut := h.sampler.LogWriter(id, node.LogStderr)
+	if _, err := errOut.Write([]byte("boom\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, err := h.client.Logs(ctx, id, 0)
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	if len(logs) != 2 || logs[0].Line != "hello" || logs[1].Stream != "stderr" {
+		t.Fatalf("logs = %+v", logs)
+	}
+
+	tailed, err := h.client.Logs(ctx, id, 1)
+	if err != nil {
+		t.Fatalf("tailed logs: %v", err)
+	}
+	if len(tailed) != 1 || tailed[0].Line != "boom" {
+		t.Fatalf("tailed = %+v", tailed)
+	}
+}
+
 // assertPositionedTrail checks the trail holds exactly n points at the fix.
 func assertPositionedTrail(t *testing.T, ctx context.Context, client sdk.Client, n int) {
 	t.Helper()

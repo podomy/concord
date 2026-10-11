@@ -6,6 +6,7 @@ package ipc
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -25,6 +26,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workloads", s.handleListWorkloads)
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
+	mux.HandleFunc("GET /v1/workloads/{id}/logs", s.handleWorkloadLogs)
 	mux.HandleFunc("GET /v1/nodes/self/trail", s.handleNodeTrail)
 	mux.HandleFunc("PUT /v1/nodes/self/position", s.handleSetPosition)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -47,6 +49,10 @@ type nodesResponse struct {
 
 type trailResponse struct {
 	Trail []sdk.TrailPoint `json:"trail"`
+}
+
+type logsResponse struct {
+	Logs []sdk.LogLine `json:"logs"`
 }
 
 type errorResponse struct {
@@ -212,6 +218,41 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleWorkloadLogs returns one workload's captured stdout/stderr lines
+// oldest-first, optionally tailed to the last N. Rings hold the roam
+// since container start (1000 lines); adopted containers capture nothing
+// until restarted. Absent rings report 404, mirroring stats: nothing
+// sampled, nothing to show.
+func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workload id: "+idStr)
+		return
+	}
+
+	if s.sampler == nil {
+		writeError(w, http.StatusNotFound, "workload logs not found")
+		return
+	}
+
+	lines := s.sampler.LogLines(id)
+	if len(lines) == 0 {
+		writeError(w, http.StatusNotFound, "workload logs not found")
+		return
+	}
+
+	if tail, err := strconv.Atoi(r.URL.Query().Get("tail")); err == nil && tail > 0 && tail < len(lines) {
+		lines = lines[len(lines)-tail:]
+	}
+
+	out := make([]sdk.LogLine, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, sdk.LogLine{At: line.At, Stream: line.Stream, Line: line.Text})
+	}
+	writeJSON(w, http.StatusOK, logsResponse{Logs: out})
+}
+
 // handleDeleteWorkload marks a workload as removed by appending a tombstone event to the journal:
 // 1. Verifies the workload exists and is not already removed.
 // 2. Creates a tombstone spec with Removed = true.
@@ -348,6 +389,8 @@ func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 
 // Model Translation (SDK <-> Internal Runtime)
 // sdkToInternalWorkload translates a public sdk.Workload into Concord's internal workload.Spec.
+//
+//nolint:dupl // sdkToInternal and internalToSDK are directional mirrors by design.
 func sdkToInternalWorkload(w sdk.Workload) workload.Spec {
 	return workload.Spec{
 		ID:                 w.ID,
@@ -361,10 +404,14 @@ func sdkToInternalWorkload(w sdk.Workload) workload.Spec {
 		StopTimeoutSeconds: w.StopTimeoutSeconds,
 		HealthAction:       workload.HealthAction(w.HealthAction),
 		HealthPath:         w.HealthPath,
+		HealthProbe:        workload.HealthProbe(w.HealthProbe),
+		HealthCommand:      w.HealthCommand,
 	}
 }
 
 // internalToSDKWorkload translates an internal workload.Spec into a public sdk.Workload.
+//
+//nolint:dupl // sdkToInternal and internalToSDK are directional mirrors by design.
 func internalToSDKWorkload(s workload.Spec) sdk.Workload {
 	return sdk.Workload{
 		ID:                 s.ID,
@@ -378,5 +425,7 @@ func internalToSDKWorkload(s workload.Spec) sdk.Workload {
 		StopTimeoutSeconds: s.StopTimeoutSeconds,
 		HealthAction:       sdk.HealthAction(s.HealthAction),
 		HealthPath:         s.HealthPath,
+		HealthProbe:        sdk.HealthProbe(s.HealthProbe),
+		HealthCommand:      s.HealthCommand,
 	}
 }

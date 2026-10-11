@@ -46,9 +46,10 @@ fmt.Printf("Workload submitted: %s\n", id)
 | `client.Get(ctx, id)` | Fetch a workload spec by UUID |
 | `client.List(ctx)` | List active workloads |
 | `client.Stats(ctx, id)` | Live utilization for one workload |
+| `client.Logs(ctx, id, tail)` | Captured container output, oldest-first (tail caps, 0 means all) |
 | `client.Metrics(ctx)` | Sampler state in Prometheus exposition format |
 | `client.Trail(ctx)` | This node's recorded positions since boot, oldest-first |
 | `client.SetPosition(ctx, lat, lon)` | Apply one live position fix |
 | `client.Nodes(ctx)` | List cluster nodes |
 
-Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.
+Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.

@@ -87,7 +87,8 @@ the assigned id:
 Full spec fields: `id`, `image`, `command[]`, `env{}`, `resources`
 (`cpu_shares`, `memory_mb`), `restart` (`always`, `never`,
 `on_failure`), `host_port`, `container_port`, `stop_timeout_seconds`,
-`health_action` (0 restart, 1 signal), `health_path`. `400` on bad JSON
+`health_action` (0 restart, 1 signal), `health_path`, `health_probe`
+(`http`, `tcp`, `exec`), `health_command[]`. `400` on bad JSON
 or missing image. The spec commits to the journal and converges; placement
 follows the scheduler, not this call.
 
@@ -116,6 +117,16 @@ In-memory sampler readings, never the journal. `404` when never sampled
 
 `avg_*` fold the 5s trend window; the rest is the latest beat. `node`
 is always the local node: stats exist only where the workload runs.
+
+### `GET /v1/workloads/{id}/logs`: captured container output
+
+In-memory ring (1000 lines, 4KB truncate per line), oldest-first.
+`?tail=N` caps to the last N lines. `404` when nothing was captured.
+No files involved, on either side:
+
+```json
+{"logs": [{"at": "2026-10-09T10:00:00Z", "stream": "stdout", "line": "serving on :80"}]}
+```
 
 ### `DELETE /v1/workloads/{id}`: stop a workload
 

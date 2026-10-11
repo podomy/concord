@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -64,6 +65,7 @@ type Sampler struct {
 	samples    map[uuid.UUID]WorkloadSample
 	workTrends map[uuid.UUID]*trend
 	path       *trail
+	logs       map[uuid.UUID]*logBundle
 	// track is the durable trail sink. Nil in tests and when the log
 	// cannot open; RecordPosition then keeps memory only.
 	track *TrackLog
@@ -81,6 +83,7 @@ func NewSampler() *Sampler {
 		samples:    make(map[uuid.UUID]WorkloadSample),
 		workTrends: make(map[uuid.UUID]*trend),
 		path:       newTrail(),
+		logs:       make(map[uuid.UUID]*logBundle),
 	}
 }
 
@@ -146,13 +149,61 @@ func (s *Sampler) SampleWorkload(id uuid.UUID, cpuTotal, memUsageBytes, memLimit
 	return sample
 }
 
-// DropWorkload forgets a workload's counters, latest sample, and trend.
+// DropWorkload forgets a workload's counters, latest sample, trend, and logs.
 func (s *Sampler) DropWorkload(id uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.prev, id)
 	delete(s.samples, id)
 	delete(s.workTrends, id)
+	delete(s.logs, id)
+}
+
+// LogWriter returns the ring writer for one workload's stream, creating
+// the workload's rings on first use. Safe to hand to container IO
+// goroutines; lines land timestamped and bounded.
+func (s *Sampler) LogWriter(id uuid.UUID, stream string) io.Writer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	bundle, ok := s.logs[id]
+	if !ok {
+		bundle = &logBundle{stdout: newLogRing(LogStdout), stderr: newLogRing(LogStderr)}
+		s.logs[id] = bundle
+	}
+	if stream == LogStderr {
+		return bundle.stderr
+	}
+	return bundle.stdout
+}
+
+// LogLines returns one workload's stdout and stderr lines merged
+// oldest-first. Unknown ids report nothing.
+func (s *Sampler) LogLines(id uuid.UUID) []LogLine {
+	s.mu.Lock()
+	bundle, ok := s.logs[id]
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return mergeLogLines(bundle.stdout.lines(), bundle.stderr.lines())
+}
+
+// mergeLogLines folds two oldest-first lists into one, keeping arrival
+// order by timestamp. Either list may be empty.
+func mergeLogLines(a, b []LogLine) []LogLine {
+	out := make([]LogLine, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if a[0].At.After(b[0].At) {
+			out = append(out, b[0])
+			b = b[1:]
+			continue
+		}
+		out = append(out, a[0])
+		a = a[1:]
+	}
+	out = append(out, a...)
+	out = append(out, b...)
+	return out
 }
 
 // RecordPosition appends to the position trail when the node moved at

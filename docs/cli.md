@@ -40,6 +40,8 @@ concord workload run [flags] <image> [command...]
 --memory (default 0): memory limit in MB (0 = unlimited)
 --health-path (default /health): HTTP endpoint for health checks
 --health-action (default restart): action on failure restart or signal
+--health-probe (default http): check type http, tcp, or exec
+--health-cmd (default ""): exec probe command, split on whitespace
 ```
 
 **Examples:**
@@ -137,6 +139,19 @@ PRESSURE is the highest of the node's gossiped CPU, memory, and disk
 utilization: the number the scheduler places by. Each percent is 0-100
 utilization of that resource, how full it is rather than how much room
 remains. Full definitions live in `docs/metrics.md`.
+
+### Workload Logs
+```bash
+# Last 1000 lines at most; rings are memory-only and start empty at
+# container start. Adopted containers (reattached after a daemon
+# restart) capture nothing: their output pipes died with the old
+# daemon, so rings stay empty until the workload restarts.
+concord workload logs <id> [--tail 200] [--follow]
+```
+
+Prints captured stdout/stderr oldest-first, one line per line. Absent
+output (never logged, already stopped) reports not found, mirroring
+stats. Follow polls every second until interrupted.
 
 ---
 

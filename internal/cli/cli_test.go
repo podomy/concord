@@ -270,6 +270,57 @@ func TestCLIWorkloadStats(t *testing.T) {
 	}
 }
 
+func TestCLIWorkloadLogs(t *testing.T) {
+	sampler := setupCLITest(t)
+	ctx := context.Background()
+
+	workloadID := testSubmitWorkload(t, ctx)
+	shortID := workloadID[:8]
+
+	id, err := uuid.Parse(workloadID)
+	if err != nil {
+		t.Fatalf("parse workload id: %v", err)
+	}
+	out := sampler.LogWriter(id, node.LogStdout)
+	if _, err := out.Write([]byte("serving on :80\nready\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = cli.Execute(ctx, []string{"workload", "logs", shortID, "--tail", "1"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload logs failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); out != "ready\n" {
+		t.Fatalf("expected last line only, got:\n%s", out)
+	}
+}
+
+func TestCLIWorkloadRunExecProbe(t *testing.T) {
+	setupCLITest(t)
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"workload", "run", "--health-probe", "exec", "--health-cmd", "/bin/check --ready", "alpine:latest"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload run failed: %v, stderr: %s", err, stderr.String())
+	}
+
+	id, err := uuid.Parse(strings.TrimSpace(strings.TrimPrefix(stdout.String(), "Submitted workload ")))
+	if err != nil {
+		t.Fatalf("parse submitted id: %v", err)
+	}
+
+	stdout.Reset()
+	err = cli.Execute(ctx, []string{"workload", "inspect", id.String()}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload inspect failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, `"exec"`) || !strings.Contains(out, "/bin/check") || !strings.Contains(out, "--ready") {
+		t.Fatalf("expected exec probe with split command, got:\n%s", out)
+	}
+}
+
 func TestCLIMetrics(t *testing.T) {
 	setupCLITest(t)
 	ctx := context.Background()
@@ -381,6 +432,22 @@ func TestCLIValidationErrors(t *testing.T) {
 	err = cli.Execute(ctx, []string{"workload", "inspect", "nonexistent"}, &stdout, &stderr)
 	if err == nil {
 		t.Fatalf("expected error inspecting nonexistent workload")
+	}
+
+	// Workload run invalid health probe
+	stdout.Reset()
+	stderr.Reset()
+	err = cli.Execute(ctx, []string{"workload", "run", "--health-probe", "smoke-signals", "nginx"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected error on invalid health probe")
+	}
+
+	// Workload run exec probe without command
+	stdout.Reset()
+	stderr.Reset()
+	err = cli.Execute(ctx, []string{"workload", "run", "--health-probe", "exec", "nginx"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected error on exec probe without command")
 	}
 }
 

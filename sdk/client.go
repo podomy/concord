@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +67,10 @@ type Client interface {
 	// Trail returns our recorded positions since boot, oldest-first.
 	// Bounded by the 720-point ring; full history lives in track.jsonl.
 	Trail(ctx context.Context) ([]TrailPoint, error)
+
+	// Logs returns one workload's captured output lines oldest-first.
+	// Tail caps the result to the last N lines; zero or negative means all.
+	Logs(ctx context.Context, id uuid.UUID, tail int) ([]LogLine, error)
 
 	// SetPosition applies one live position fix: persisted for reboot,
 	// gossiped to the fleet, and recorded to trail and track log.
@@ -330,6 +335,46 @@ func (c *unixClient) Trail(ctx context.Context) ([]TrailPoint, error) {
 	}
 
 	return trailResp.Trail, nil
+}
+
+// Logs returns one workload's captured output lines oldest-first.
+func (c *unixClient) Logs(ctx context.Context, id uuid.UUID, tail int) ([]LogLine, error) {
+	url := unixSocketHost + "/v1/workloads/" + id.String() + "/logs"
+	if tail > 0 {
+		url += "?tail=" + strconv.Itoa(tail)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("logs request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var logsResp struct {
+		Logs []LogLine `json:"logs"`
+	}
+	err = json.Unmarshal(body, &logsResp)
+	if err != nil {
+		return nil, fmt.Errorf("decode logs: %w", err)
+	}
+
+	return logsResp.Logs, nil
 }
 
 // SetPosition applies one live position fix on the local daemon.

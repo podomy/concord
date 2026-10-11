@@ -34,6 +34,20 @@ const (
 	HealthActionSignal HealthAction = 1
 )
 
+// HealthProbe selects how the fast beat checks a workload. Empty means
+// HTTP, preserving every old spec's behavior.
+type HealthProbe string
+
+const (
+	// HealthProbeHTTP checks an HTTP endpoint on the mapped host port.
+	HealthProbeHTTP HealthProbe = "http"
+	// HealthProbeTCP dials the mapped host port and checks the connect.
+	HealthProbeTCP HealthProbe = "tcp"
+	// HealthProbeExec runs a command inside the container and checks for
+	// exit code zero.
+	HealthProbeExec HealthProbe = "exec"
+)
+
 // Resources specifies compute limits for a container workload.
 type Resources struct {
 	CPUShares uint64 `json:"cpu_shares"` // Relative CPU weight (default 1024).
@@ -53,6 +67,8 @@ type Workload struct {
 	StopTimeoutSeconds int               `json:"stop_timeout_seconds,omitempty"`
 	HealthAction       HealthAction      `json:"health_action,omitempty"`
 	HealthPath         string            `json:"health_path,omitempty"`
+	HealthProbe        HealthProbe       `json:"health_probe,omitempty"`
+	HealthCommand      []string          `json:"health_command,omitempty"`
 }
 
 // WorkloadStats reports live utilization for one running workload.
@@ -85,6 +101,14 @@ type TrailPoint struct {
 	At  time.Time `json:"at"`
 	Lat float64   `json:"lat"`
 	Lon float64   `json:"lon"`
+}
+
+// LogLine is one captured container output line with its timestamp and
+// stream ("stdout" or "stderr").
+type LogLine struct {
+	At     time.Time `json:"at"`
+	Stream string    `json:"stream"`
+	Line   string    `json:"line"`
 }
 
 // Position is one position fix in decimal degrees. It is the wire format

@@ -24,6 +24,12 @@ type Spec struct {
 	StopTimeoutSeconds int
 	HealthAction       HealthAction
 	HealthPath         string // HTTP path for health check endpoint (defaults to "/health").
+	// HealthProbe selects the check type: http, tcp, or exec. Empty
+	// means http.
+	HealthProbe HealthProbe
+	// HealthCommand is the argv run inside the container for exec
+	// probes. Required when HealthProbe is exec, ignored otherwise.
+	HealthCommand []string
 }
 
 type HealthAction int
@@ -31,6 +37,18 @@ type HealthAction int
 const (
 	HealthActionRestart = iota
 	HealthActionSignal
+)
+
+// HealthProbe selects how the fast beat checks a workload: an HTTP
+// endpoint, a TCP connect, or a command run inside the container.
+// Empty means HTTP, so specs written before probes existed behave
+// exactly as they always did.
+type HealthProbe string
+
+const (
+	HealthProbeHTTP HealthProbe = "http"
+	HealthProbeTCP  HealthProbe = "tcp"
+	HealthProbeExec HealthProbe = "exec"
 )
 
 type Resources struct {

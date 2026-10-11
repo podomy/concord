@@ -35,6 +35,7 @@ reunion, and scheduling.
 - [Journal Sync](./docs/cursors.md)
 - [Metrics and Pressure](./docs/metrics.md)
 - [Position Trail](./docs/trail.md)
+- [Health Checks](./docs/health.md)
 - [Scaling](./docs/scaling.md)
 - [Radio Planning](./docs/radio.md)
 - [IPC Reference](./docs/ipc.md)
