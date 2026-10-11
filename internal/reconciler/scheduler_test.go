@@ -115,7 +115,10 @@ func TestPickNode(t *testing.T) {
 	}
 
 	members := []peerdiscovery.Node{node1, deadNode, node2}
-	chosen := pickNode(members)
+	chosen, ok := pickNode(members, workload.Spec{})
+	if !ok {
+		t.Fatal("expected a fit")
+	}
 
 	if chosen.ID != node2.ID {
 		t.Fatalf("expected alive node2 to be picked, got %v", chosen.ID)
@@ -156,7 +159,7 @@ func TestPickNodePrefersLowerPressure(t *testing.T) {
 		},
 	}
 
-	if chosen := pickNode([]peerdiscovery.Node{loaded, idle}); chosen.ID != idle.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{loaded, idle}, workload.Spec{}); !ok || chosen.ID != idle.ID {
 		t.Fatalf("expected idle node, got %v", chosen.ID)
 	}
 }
@@ -182,7 +185,7 @@ func TestPickNodePressureTieAndBottleneck(t *testing.T) {
 			CPUPercent: 10,
 		},
 	}
-	if chosen := pickNode([]peerdiscovery.Node{busy, idler}); chosen.ID != busy.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{busy, idler}, workload.Spec{}); !ok || chosen.ID != busy.ID {
 		t.Fatalf("expected fewer workloads on tie, got %v", chosen.ID)
 	}
 
@@ -201,8 +204,52 @@ func TestPickNodePressureTieAndBottleneck(t *testing.T) {
 			MemPercent: 20,
 		},
 	}
-	if chosen := pickNode([]peerdiscovery.Node{diskFull, even}); chosen.ID != even.ID {
+	if chosen, ok := pickNode([]peerdiscovery.Node{diskFull, even}, workload.Spec{}); !ok || chosen.ID != even.ID {
 		t.Fatalf("expected bottleneck to lose, got %v", chosen.ID)
+	}
+}
+
+// A request bigger than every node's free memory fits nowhere: the spec
+// waits for the next tick instead of landing where it cannot run.
+func TestPickNodeSkipsUnfit(t *testing.T) {
+	t.Parallel()
+
+	small := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 50,
+		},
+	}
+
+	hungry := workload.Spec{Resources: workload.Resources{MemoryMB: 8192}}
+	if _, ok := pickNode([]peerdiscovery.Node{small}, hungry); ok {
+		t.Fatal("expected no fit for 8GB on 512MB free")
+	}
+
+	exact := workload.Spec{Resources: workload.Resources{MemoryMB: 512}}
+	if chosen, ok := pickNode([]peerdiscovery.Node{small}, exact); !ok || chosen.ID != small.ID {
+		t.Fatal("expected exact fit to place")
+	}
+}
+
+// Unlimited requests and unknown capacities never block: missing data
+// must not strand workloads.
+func TestPickNodeFitNeverBlocksUnknown(t *testing.T) {
+	t.Parallel()
+
+	unknown := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+	}
+
+	hungry := workload.Spec{Resources: workload.Resources{MemoryMB: 1 << 20}}
+	if _, ok := pickNode([]peerdiscovery.Node{unknown}, hungry); !ok {
+		t.Fatal("expected unknown capacity to fit")
+	}
+	if _, ok := pickNode([]peerdiscovery.Node{unknown}, workload.Spec{}); !ok {
+		t.Fatal("expected unlimited request to fit")
 	}
 }
 
@@ -230,6 +277,31 @@ func TestScheduleAssignsUnassigned(t *testing.T) {
 	}
 	if got.AssignedNodeID != nodeA.ID {
 		t.Fatalf("expected assignment to least-loaded node %v, got %v", nodeA.ID, got.AssignedNodeID)
+	}
+}
+
+// An unassignable memory request records nothing: the spec waits
+// unassigned instead of landing where it cannot run.
+func TestScheduleSkipsUnfitUnassigned(t *testing.T) {
+	t.Parallel()
+
+	small := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 50,
+		},
+	}
+	view := newSchedulerWorkloads(t)
+	spec := workload.Spec{ID: uuid.New(), Image: "nginx:latest", Resources: workload.Resources{MemoryMB: 8192}}
+	seedSchedulerSpec(t, view, spec)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{small})
+
+	if len(rec.events) != 0 {
+		t.Fatalf("expected no assignment event, got %d", len(rec.events))
 	}
 }
 

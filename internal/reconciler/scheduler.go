@@ -101,29 +101,56 @@ func scheduleWorkloads(
 	}
 
 	for _, spec := range specs {
-		if spec.Removed {
-			continue
-		}
+		scheduleOne(ctx, logger, j, views, nodeID, members, alive, spec)
+	}
+}
 
-		if spec.AssignedNodeID == uuid.Nil {
-			chosenMember := pickNode(members)
-			spec.AssignedNodeID = chosenMember.ID
-			recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec assigned")
-			continue
-		}
+// scheduleOne assigns one unassigned spec or reassigns one orphan. Specs
+// with healthy owners, tombstones, or no fitting node are left alone:
+// placement that cannot fit waits for the next tick instead of landing
+// where it cannot run.
+func scheduleOne(
+	ctx context.Context,
+	logger *zap.Logger,
+	j journal.Journal,
+	views []journalview.View,
+	nodeID uuid.UUID,
+	members []peerdiscovery.Node,
+	alive map[uuid.UUID]struct{},
+	spec workload.Spec,
+) {
+	if spec.Removed {
+		return
+	}
 
-		if _, ok := alive[spec.AssignedNodeID]; ok {
-			continue
-		}
-
-		chosenMember := pickNode(members)
-		if chosenMember.State != peerdiscovery.NodeStateAlive {
-			continue
+	if spec.AssignedNodeID == uuid.Nil {
+		chosenMember, ok := pickNode(members, spec)
+		if !ok {
+			logger.Debug("no node fits workload memory request, leaving unassigned",
+				zap.String("workload_id", spec.ID.String()))
+			return
 		}
 		spec.AssignedNodeID = chosenMember.ID
-		spec.AssignmentEpoch++
-		recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec reassigned")
+		recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec assigned")
+		return
 	}
+
+	if _, ok := alive[spec.AssignedNodeID]; ok {
+		return
+	}
+
+	chosenMember, ok := pickNode(members, spec)
+	if !ok {
+		logger.Debug("no node fits orphan memory request, leaving orphaned",
+			zap.String("workload_id", spec.ID.String()))
+		return
+	}
+	if chosenMember.State != peerdiscovery.NodeStateAlive {
+		return
+	}
+	spec.AssignedNodeID = chosenMember.ID
+	spec.AssignmentEpoch++
+	recordAssignment(ctx, logger, j, views, nodeID, spec, "workload.spec reassigned")
 }
 
 // aliveNodeIDs returns the set of member IDs currently observed as alive.
@@ -158,35 +185,65 @@ func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal
 	}
 }
 
-// pickNode selects the peer discovery node with the lowest pressure,
-// prioritizing healthy (NodeStateAlive) peers over inactive/dead nodes.
-// Equal pressure falls back to fewest running workloads.
-func pickNode(members []peerdiscovery.Node) peerdiscovery.Node {
-	best := members[0]
+// pickNode selects the alive peer with the lowest pressure that fits the
+// workload's memory request, preferring healthy peers; fewest running
+// workloads breaks pressure ties. It reports false when no member fits,
+// and the caller leaves the spec for the next tick instead of placing
+// where it cannot run.
+func pickNode(members []peerdiscovery.Node, spec workload.Spec) (peerdiscovery.Node, bool) {
+	var best peerdiscovery.Node
+	found := false
 
-	for _, member := range members[1:] {
-		// Prefer alive nodes over non-alive nodes.
-		if member.State == peerdiscovery.NodeStateAlive && best.State != peerdiscovery.NodeStateAlive {
-			best = member
+	for _, member := range members {
+		if !fitsMemory(member, spec.Resources.MemoryMB) {
 			continue
 		}
-		if member.State != best.State {
+		if !found {
+			best, found = member, true
 			continue
 		}
-		// Lowest pressure wins; fewest workloads breaks ties.
-		memberPressure, bestPressure := nodePressure(member), nodePressure(best)
-		if memberPressure != bestPressure {
-			if memberPressure < bestPressure {
-				best = member
-			}
-			continue
-		}
-		if member.Metadata.Workloads < best.Metadata.Workloads {
+		if prefersNode(member, best) {
 			best = member
 		}
 	}
 
-	return best
+	return best, found
+}
+
+// prefersNode reports whether member beats best under the placement
+// order: alive over non-alive, lowest pressure, fewest workloads.
+func prefersNode(member, best peerdiscovery.Node) bool {
+	if member.State == peerdiscovery.NodeStateAlive && best.State != peerdiscovery.NodeStateAlive {
+		return true
+	}
+	if member.State != best.State {
+		return false
+	}
+	memberPressure, bestPressure := nodePressure(member), nodePressure(best)
+	if memberPressure != bestPressure {
+		return memberPressure < bestPressure
+	}
+	return member.Metadata.Workloads < best.Metadata.Workloads
+}
+
+// fitsMemory reports whether the member has the requested megabytes free.
+// No request (unlimited) always fits, and unknown node capacity never
+// blocks: missing data must not strand workloads. CPU shares are relative
+// weights and per-workload disk is unreported, so neither admits a fit
+// check; pressure already steers off hot nodes.
+func fitsMemory(member peerdiscovery.Node, requestedMB int64) bool {
+	if requestedMB <= 0 {
+		return true
+	}
+	total := member.Metadata.MemoryMB
+	if total == 0 {
+		return true
+	}
+	used := total * uint64(member.Metadata.MemPercent) / 100
+	if used >= total {
+		return false
+	}
+	return uint64(requestedMB) <= total-used
 }
 
 // nodePressure reduces a member's utilization trio to one number: the max,
