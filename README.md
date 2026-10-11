@@ -35,6 +35,7 @@ reunion, and scheduling.
 - [Journal Sync](./docs/cursors.md)
 - [Metrics and Pressure](./docs/metrics.md)
 - [Position Trail](./docs/trail.md)
+- [Devices](./docs/devices.md)
 - [Startup Order](./docs/startup.md)
 - [QoS](./docs/qos.md)
 - [Health Checks](./docs/health.md)
