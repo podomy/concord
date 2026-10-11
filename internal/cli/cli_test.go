@@ -475,3 +475,28 @@ func TestCLINodeRotateKey(t *testing.T) {
 		t.Fatalf("expected generation 2 in output, got:\n%s", stdout.String())
 	}
 }
+
+func TestCLIWorkloadUpdate(t *testing.T) {
+	setupCLITest(t)
+	ctx := context.Background()
+
+	workloadID := testSubmitWorkload(t, ctx)
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"workload", "update", workloadID, "--image", "nginx:1.28"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload update failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "nginx:1.28") {
+		t.Fatalf("expected new image in output, got:\n%s", out)
+	}
+
+	stdout.Reset()
+	err = cli.Execute(ctx, []string{"workload", "inspect", workloadID}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("workload inspect failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "nginx:1.28") {
+		t.Fatalf("expected updated image in spec, got:\n%s", out)
+	}
+}

@@ -124,6 +124,21 @@ concord workload stop <id>
 
 ---
 
+### Update a Workload
+```bash
+# Moves a live workload to a new image keeping its ID, assignment,
+# and history. Rollback is another bump
+concord workload update <id> --image nginx:1.28
+```
+
+The node stops the old container and starts the new image; only the
+image changes, everything else in the spec continues. Adopted
+containers running pre-restart bytes update on their next restart:
+adoption cannot see the old image, so no drift is detected. Other
+spec changes still mean stop plus run.
+
+---
+
 ## Node Commands
 
 ### List Cluster Nodes

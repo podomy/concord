@@ -30,6 +30,7 @@ func newWorkloadCommand() *cobra.Command {
 		newWorkloadInspectCommand(),
 		newWorkloadStatsCommand(),
 		newWorkloadLogsCommand(),
+		newWorkloadUpdateCommand(),
 		newWorkloadStopCommand(),
 	)
 
@@ -312,6 +313,47 @@ func newWorkloadLogsCommand() *cobra.Command {
 	cmd.Flags().Int("tail", 0, "show only the last N lines (0 means all)")
 	cmd.Flags().BoolP("follow", "f", false, "keep printing new lines until interrupted")
 	return cmd
+}
+
+// newWorkloadUpdateCommand creates the 'concord workload update' subcommand.
+func newWorkloadUpdateCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update <id>",
+		Short: "Move a live workload to a new image keeping its identity",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			image, err := cmd.Flags().GetString("image")
+			if err != nil {
+				return fmt.Errorf("read --image flag: %w", err)
+			}
+			return handleWorkloadUpdate(cmd.Context(), cmd.OutOrStdout(), args[0], image)
+		},
+	}
+	cmd.Flags().String("image", "", "new image reference (required)")
+	_ = cmd.MarkFlagRequired("image") //nolint:errcheck // required-flag setup cannot fail usefully here
+	return cmd
+}
+
+// handleWorkloadUpdate bumps a live workload to a new image. Identity,
+// assignment, and history continue; rollback is another bump.
+func handleWorkloadUpdate(ctx context.Context, stdout io.Writer, idArg, image string) error {
+	client, closeFn, err := dialIPCClient()
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	targetID, err := resolveWorkloadID(ctx, client, idArg)
+	if err != nil {
+		return err
+	}
+
+	if err := client.UpdateImage(ctx, targetID, image); err != nil {
+		return fmt.Errorf("update workload image %s: %w", targetID, err)
+	}
+
+	_, _ = fmt.Fprintf(stdout, "Workload %s updating to %s.\n", truncateID(targetID), image) //nolint:errcheck // CLI output
+	return nil
 }
 
 // handleWorkloadLogs prints captured output lines oldest-first. Follow

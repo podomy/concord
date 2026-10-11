@@ -450,3 +450,49 @@ func TestReaperDropsDisplacedExited(t *testing.T) {
 		t.Fatal("displaced exited entry not dropped")
 	}
 }
+
+// Image drift on a running container stops the old one; the new image
+// starts after the normal exit cleanup on a later tick.
+func TestReconcileStopsDriftedRunning(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+
+	old := workload.Spec{ID: uuid.New(), Image: "app:v1", AssignedNodeID: uuid.Nil}
+	writeSpecEvent(t, workloads, old, uuid.Nil)
+	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1)}
+	running[old.ID] = &ContainerAndProcess{Spec: old, ProcessHandle: proc}
+
+	updated := old
+	updated.Image = "app:v2"
+	writeSpecEvent(t, workloads, updated, uuid.Nil)
+
+	runTick(t, puller, runner, workloads, running, cidrs)
+
+	if len(proc.signals) != 1 || proc.signals[0] != syscall.SIGTERM {
+		t.Fatalf("signals = %v, want one SIGTERM", proc.signals)
+	}
+	if runner.createCalled {
+		t.Fatal("new container started before old cleanup")
+	}
+}
+
+// An explicit image bump overrides restart policy and backoff: the
+// operator ordered it, so a Never policy still restarts on the new image.
+func TestReconcileDriftOverridesPolicy(t *testing.T) {
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+
+	old := workload.Spec{ID: uuid.New(), Image: "app:v1", AssignedNodeID: uuid.Nil, Restart: workload.RestartNever}
+	writeSpecEvent(t, workloads, old, uuid.Nil)
+	running[old.ID] = &ContainerAndProcess{Spec: old, ExitStatus: &cr.ExitStatus{Code: 0}}
+
+	updated := old
+	updated.Image = "app:v2"
+	writeSpecEvent(t, workloads, updated, uuid.Nil)
+
+	runTick(t, puller, runner, workloads, running, cidrs)
+
+	if !runner.createCalled {
+		t.Fatal("expected new container despite Never policy")
+	}
+}

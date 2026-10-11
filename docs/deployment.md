@@ -138,6 +138,24 @@ expect the protocol to absorb it; that capacity planning belongs to
 the site, same as WiFi AP placement. One flat segment holds to about
 200 nodes; the numbers and the reasoning live in `docs/scaling.md`.
 
+### Model and image distribution
+
+Images and models move peer-to-peer through the embedded registry;
+Concord implements no distribution protocol of its own. Operate it
+like freight, not like signal:
+
+- Stage large models at the depot anchor over wire before the mission.
+  A node pulling 5 GB over field WLAN holds shared airtime the whole
+  fleet contends for.
+- Pre-warm nodes while charging. A version every node already holds
+  costs nothing at rollout; updates (`workload update`) then move at
+  container-start speed.
+- Stagger version rollouts across groups when many nodes share one
+  cell, same as any bulk transfer.
+- Measure a full-size push over the real link before changing
+  anything. Protocol work here starts with numbers showing the depot
+  procedure insufficient, not before.
+
 ### Rendezvous Anchors
 
 Anchors live in `~/.config/concord/config.json` next to the node id:

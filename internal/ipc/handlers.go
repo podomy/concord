@@ -27,6 +27,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/workloads/{id}", s.handleGetWorkload)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", s.handleWorkloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", s.handleWorkloadLogs)
+	mux.HandleFunc("PUT /v1/workloads/{id}/image", s.handleUpdateImage)
 	mux.HandleFunc("GET /v1/nodes/self/trail", s.handleNodeTrail)
 	mux.HandleFunc("PUT /v1/nodes/self/position", s.handleSetPosition)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -267,6 +268,64 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 		out = append(out, sdk.LogLine{At: line.At, Stream: line.Stream, Line: line.Text})
 	}
 	writeJSON(w, http.StatusOK, logsResponse{Logs: out})
+}
+
+// handleUpdateImage bumps a live workload to a new image without changing
+// its identity: same ID, same assignment, epoch plus one so the copy
+// deterministically supersedes the stored one (a plain resubmit could
+// lose to byte comparison). The node reconciles the drift by stopping
+// the old container and starting the new image; rollback is another bump.
+func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workload id: "+idStr)
+		return
+	}
+
+	var input sdk.ImageUpdate
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(input.Image) == "" {
+		writeError(w, http.StatusBadRequest, "workload image reference is required")
+		return
+	}
+
+	spec, err := s.workloads.Get(r.Context(), id)
+	if err != nil {
+		s.logger.Error("failed to get workload for update", zap.Error(err), zap.String("id", idStr))
+		writeError(w, http.StatusInternalServerError, "failed to get workload: "+err.Error())
+		return
+	}
+	if spec == nil || spec.Removed {
+		writeError(w, http.StatusNotFound, "workload not found")
+		return
+	}
+
+	updated := *spec
+	updated.Image = strings.TrimSpace(input.Image)
+	updated.AssignmentEpoch++
+	payload, err := json.Marshal(updated)
+	if err != nil {
+		s.logger.Error("failed to marshal updated spec", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to marshal updated spec")
+		return
+	}
+
+	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
+	err = journalview.RecordEventAndLog(r.Context(), s.logger, s.journal, s.views, event, "workload.spec updated",
+		zap.String("workload_id", id.String()),
+		zap.String("image", updated.Image),
+	)
+	if err != nil {
+		s.logger.Error("failed to commit update event to journal", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "failed to commit update: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, internalToSDKWorkload(updated))
 }
 
 // handleDeleteWorkload marks a workload as removed by appending a tombstone event to the journal:

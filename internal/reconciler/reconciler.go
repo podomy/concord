@@ -268,30 +268,71 @@ func reconcileWorkloadSpec(
 
 	// 1. Spec was removed -> stop process if running, or purge entry if exited.
 	if spec.Removed {
-		if exists {
-			reconcileRemovedSpec(ctx, logger, spec, running, entry, peerService)
-		}
+		reconcileRemovedSpec(ctx, logger, spec, running, entry, peerService)
 		return
 	}
 
-	// 2. Workload is actively running -> nothing to do.
+	// 2. Image drift on a running container -> stop it; the exited
+	// entry below picks up the new image after the normal exit cleanup
+	// (veth and port mappings free through the exit path, never leak).
+	// Checked before the running early-return so drift always stops.
+	if stopOnDrift(ctx, logger, spec, entry, exists, running) {
+		return
+	}
+
+	// 3. Workload is actively running -> nothing to do.
 	if exists && (entry == nil || entry.ExitStatus == nil) {
 		return
 	}
 
-	// 3. Workload previously exited -> evaluate restart policy.
+	// 4. Workload previously exited -> restart, update, or wait.
 	if exists && entry != nil && entry.ExitStatus != nil {
-		if !evaluateRestart(entry, spec, running, peerService) {
+		if !handleExitedEntry(entry, spec, running, peerService) {
 			return
 		}
 	}
 
-	// 4. Start new container instance, gated on same-node dependencies.
+	// 5. Start new container instance, gated on same-node dependencies.
 	if !depsReady(running, specs, nodeID, spec) {
 		logger.Debug("waiting on dependencies", zap.String("id", spec.ID.String()))
 		return
 	}
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
+}
+
+// stopOnDrift stops a running container whose image differs from the
+// view, reporting whether it acted. The exited entry picks up the new
+// image through the normal exit path on a later tick, after veth and
+// port mappings free through exit cleanup.
+func stopOnDrift(
+	ctx context.Context,
+	logger *zap.Logger,
+	spec workload.Spec,
+	entry *ContainerAndProcess,
+	exists bool,
+	running map[uuid.UUID]*ContainerAndProcess,
+) bool {
+	if !exists || entry == nil || entry.ExitStatus != nil || entry.Stopping || entry.Spec.Image == spec.Image {
+		return false
+	}
+	logger.Info("image update, stopping old container",
+		zap.String("id", spec.ID.String()),
+		zap.String("image", spec.Image))
+	destroyContainer(ctx, logger, entry.Spec, running)
+	return true
+}
+
+// handleExitedEntry processes an exited entry and reports whether to
+// start a fresh container now. An explicit image update drops policy
+// and backoff: the operator ordered a new image, and the old container
+// already exited and cleaned up. Otherwise the restart policy decides.
+func handleExitedEntry(entry *ContainerAndProcess, spec workload.Spec, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) bool {
+	if entry.Spec.Image != spec.Image {
+		delete(running, spec.ID)
+		peerService.SetWorkloadCount(countRunning(running))
+		return true
+	}
+	return evaluateRestart(entry, spec, running, peerService)
 }
 
 // evaluateRestart applies the restart policy to an exited entry. It

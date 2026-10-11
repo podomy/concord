@@ -128,6 +128,18 @@ No files involved, on either side:
 {"logs": [{"at": "2026-10-09T10:00:00Z", "stream": "stdout", "line": "serving on :80"}]}
 ```
 
+### `PUT /v1/workloads/{id}/image`: move to a new image
+
+Same ID, same assignment, epoch plus one (a plain resubmit could lose
+to byte comparison, so this endpoint exists). `404` for unknown or
+stopped workloads, `400` for empty images:
+
+```json
+// request
+{"image": "nginx:1.28"}
+// response 200: the updated spec
+```
+
 ### `DELETE /v1/workloads/{id}`: stop a workload
 
 Commits a tombstone; the reconciler reaps the container. `204` empty on

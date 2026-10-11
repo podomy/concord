@@ -50,6 +50,7 @@ fmt.Printf("Workload submitted: %s\n", id)
 | `client.Metrics(ctx)` | Sampler state in Prometheus exposition format |
 | `client.Trail(ctx)` | This node's recorded positions since boot, oldest-first |
 | `client.SetPosition(ctx, lat, lon)` | Apply one live position fix |
+| `client.UpdateImage(ctx, id, image)` | Move a live workload to a new image |
 | `client.Nodes(ctx)` | List cluster nodes |
 
 Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `DependsOn`, `QoS`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.

@@ -591,3 +591,60 @@ func TestIPCSubmitRejectsUnknownQoS(t *testing.T) {
 		t.Fatal("expected QoS rejection")
 	}
 }
+
+// Bumping the image keeps ID and assignment, moves the epoch, and
+// leaves every other field alone. Stopped and unknown workloads 404;
+// empty images 400.
+func TestIPCUpdateImage(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	w := mustBuild(t, sdk.NewWorkload().Image("app:v1"))
+	id, err := h.client.Submit(ctx, w)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	updated := updateImageAndGet(t, h.client, ctx, id, "app:v2")
+	if updated.Image != "app:v2" || updated.ID != id {
+		t.Fatalf("updated = %+v", updated)
+	}
+
+	stored, err := h.client.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if stored.Image != "app:v2" {
+		t.Fatalf("stored image = %q", stored.Image)
+	}
+
+	if err := h.client.UpdateImage(ctx, id, ""); err == nil {
+		t.Fatal("expected error for empty image")
+	}
+	if err := h.client.UpdateImage(ctx, uuid.New(), "app:v2"); err == nil {
+		t.Fatal("expected not-found for unknown workload")
+	}
+
+	stopped, err := h.client.Submit(ctx, mustBuild(t, sdk.NewWorkload().Image("app:v1")))
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := h.client.Stop(ctx, stopped); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := h.client.UpdateImage(ctx, stopped, "app:v2"); err == nil {
+		t.Fatal("expected not-found for stopped workload")
+	}
+}
+
+func updateImageAndGet(t *testing.T, client sdk.Client, ctx context.Context, id uuid.UUID, image string) *sdk.Workload {
+	t.Helper()
+	if err := client.UpdateImage(ctx, id, image); err != nil {
+		t.Fatalf("update image: %v", err)
+	}
+	got, err := client.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	return got
+}

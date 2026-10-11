@@ -136,6 +136,13 @@ type Position struct {
 	Lon float64 `json:"lon"`
 }
 
+// ImageUpdate carries a new image reference for a live workload. Single
+// field, named so both sides share one definition instead of two
+// anonymous structs.
+type ImageUpdate struct {
+	Image string `json:"image"`
+}
+
 // Node represents a cluster member node and its current health state.
 type Node struct {
 	ID                 uuid.UUID `json:"id"`

@@ -509,3 +509,36 @@ func TestClient_DaemonUnreachable(t *testing.T) {
 		t.Fatalf("expected ErrDaemonUnreachable, got %v", err)
 	}
 }
+
+func TestClient_UpdateImage(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/workloads/"+id.String()+"/image", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		var got sdk.ImageUpdate
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		if got.Image != "app:v2" {
+			t.Errorf("image = %q", got.Image)
+		}
+		writeJSONResponse(t, w, http.StatusOK, map[string]any{"id": id.String(), "image": got.Image})
+	})
+
+	sockPath, cleanup := setupMockUnixServer(t, mux)
+	defer cleanup()
+
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer client.Close() //nolint:errcheck // best-effort close in test defer
+
+	if err := client.UpdateImage(context.Background(), id, "app:v2"); err != nil {
+		t.Fatalf("unexpected update error: %v", err)
+	}
+}
