@@ -10,10 +10,20 @@ contract.
 ## Connecting
 
 Socket: `~/.config/concord/concord.sock` (`$XDG_CONFIG_HOME` overrides
-the base dir), owner-only (`0600`), local machine only. No auth header,
-no TLS: filesystem permissions are the auth. If you can read the
-socket, you can submit workloads; keep that in mind for multi-user
-hosts.
+the base dir), owner-only (`0600`), local machine only.
+
+## Authorization
+
+There is none inside the protocol, on any surface. CLI, SDK, and raw
+HTTP are the same principal: whoever can read the socket file. No auth
+headers, no tokens, no TLS, no per-endpoint permissions. If you can
+read the socket, you can submit workloads, stop them, read trails, and
+set the node's position.
+
+That is a deliberate placement, not a gap: authentication lives in
+filesystem permissions, exactly one mechanism, enforced by the kernel.
+On multi-user hosts, whoever shares the owner's groups shares the
+fleet. Plan access accordingly.
 
 ```bash
 SOCK="$HOME/.config/concord/concord.sock"
