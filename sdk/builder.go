@@ -156,6 +156,15 @@ func (b *Builder) QoS(qos QoS) *Builder {
 	return b
 }
 
+// File stages a registry artifact into the container: the digest must
+// already be pushed (see fileart.Client.Push); the spec carries only
+// the pointer. Mode 0 means 0600.
+func (b *Builder) File(containerPath, digest string, mode uint32) *Builder {
+	b.workload.Files = append(b.workload.Files, FileRef{Path: containerPath, Digest: digest, Mode: mode})
+
+	return b
+}
+
 // StopTimeout sets the graceful shutdown grace period before SIGKILL.
 func (b *Builder) StopTimeout(d time.Duration) *Builder {
 	secs := int(d.Seconds())

@@ -86,6 +86,7 @@ type Workload struct {
 	HealthCommand      []string          `json:"health_command,omitempty"`
 	DependsOn          []uuid.UUID       `json:"depends_on,omitempty"`
 	QoS                QoS               `json:"qos,omitempty"`
+	Files              []FileRef         `json:"files,omitempty"`
 }
 
 // WorkloadStats reports live utilization for one running workload.
@@ -126,6 +127,14 @@ type LogLine struct {
 	At     time.Time `json:"at"`
 	Stream string    `json:"stream"`
 	Line   string    `json:"line"`
+}
+
+// FileRef points at one file's content in the registry: the container
+// path, the blob digest, and the file mode (0 means 0600).
+type FileRef struct {
+	Path   string `json:"path"`
+	Digest string `json:"digest"`
+	Mode   uint32 `json:"mode,omitempty"`
 }
 
 // Position is one position fix in decimal degrees. It is the wire format
