@@ -4,6 +4,7 @@
 package workload
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -65,5 +66,38 @@ func TestCheckNoCycle(t *testing.T) {
 	d := uuid.New()
 	if err := CheckNoCycle([]Spec{{ID: d, DependsOn: []uuid.UUID{uuid.New()}}}, Spec{ID: uuid.New()}); err != nil {
 		t.Errorf("unrelated specs rejected: %v", err)
+	}
+}
+
+// Absolute clean paths with valid digests pass; everything else fails
+// loudly at submit instead of landing wrong bytes in a container.
+func TestFileRefValidate(t *testing.T) {
+	t.Parallel()
+
+	good := FileRef{Path: "/etc/app/config.yaml", Digest: "sha256:" + strings.Repeat("a", 64), Mode: 0o644}
+	if err := good.Validate(); err != nil {
+		t.Errorf("Validate = %v", err)
+	}
+
+	bad := []FileRef{
+		{Path: "relative.yaml", Digest: "sha256:" + strings.Repeat("a", 64)},
+		{Path: "/etc/../escape", Digest: "sha256:" + strings.Repeat("a", 64)},
+		{Path: "/etc/./dots", Digest: "sha256:" + strings.Repeat("a", 64)},
+		{Path: "/ok", Digest: "md5:abc"},
+		{Path: "/ok", Digest: "sha256:short"},
+		{Path: "/ok", Digest: "sha256:" + strings.Repeat("z", 64)},
+		{Path: "/ok", Digest: "sha256:" + strings.Repeat("a", 64), Mode: 0o7777},
+	}
+	assertInvalidFileRefs(t, bad)
+}
+
+// assertInvalidFileRefs fails the test on the first ref that validates.
+func assertInvalidFileRefs(t *testing.T, refs []FileRef) {
+	t.Helper()
+
+	for _, ref := range refs {
+		if err := ref.Validate(); err == nil {
+			t.Errorf("Validate(%+v) = nil, want error", ref)
+		}
 	}
 }

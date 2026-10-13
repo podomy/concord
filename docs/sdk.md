@@ -53,4 +53,6 @@ fmt.Printf("Workload submitted: %s\n", id)
 | `client.UpdateImage(ctx, id, image)` | Move a live workload to a new image |
 | `client.Nodes(ctx)` | List cluster nodes |
 
-Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `DependsOn`, `QoS`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.
+Builder methods: `Image`, `Command`, `Env`, `Envs`, `Port`, `Resources`, `MemoryMB`, `CPUShares`, `Restart`, `HealthCheck`, `HealthProbe`, `DependsOn`, `QoS`, `File`, `StopTimeout`, `StopTimeoutSeconds`, `Build`, `MustBuild`.
+
+File artifacts (`sdk/fileart`): push bytes with `fileart.NewClient(addr).Push(ctx, data)`, reference the digest with `File(path, digest, mode)`. Full workflow in `docs/files.md`.

@@ -8,13 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/podomy/concord/internal/or"
 	"github.com/podomy/concord/sdk"
+	"github.com/podomy/concord/sdk/fileart"
 )
 
 // newWorkloadCommand creates the 'concord workload' command group.
@@ -49,6 +54,7 @@ type runFlags struct {
 	healthCmd    string
 	dependsOn    []string
 	qos          string
+	fileFlags    []string
 }
 
 func newWorkloadRunCommand() *cobra.Command {
@@ -75,6 +81,7 @@ func newWorkloadRunCommand() *cobra.Command {
 	flags.StringVar(&rf.healthCmd, "health-cmd", "", `Exec probe command, split on whitespace: --health-cmd "/bin/check --ready" runs /bin/check --ready`)
 	flags.StringArrayVar(&rf.dependsOn, "depends-on", nil, "Wait for this workload ID or prefix on the same node (repeatable)")
 	flags.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
+	flags.StringArrayVar(&rf.fileFlags, "file", nil, "Stage a file: --file /container/path=/local/path[:mode] (repeatable)")
 
 	return cmd
 }
@@ -165,6 +172,43 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 	return workload, nil
 }
 
+// parseFileFlag splits one --file flag into container path, local path,
+// and mode without touching the network. Mode defaults to 0 (0600 at
+// materialize); anything above 0777 fails here.
+func parseFileFlag(flag string) (container, local string, mode uint32, err error) {
+	container, local, ok := strings.Cut(flag, "=")
+	if !ok || container == "" || local == "" {
+		return "", "", 0, fmt.Errorf("invalid --file %q; want /container/path=/local/path[:mode]", flag)
+	}
+	if base, modeStr, ok := strings.Cut(local, ":"); ok {
+		parsed, perr := strconv.ParseUint(modeStr, 8, 32)
+		if perr != nil || parsed > 0o777 {
+			return "", "", 0, fmt.Errorf("invalid --file mode %q; want octal up to 0777", modeStr)
+		}
+		local = base
+		mode = uint32(parsed)
+	}
+	return container, local, mode, nil
+}
+
+// pushFileFlag parses one --file flag, pushes the local bytes as an
+// artifact, and returns the spec pointer.
+func pushFileFlag(ctx context.Context, artifacts *fileart.Client, flag string) (sdk.FileRef, error) {
+	container, local, mode, err := parseFileFlag(flag)
+	if err != nil {
+		return sdk.FileRef{}, err
+	}
+	content, err := os.ReadFile(filepath.Clean(local))
+	if err != nil {
+		return sdk.FileRef{}, fmt.Errorf("read file %q: %w", local, err)
+	}
+	digest, err := artifacts.Push(ctx, content)
+	if err != nil {
+		return sdk.FileRef{}, fmt.Errorf("push artifact: %w", err)
+	}
+	return sdk.FileRef{Path: container, Digest: digest, Mode: mode}, nil
+}
+
 func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, image string, command []string) error {
 	workload, err := buildWorkloadSpec(rf, image, command)
 	if err != nil {
@@ -184,6 +228,20 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 				return fmt.Errorf("resolve dependency %q: %w", dep, err)
 			}
 			workload.DependsOn = append(workload.DependsOn, depID)
+		}
+	}
+
+	// Files push to the local registry before submit: the spec carries
+	// digests only, and a failed push fails the run instead of
+	// submitting a workload that can never start.
+	if len(rf.fileFlags) > 0 {
+		artifacts := fileart.NewClient("127.0.0.1:" + strconv.Itoa(or.Port))
+		for _, flag := range rf.fileFlags {
+			ref, err := pushFileFlag(ctx, artifacts, flag)
+			if err != nil {
+				return err
+			}
+			workload.Files = append(workload.Files, ref)
 		}
 	}
 

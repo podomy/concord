@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -32,8 +33,10 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/node"
+	"github.com/podomy/concord/internal/or"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/workload"
+	"github.com/podomy/concord/sdk/fileart"
 )
 
 // ContainerAndProcess holds container state, process handle, stopping status, and exit status.
@@ -398,6 +401,13 @@ func cleanupContainerStartFailure(logger *zap.Logger, ctr *libcontainer.Containe
 	}
 }
 
+// registryAddr returns the embedded registry address for file pulls.
+// Loopback only: artifacts never cross the network except through the
+// registry's own peer sync.
+func registryAddr() string {
+	return "127.0.0.1:" + strconv.Itoa(or.Port)
+}
+
 // startContainer pulls the image, builds the bundle, creates the container,
 // and starts the init process.
 func startContainer(
@@ -425,6 +435,26 @@ func startContainer(
 	if err != nil {
 		logger.Error("pull image", zap.String("image", spec.Image), zap.Error(err))
 		return
+	}
+
+	// Files materialize into the rootfs before the container exists: the
+	// process can never observe a half-written set, and a missing blob
+	// (sync has not arrived) fails the start so the next tick retries.
+	// A required blob that never arrives blocks this workload forever by
+	// design; it must not start without its files. See docs/files.md.
+	if len(spec.Files) > 0 {
+		artifacts := fileart.NewClient(registryAddr())
+		refs := make([]fileart.File, 0, len(spec.Files))
+		for _, file := range spec.Files {
+			refs = append(refs, fileart.File{Path: file.Path, Digest: file.Digest, Mode: file.Mode})
+		}
+		fetch := func(fetchCtx context.Context, digest, dest string) error {
+			return artifacts.PullTo(fetchCtx, digest, dest)
+		}
+		if err := fileart.Materialize(ctx, pullResult.RootFS, refs, fetch); err != nil {
+			logger.Debug("materialize files, retrying next tick", zap.String("id", spec.ID.String()), zap.Error(err))
+			return
+		}
 	}
 
 	cfg, err := cr.BundleBuilder(ctx, *pullResult, spec)

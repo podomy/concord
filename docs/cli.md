@@ -44,6 +44,7 @@ concord workload run [flags] <image> [command...]
 --health-cmd (default ""): exec probe command, split on whitespace
 --depends-on (default []): wait for this workload ID or prefix on the same node (repeatable)
 --qos (default besteffort): compute class besteffort, burstable, or guaranteed
+--file (default []): stage a file: --file /container/path=/local/path[:mode] (repeatable)
 ```
 
 **Examples:**

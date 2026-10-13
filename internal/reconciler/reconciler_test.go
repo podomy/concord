@@ -157,7 +157,7 @@ func writeSpecEvent(t *testing.T, workloads *journalview.Workloads, spec workloa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := workloads.Apply(t.Context(), journal.NewEvent(nodeID, "workload.spec", payload)); err != nil {
+	if err := workloads.Apply(t.Context(), journal.NewEvent(nodeID, journalview.EventTypeWorkloadSpec, payload)); err != nil {
 		t.Fatal(err)
 	}
 }

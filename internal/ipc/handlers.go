@@ -108,6 +108,12 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid QoS class: "+string(spec.QoS))
 		return
 	}
+	for _, file := range spec.Files {
+		if err := file.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid file: "+err.Error())
+			return
+		}
+	}
 	live, err := s.workloads.List(r.Context())
 	if err != nil {
 		s.logger.Error("failed to list workloads for dependency check", zap.Error(err))
@@ -483,7 +489,17 @@ func sdkToInternalWorkload(w sdk.Workload) workload.Spec {
 		HealthCommand:      w.HealthCommand,
 		DependsOn:          w.DependsOn,
 		QoS:                workload.QoS(w.QoS),
+		Files:              sdkFilesToInternal(w.Files),
 	}
+}
+
+// sdkFilesToInternal converts SDK file pointers to internal refs.
+func sdkFilesToInternal(files []sdk.FileRef) []workload.FileRef {
+	out := make([]workload.FileRef, 0, len(files))
+	for _, file := range files {
+		out = append(out, workload.FileRef{Path: file.Path, Digest: file.Digest, Mode: file.Mode})
+	}
+	return out
 }
 
 // internalToSDKWorkload translates an internal workload.Spec into a public sdk.Workload.
@@ -506,5 +522,15 @@ func internalToSDKWorkload(s workload.Spec) sdk.Workload {
 		HealthCommand:      s.HealthCommand,
 		DependsOn:          s.DependsOn,
 		QoS:                sdk.QoS(s.QoS),
+		Files:              internalFilesToSDK(s.Files),
 	}
+}
+
+// internalFilesToSDK converts internal file refs to SDK pointers.
+func internalFilesToSDK(files []workload.FileRef) []sdk.FileRef {
+	out := make([]sdk.FileRef, 0, len(files))
+	for _, file := range files {
+		out = append(out, sdk.FileRef{Path: file.Path, Digest: file.Digest, Mode: file.Mode})
+	}
+	return out
 }

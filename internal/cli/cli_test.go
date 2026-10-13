@@ -500,3 +500,21 @@ func TestCLIWorkloadUpdate(t *testing.T) {
 		t.Fatalf("expected updated image in spec, got:\n%s", out)
 	}
 }
+
+func TestCLIWorkloadRunWithFile(t *testing.T) {
+	setupCLITest(t)
+	ctx := context.Background()
+
+	local := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(local, []byte("key: value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// No registry listens in tests, so the push fails and the run must
+	// fail before submitting anything.
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"workload", "run", "--file", "/etc/app/config.yaml=" + local, "alpine:latest"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected push failure without registry")
+	}
+}

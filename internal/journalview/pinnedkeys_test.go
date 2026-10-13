@@ -123,7 +123,7 @@ func TestPinnedKeysIgnoresOtherTypes(t *testing.T) {
 	view := NewPinnedKeys(testKVStore(t))
 	ctx := context.Background()
 
-	event := journal.Event{ID: uuid.New(), Type: "workload.spec", NodeID: uuid.New()}
+	event := journal.Event{ID: uuid.New(), Type: EventTypeWorkloadSpec, NodeID: uuid.New()}
 	if err := view.Apply(ctx, event); err != nil {
 		t.Fatalf("apply other type: %v", err)
 	}

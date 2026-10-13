@@ -5,6 +5,9 @@ package workload
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -38,6 +41,10 @@ type Spec struct {
 	// before this workload starts. Unknown, removed, or elsewhere-assigned
 	// IDs are ignored, never waited on. Empty means no ordering.
 	DependsOn []uuid.UUID
+	// Files lists content-addressed files materialized into the container
+	// filesystem before start. Blobs live in the registry under the
+	// concord-files repo; the journal carries only these pointers.
+	Files []FileRef
 	// QoS ranks the workload for placement order and preemption:
 	// best-effort gives way to everything, guaranteed gives way to
 	// nothing. Empty means best-effort. This is compute allocation
@@ -141,6 +148,44 @@ const (
 type Resources struct {
 	CPUShares uint64 // relative weight (default 1024).
 	MemoryMB  int64  // max memory, 0 = unlimited.
+}
+
+// FileRef points at one file's content in the registry: the container
+// path it materializes to, the blob digest holding its bytes, and the
+// file mode (0 means 0600).
+type FileRef struct {
+	Path   string
+	Digest string
+	Mode   uint32
+}
+
+// Validate rejects non-absolute, unclean, or escaping paths, malformed
+// digests, and modes above 0777. Submit answers 400 on any of these;
+// the materializer re-checks paths defensively because journal lines
+// can be hand-written.
+func (f FileRef) Validate() error {
+	if !filepath.IsAbs(f.Path) {
+		return fmt.Errorf("file path must be absolute: %q", f.Path)
+	}
+	if filepath.Clean(f.Path) != f.Path {
+		return fmt.Errorf("file path must be clean: %q", f.Path)
+	}
+	if slices.Contains(strings.Split(f.Path, string(filepath.Separator)), "..") {
+		return fmt.Errorf("file path must not escape: %q", f.Path)
+	}
+	hexPart, ok := strings.CutPrefix(f.Digest, "sha256:")
+	if !ok || len(hexPart) != 64 {
+		return fmt.Errorf("file digest must be sha256:<64 hex>: %q", f.Digest)
+	}
+	for _, c := range hexPart {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return fmt.Errorf("file digest must be sha256:<64 hex>: %q", f.Digest)
+		}
+	}
+	if f.Mode > 0o777 {
+		return fmt.Errorf("file mode %o exceeds 0777: %s", f.Mode, f.Path)
+	}
+	return nil
 }
 
 type RestartPolicy string

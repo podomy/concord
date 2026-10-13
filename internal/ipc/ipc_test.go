@@ -648,3 +648,23 @@ func updateImageAndGet(t *testing.T, client sdk.Client, ctx context.Context, id 
 	}
 	return got
 }
+
+// File pointers validate at submit: escaping paths and malformed
+// digests are 400s, never journal lines.
+func TestIPCSubmitRejectsBadFiles(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	for _, files := range [][]sdk.FileRef{
+		{{Path: "relative.yaml", Digest: "sha256:" + strings.Repeat("a", 64)}},
+		{{Path: "/etc/../escape", Digest: "sha256:" + strings.Repeat("a", 64)}},
+		{{Path: "/ok", Digest: "md5:abc"}},
+		{{Path: "/ok", Digest: "sha256:" + strings.Repeat("a", 64), Mode: 0o7777}},
+	} {
+		w := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+		w.Files = files
+		if _, err := h.client.Submit(ctx, w); err == nil {
+			t.Fatalf("expected rejection for %+v", files)
+		}
+	}
+}

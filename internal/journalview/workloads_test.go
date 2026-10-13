@@ -34,7 +34,7 @@ func TestWorkloadsApplyAndGet(t *testing.T) {
 		t.Fatalf("marshal spec: %v", err)
 	}
 
-	event := journal.NewEvent(uuid.New(), "workload.spec", payload)
+	event := journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload)
 
 	if err := view.Apply(ctx, event); err != nil {
 		t.Fatalf("apply event: %v", err)
@@ -90,7 +90,7 @@ func TestWorkloadsUpdateAndTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal spec1: %v", err)
 	}
-	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), "workload.spec", payload1)); err != nil {
+	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload1)); err != nil {
 		t.Fatalf("apply spec1: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestWorkloadsUpdateAndTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal spec2: %v", err)
 	}
-	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), "workload.spec", payload2)); err != nil {
+	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload2)); err != nil {
 		t.Fatalf("apply spec2: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func applyWorkloadSpec(t *testing.T, ctx context.Context, view *Workloads, spec 
 	if err != nil {
 		t.Fatalf("marshal spec: %v", err)
 	}
-	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), "workload.spec", payload)); err != nil {
+	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload)); err != nil {
 		t.Fatalf("apply spec: %v", err)
 	}
 }
@@ -187,7 +187,7 @@ func TestWorkloadsList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal spec: %v", err)
 		}
-		if err := view.Apply(ctx, journal.NewEvent(uuid.New(), "workload.spec", payload)); err != nil {
+		if err := view.Apply(ctx, journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload)); err != nil {
 			t.Fatalf("apply spec: %v", err)
 		}
 	}
@@ -216,7 +216,7 @@ func TestWorkloadsApplyMalformedPayload(t *testing.T) {
 	kv := testKVStore(t)
 	view := NewWorkloads(kv)
 
-	event := journal.NewEvent(uuid.New(), "workload.spec", []byte("invalid json"))
+	event := journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, []byte("invalid json"))
 
 	if err := view.Apply(ctx, event); err == nil {
 		t.Fatalf("expected error for malformed payload")
@@ -230,7 +230,7 @@ func TestWorkloadsCancelledContext(t *testing.T) {
 	kv := testKVStore(t)
 	view := NewWorkloads(kv)
 
-	event := journal.NewEvent(uuid.New(), "workload.spec", json.RawMessage(`{}`))
+	event := journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, json.RawMessage(`{}`))
 
 	if err := view.Apply(ctx, event); err == nil {
 		t.Fatalf("expected apply cancellation error")
