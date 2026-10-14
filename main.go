@@ -74,6 +74,7 @@ func runDaemon(ctx context.Context, args []string) error {
 }
 
 func main() {
+	maybeInitContainer()
 	if err := run(); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err) //nolint:errcheck // CLI fatal output
 		os.Exit(1)
