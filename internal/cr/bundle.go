@@ -34,7 +34,17 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 		return nil, fmt.Errorf("context cancellation: %w", err)
 	}
 
-	var cg *cgroups.Cgroup
+	cg := &cgroups.Cgroup{
+		// Every container gets its own cgroup scope named after the
+		// workload. An empty path would resolve to the parent of the
+		// daemon's own cgroup, which always contains the daemon itself:
+		// factory.Create's emptiness check could then never pass, no
+		// container could ever start, limits would apply to the
+		// aggregate, and per-workload stats would read the aggregate
+		// too. Explicit per-workload paths make the check meaningful
+		// again.
+		Path: "/concord/" + spec.ID.String(),
+	}
 	if spec.Resources.CPUShares > 0 || spec.Resources.MemoryMB > 0 {
 		res := &cgroups.Resources{}
 		if spec.Resources.CPUShares > 0 {
@@ -43,7 +53,7 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 		if spec.Resources.MemoryMB > 0 {
 			res.Memory = spec.Resources.MemoryMB * 1024 * 1024
 		}
-		cg = &cgroups.Cgroup{Resources: res}
+		cg.Resources = res
 	}
 
 	namespaces := configs.Namespaces{}

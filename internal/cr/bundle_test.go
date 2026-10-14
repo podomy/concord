@@ -6,6 +6,7 @@ package cr
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	cdevices "github.com/opencontainers/cgroups/devices/config"
 
 	"github.com/podomy/concord/internal/workload"
@@ -51,6 +52,44 @@ func TestBundleBuildsWithoutDevices(t *testing.T) {
 	}
 	if cfg == nil || cfg.Rootfs == "" {
 		t.Fatal("expected usable config")
+	}
+}
+
+// The bundle always carries an explicit per-workload cgroup scope: an
+// empty path would resolve to the daemon's own parent cgroup, whose
+// emptiness check can never pass, so no container could ever start.
+// Limits ride on the same Cgroups, never instead of the scope.
+func TestBundleCarriesExplicitCgroupScope(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	cfg, err := BundleBuilder(t.Context(), PullResult{RootFS: t.TempDir()}, workload.Spec{ID: id})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	if cfg.Cgroups == nil {
+		t.Fatal("expected non-nil Cgroups")
+	}
+	want := "/concord/" + id.String()
+	if cfg.Cgroups.Path != want {
+		t.Fatalf("cgroup path = %q, want %q", cfg.Cgroups.Path, want)
+	}
+
+	limited, err := BundleBuilder(t.Context(), PullResult{RootFS: t.TempDir()}, workload.Spec{
+		ID:        uuid.New(),
+		Resources: workload.Resources{CPUShares: 512, MemoryMB: 256},
+	})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	if limited.Cgroups.Resources == nil {
+		t.Fatal("expected resources preserved alongside the scope")
+	}
+	if got := limited.Cgroups.Memory; got != 256*1024*1024 {
+		t.Fatalf("memory = %d", got)
+	}
+	if limited.Cgroups.Path == "" {
+		t.Fatal("expected scope with limits too")
 	}
 }
 
