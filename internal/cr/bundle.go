@@ -13,6 +13,12 @@ import (
 
 	"github.com/opencontainers/cgroups"
 	cdevices "github.com/opencontainers/cgroups/devices/config"
+
+	// Blank import for the eBPF backend registration: its init wires the
+	// device-rule appliers both hierarchies call. Without it any
+	// non-empty rule set fails hard, so every container with sensors
+	// would fail at device setup while sensorless ones pass silently.
+	_ "github.com/opencontainers/cgroups/devices"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	runcdevices "github.com/opencontainers/runc/libcontainer/devices"
 

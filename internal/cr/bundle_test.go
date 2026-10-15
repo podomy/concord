@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/opencontainers/cgroups"
 	cdevices "github.com/opencontainers/cgroups/devices/config"
 
 	"github.com/podomy/concord/internal/workload"
@@ -148,5 +149,16 @@ func TestScanDevicesEmptyDir(t *testing.T) {
 
 	if got := scanDevices(t.TempDir(), 0); len(got) != 0 {
 		t.Fatalf("scan = %v, want empty", got)
+	}
+}
+
+// The eBPF device backend must be registered: without its init, any
+// non-empty device rule set fails hard at setup while empty sets pass
+// silently, which is exactly the sensor-only failure this guards.
+func TestDeviceBackendRegistered(t *testing.T) {
+	t.Parallel()
+
+	if cgroups.DevicesSetV1 == nil || cgroups.DevicesSetV2 == nil {
+		t.Fatal("device backends unwired; import the devices package for its init")
 	}
 }
