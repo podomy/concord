@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	cdevices "github.com/opencontainers/cgroups/devices/config"
 	"github.com/opencontainers/runc/libcontainer"
+	"github.com/opencontainers/runc/libcontainer/configs"
 	"go.uber.org/zap"
 
 	"github.com/podomy/concord/internal/clock"
@@ -355,6 +357,25 @@ func evaluateRestart(entry *ContainerAndProcess, spec workload.Spec, running map
 	return true
 }
 
+// logDeviceSummary records the device rules about to be programmed: how
+// many, and whether null is allowed. The eBPF program's content lives
+// and dies inside one Start call, unobservable from outside, so this
+// line pins our exact input in every run's logs: same input through the
+// deterministic compiler means the same program.
+func logDeviceSummary(logger *zap.Logger, id uuid.UUID, cfg *configs.Config) {
+	rules := 0
+	null := false
+	if cfg.Cgroups != nil && cfg.Cgroups.Resources != nil {
+		rules = len(cfg.Cgroups.Devices)
+		for _, rule := range cfg.Cgroups.Devices {
+			if rule.Type == cdevices.CharDevice && rule.Major == 1 && rule.Minor == 3 && rule.Allow && string(rule.Permissions) == "rwm" {
+				null = true
+			}
+		}
+	}
+	logger.Debug("device rules for container", zap.String("id", id.String()), zap.Int("rules", rules), zap.Bool("null_allowed", null))
+}
+
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.
 // If network setup fails, it performs anti-leak cleanup by killing the process and destroying container resources.
 func setupContainerNetwork(
@@ -463,6 +484,7 @@ func startContainer(
 		logger.Error("build bundle", zap.Error(err))
 		return
 	}
+	logDeviceSummary(logger, spec.ID, cfg)
 
 	ctr, err := runtime.Create(spec.ID.String(), cfg)
 	if err != nil {
