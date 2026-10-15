@@ -304,6 +304,9 @@ func TestBuildProcessAttachesLogWriters(t *testing.T) {
 	if proc.Stdout == nil || proc.Stderr == nil {
 		t.Fatal("expected log writers attached")
 	}
+	if !proc.Init {
+		t.Fatal("initial process must take the init path, not setns join")
+	}
 
 	plain := buildProcess(spec, result, nil)
 	if plain.Stdout != nil || plain.Stderr != nil {

@@ -671,6 +671,12 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 		Args: spec.Command,
 		Env:  env,
 		Cwd:  cwd,
+		// Init selects the container-creation path: the init process
+		// creates the cgroup and namespaces, while Init:false joins an
+		// existing container (the exec-probe path). Without this the
+		// initial start tries to join a cgroup nothing created yet and
+		// fails opening it. Do not remove.
+		Init: true,
 	}
 	if sampler != nil {
 		proc.Stdout = sampler.LogWriter(spec.ID, node.LogStdout)
