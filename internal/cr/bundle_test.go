@@ -43,6 +43,32 @@ func TestSplitDevicesKeepsNodeAndRule(t *testing.T) {
 	}
 }
 
+// The merged bundle always carries a working null pair regardless of
+// what the host enumerates: no host state may remove init's lifeline.
+func TestBundleAlwaysCarriesWorkingNull(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := BundleBuilder(t.Context(), PullResult{RootFS: t.TempDir()}, workload.Spec{ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+
+	var node, rule bool
+	for _, dev := range cfg.Devices {
+		if dev.Path == "/dev/null" {
+			node = true
+		}
+	}
+	for _, r := range cfg.Cgroups.Devices {
+		if r.Type == cdevices.CharDevice && r.Major == 1 && r.Minor == 3 && r.Allow && string(r.Permissions) == "rwm" {
+			rule = true
+		}
+	}
+	if !node || !rule {
+		t.Fatalf("null node = %v, null rule = %v", node, rule)
+	}
+}
+
 // The scan never fails hard: a host without sensors (like CI) yields an
 // empty list, and BundleBuilder still produces a valid config.
 func TestBundleBuildsWithoutDevices(t *testing.T) {
