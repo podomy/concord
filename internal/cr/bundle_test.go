@@ -5,6 +5,7 @@ package cr
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -308,5 +309,29 @@ func TestDeviceBackendRegistered(t *testing.T) {
 
 	if cgroups.DevicesSetV1 == nil || cgroups.DevicesSetV2 == nil {
 		t.Fatal("device backends unwired; import the devices package for its init")
+	}
+}
+
+// The merged rule set must compile through the real v2 rule compiler:
+// construction bugs (unknown types, unpunchable overlaps) surface here,
+// before any cgroup exists. Compilation happens before any filesystem
+// touch, so a fake dir proves the set clean with no privileges: any
+// error short of the directory open means our rules, not the kernel.
+func TestDeviceRulesCompile(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := BundleBuilder(t.Context(), PullResult{RootFS: t.TempDir()}, workload.Spec{ID: uuid.New()})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	if cfg.Cgroups == nil || cfg.Cgroups.Resources == nil {
+		t.Fatal("no resources to compile")
+	}
+	err = cgroups.DevicesSetV2("/nonexistent-concord-probe", cfg.Cgroups.Resources)
+	if err == nil {
+		t.Fatal("expected directory open to fail")
+	}
+	if strings.Contains(err.Error(), "punch hole") || strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("rule set rejected: %v", err)
 	}
 }

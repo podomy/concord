@@ -393,6 +393,7 @@ func setupContainerNetwork(
 }
 
 func cleanupContainerStartFailure(logger *zap.Logger, ctr *libcontainer.Container, processHandle cr.ProcessHandle) {
+	logger.Warn("destroying container after failed start")
 	if sigErr := processHandle.Signal(syscall.SIGKILL); sigErr != nil {
 		logger.Error("kill process on network setup failure", zap.Error(sigErr))
 	}
@@ -537,6 +538,7 @@ func destroyContainer(
 	}
 
 	entry.Stopping = true
+	logger.Debug("stopping container", zap.String("id", spec.ID.String()))
 	if err := entry.ProcessHandle.Signal(syscall.SIGTERM); err != nil {
 		logger.Error("SIGTERM failed", zap.String("id", spec.ID.String()), zap.Error(err))
 	}
@@ -606,6 +608,7 @@ func cleanupContainerResources(
 	delete(ipAndCIDRs, id)
 
 	if entry.Container != nil {
+		logger.Debug("destroying container", zap.String("id", id.String()))
 		if err := entry.Destroy(); err != nil {
 			logger.Error("destroy container", zap.Error(err))
 		}
