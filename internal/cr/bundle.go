@@ -104,7 +104,7 @@ func BundleBuilder(ctx context.Context, result PullResult, spec workload.Spec) (
 	mounts = append(mounts, &mountProc, &mountTmpfs, &mountPts, &mountSys)
 
 	hostDevices := defaultHostDevices()
-	deviceNodes, deviceRules := splitDevices(hostDevices)
+	deviceNodes, deviceRules := splitDevices(mergeDevices(defaultAllowedDevices(), hostDevices))
 
 	config := configs.Config{
 		Rootfs:     result.RootFS,
@@ -229,15 +229,101 @@ func scanEntry(dir string, entry os.DirEntry, depth int) ([]*cdevices.Device, bo
 	return []*cdevices.Device{dev}, true
 }
 
+// defaultAllowedDevices mirrors runc's canonical allow-list: mknod
+// wildcards plus null, random, full, tty, zero, urandom, pts, ptmx,
+// and net/tun, all 0666. runc prepends these to every container; our
+// scanned sensor rules ride after, with scanned entries winning path
+// collisions. Without this list the eBPF program allows exactly the
+// configured rules and nothing else, so even /dev/null (needed by
+// container init itself) would be denied. The majors are kernel ABI
+// and the list is frozen upstream by fear of breaking dependents, so
+// copying it is stable, not drift-prone.
+func defaultAllowedDevices() []*cdevices.Device {
+	mknod := func(typ cdevices.Type) cdevices.Device {
+		return cdevices.Device{
+			Rule: cdevices.Rule{
+				Type:        typ,
+				Major:       cdevices.Wildcard,
+				Minor:       cdevices.Wildcard,
+				Permissions: "m",
+				Allow:       true,
+			},
+		}
+	}
+	node := func(path string, major, minor int64) *cdevices.Device {
+		return &cdevices.Device{
+			Rule: cdevices.Rule{
+				Type:        cdevices.CharDevice,
+				Major:       major,
+				Minor:       minor,
+				Permissions: "rwm",
+				Allow:       true,
+			},
+			Path:     path,
+			FileMode: 0o666,
+		}
+	}
+	rule := func(typ cdevices.Type, major, minor int64) *cdevices.Device {
+		return &cdevices.Device{
+			Rule: cdevices.Rule{
+				Type:        typ,
+				Major:       major,
+				Minor:       minor,
+				Permissions: "rwm",
+				Allow:       true,
+			},
+		}
+	}
+	charMknod, blockMknod := mknod(cdevices.CharDevice), mknod(cdevices.BlockDevice)
+	return []*cdevices.Device{
+		&charMknod, &blockMknod,
+		node("/dev/null", 1, 3),
+		node("/dev/random", 1, 8),
+		node("/dev/full", 1, 7),
+		node("/dev/tty", 5, 0),
+		node("/dev/zero", 1, 5),
+		node("/dev/urandom", 1, 9),
+		rule(cdevices.CharDevice, 136, cdevices.Wildcard),
+		rule(cdevices.CharDevice, 5, 2),
+		rule(cdevices.CharDevice, 10, 200),
+	}
+}
+
+// mergeDevices prepends the canonical allow-list ahead of scanned
+// devices, dropping scanned entries that collide by path (the scanned
+// node wins, mirroring runc's dedup where explicit devices take
+// priority). Defaults must always come first: without them the eBPF
+// program allows exactly the configured rules and nothing else, which
+// is how /dev/null ended up denied.
+func mergeDevices(defaults, scanned []*cdevices.Device) []*cdevices.Device {
+	seen := make(map[string]bool, len(scanned))
+	for _, dev := range scanned {
+		if dev.Path != "" {
+			seen[dev.Path] = true
+		}
+	}
+	out := make([]*cdevices.Device, 0, len(defaults)+len(scanned))
+	for _, dev := range defaults {
+		if dev.Path != "" && seen[dev.Path] {
+			continue
+		}
+		out = append(out, dev)
+	}
+	return append(out, scanned...)
+}
+
 // splitDevices separates container nodes from cgroup rules. libcontainer
 // creates each node in container /dev; each rule opens the same
 // major:minor in the cgroup (devices default-deny, so presence alone
-// grants nothing).
+// grants nothing). Pathless entries (mknod wildcards, pts) emit rules
+// only: there is no node to create for them.
 func splitDevices(devs []*cdevices.Device) ([]*cdevices.Device, []*cdevices.Rule) {
 	nodes := make([]*cdevices.Device, 0, len(devs))
 	rules := make([]*cdevices.Rule, 0, len(devs))
 	for _, dev := range devs {
-		nodes = append(nodes, dev)
+		if dev.Path != "" {
+			nodes = append(nodes, dev)
+		}
 		rule := dev.Rule
 		rules = append(rules, &rule)
 	}

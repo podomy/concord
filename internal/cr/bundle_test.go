@@ -56,6 +56,74 @@ func TestBundleBuildsWithoutDevices(t *testing.T) {
 	}
 }
 
+// The canonical allow-list always carries null with a full rule: the
+// container init itself reopens /dev/null, and without this entry the
+// eBPF program denies exactly that.
+func TestDefaultAllowedDevicesCoverNull(t *testing.T) {
+	t.Parallel()
+
+	var found *cdevices.Device
+	for _, dev := range defaultAllowedDevices() {
+		if dev.Path == "/dev/null" {
+			found = dev
+		}
+	}
+	if found == nil {
+		t.Fatal("no /dev/null entry")
+	}
+	if found.Major != 1 || found.Minor != 3 || !found.Allow || string(found.Permissions) != "rwm" {
+		t.Fatalf("null rule = %+v", found.Rule)
+	}
+}
+
+// Merging drops default entries colliding by path and keeps scanned
+// nodes; pathless rules always survive on both sides.
+func TestMergeDevicesDedupsByPath(t *testing.T) {
+	t.Parallel()
+
+	scanned := &cdevices.Device{Path: "/dev/null"}
+	scanned.Major, scanned.Minor, scanned.Allow = 1, 3, true
+	merged := mergeDevices(defaultAllowedDevices(), []*cdevices.Device{scanned})
+
+	nulls := 0
+	for _, dev := range merged {
+		if dev.Path == "/dev/null" {
+			nulls++
+			if dev != scanned {
+				t.Fatal("default won over scanned node")
+			}
+		}
+	}
+	if nulls != 1 {
+		t.Fatalf("null entries = %d, want 1", nulls)
+	}
+}
+
+// Pathless entries emit rules but no nodes: there is nothing to mknod
+// for mknod wildcards or pts.
+func TestSplitDevicesSkipsPathlessNodes(t *testing.T) {
+	t.Parallel()
+
+	nodes, rules := splitDevices(defaultAllowedDevices())
+	if len(rules) == 0 {
+		t.Fatal("no rules emitted")
+	}
+	for _, node := range nodes {
+		if node.Path == "" {
+			t.Fatal("empty path node emitted")
+		}
+	}
+	nulls := 0
+	for _, rule := range rules {
+		if rule.Major == 1 && rule.Minor == 3 && rule.Allow {
+			nulls++
+		}
+	}
+	if nulls != 1 {
+		t.Fatalf("null rules = %d, want 1", nulls)
+	}
+}
+
 // The bundle always carries an explicit per-workload cgroup scope: an
 // empty path would resolve to the daemon's own parent cgroup, whose
 // emptiness check can never pass, so no container could ever start.

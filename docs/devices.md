@@ -29,6 +29,13 @@ container's cgroup rules, plus a `/dev/video0` node with those same
 numbers inside the container. Same pair for every device, every
 start.
 
+The scanned set rides on top of runc's canonical allow-list (null,
+zero, full, random, urandom, tty, pts, ptmx, tun, plus mknod
+wildcards), which every container needs regardless of sensors: init
+itself reopens `/dev/null`, and the eBPF program allows exactly the
+configured rules and nothing else. Scanned entries win path collisions
+by the same dedup runc applies to explicit devices.
+
 Everything allowed is allowed fully: read, write, and create. A lidar
 that needs write commands must not discover the refusal at 3 AM.
 Per-device trimming would rebuild the policy complexity this default
