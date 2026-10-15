@@ -4,6 +4,7 @@
 package cr
 
 import (
+	"os"
 	"testing"
 
 	"github.com/google/uuid"
@@ -56,9 +57,62 @@ func TestBundleBuildsWithoutDevices(t *testing.T) {
 	}
 }
 
-// The canonical allow-list always carries null with a full rule: the
-// container init itself reopens /dev/null, and without this entry the
-// eBPF program denies exactly that.
+// Every default entry allows: the bundle emits allows only, and a
+// single deny would invert the eBPF program's meaning for that device.
+func TestDefaultAllowedDevicesAllow(t *testing.T) {
+	t.Parallel()
+
+	for _, dev := range defaultAllowedDevices() {
+		if !dev.Allow {
+			t.Fatalf("default %q does not allow", dev.Path)
+		}
+	}
+}
+
+// Scanned entries allow too: DeviceFromPath leaves Allow at its zero
+// value (deny), so the scan must set it explicitly. A temp symlink to
+// /dev/null exercises the symlink path without root.
+func TestScanEntrySetsAllow(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	link := dir + "/camera-front"
+	if err := os.Symlink("/dev/null", link); err != nil {
+		t.Fatal(err)
+	}
+
+	devs, ok := scanEntry(dir, mustDirEntry(t, dir, "camera-front"), 0)
+	if !ok || len(devs) != 1 {
+		t.Fatalf("scan = %v, %v", devs, ok)
+	}
+	if !devs[0].Allow {
+		t.Fatal("scanned entry does not allow; it would deny its device")
+	}
+	if devs[0].Path != link {
+		t.Fatalf("path = %q, want stable name %q", devs[0].Path, link)
+	}
+	if devs[0].Major != 1 || devs[0].Minor != 3 {
+		t.Fatalf("numbers = %d:%d, want target 1:3", devs[0].Major, devs[0].Minor)
+	}
+}
+
+// mustDirEntry reads one named entry for scanEntry tests.
+func mustDirEntry(t *testing.T, dir, name string) os.DirEntry {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return entry
+		}
+	}
+	t.Fatalf("entry %q not found", name)
+	return nil
+}
+
 func TestDefaultAllowedDevicesCoverNull(t *testing.T) {
 	t.Parallel()
 

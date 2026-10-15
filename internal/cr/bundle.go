@@ -225,6 +225,11 @@ func scanEntry(dir string, entry os.DirEntry, depth int) ([]*cdevices.Device, bo
 	if err != nil {
 		return nil, false
 	}
+	// DeviceFromPath leaves Allow at its zero value, which means DENY:
+	// every scanned rule would forbid its device instead of opening it,
+	// and the first one trips the hole-punch guard against our own mknod
+	// wildcards. Set explicitly; presence here always means allow.
+	dev.Allow = true
 	dev.Path = name
 	return []*cdevices.Device{dev}, true
 }
