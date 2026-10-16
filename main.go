@@ -12,14 +12,15 @@ import (
 	"syscall"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/podomy/concord/internal/cli"
 	"github.com/podomy/concord/internal/logs"
 	concordruntime "github.com/podomy/concord/internal/runtime"
 )
 
-func startDaemon(ctx context.Context) error {
-	logger, syncLogs, err := logs.Init()
+func startDaemon(ctx context.Context, level zapcore.Level) error {
+	logger, syncLogs, err := logs.Init(level)
 	if err != nil {
 		return fmt.Errorf("init logger: %w", err)
 	}
@@ -56,11 +57,15 @@ func run() error {
 
 // runDaemon provisions anchor mode when flagged, then starts the node.
 func runDaemon(ctx context.Context, args []string) error {
-	anchor, err := parseDaemonFlags(args)
+	flags, err := parseDaemonFlags(args)
 	if err != nil {
 		return err
 	}
-	if anchor {
+	level, err := logs.ParseLevel(flags.logLevel)
+	if err != nil {
+		return fmt.Errorf("parse log level: %w", err)
+	}
+	if flags.anchor {
 		changed, err := provisionAnchor()
 		if err != nil {
 			return err
@@ -70,7 +75,7 @@ func runDaemon(ctx context.Context, args []string) error {
 		}
 	}
 
-	return startDaemon(ctx)
+	return startDaemon(ctx, level)
 }
 
 func main() {

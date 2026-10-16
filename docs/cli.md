@@ -11,6 +11,18 @@ Concord uses a noun-first command structure: `concord <noun> <action> [flags]`.
 concord
 ```
 
+### Log Verbosity
+```bash
+# Debug everything, including device rules and destroy lines
+concord --log-level debug
+```
+
+Levels are `debug`, `info` (the default), `warn`, `error`; anything
+else fails startup loudly instead of running quieter than asked.
+Debug is verbose by design: every container start logs its device
+rule summary, every destroy logs its initiation. Run it when
+diagnosing, never in production.
+
 ### Serve as a Rendezvous Anchor
 ```bash
 # Mark this node as an anchor in config.json, then start

@@ -11,21 +11,30 @@ import (
 	"github.com/podomy/concord/internal/node"
 )
 
-// parseDaemonFlags parses daemon-only flags. Currently only --anchor
-// exists: marking this node as a rendezvous anchor. Unknown flags fail;
+// daemonFlags holds daemon-only startup options.
+type daemonFlags struct {
+	// anchor marks this node as a rendezvous anchor in node config.
+	anchor bool
+	// logLevel selects the daemon log verbosity.
+	logLevel string
+}
+
+// parseDaemonFlags parses daemon-only flags. Unknown flags fail;
 // --help is handled by the caller routing to the CLI instead.
-func parseDaemonFlags(args []string) (bool, error) {
+func parseDaemonFlags(args []string) (daemonFlags, error) {
+	var flags daemonFlags
 	fs := flag.NewFlagSet("concord", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	anchor := fs.Bool("anchor", false, "Serve as a rendezvous anchor")
+	fs.BoolVar(&flags.anchor, "anchor", false, "Serve as a rendezvous anchor")
+	fs.StringVar(&flags.logLevel, "log-level", "info", "Log verbosity: debug, info, warn, or error")
 	err := fs.Parse(args)
 	if err != nil {
-		return false, fmt.Errorf("parse daemon flags: %w", err)
+		return daemonFlags{}, fmt.Errorf("parse daemon flags: %w", err)
 	}
 	if fs.NArg() > 0 {
-		return false, fmt.Errorf("unexpected daemon arguments: %v", fs.Args())
+		return daemonFlags{}, fmt.Errorf("unexpected daemon arguments: %v", fs.Args())
 	}
-	return *anchor, nil
+	return flags, nil
 }
 
 // provisionAnchor marks this node as a rendezvous anchor in node config

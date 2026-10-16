@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Bare invocation means a plain daemon start.
+// Bare invocation means a plain daemon start at info level.
 func TestParseDaemonFlagsEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -15,8 +15,11 @@ func TestParseDaemonFlagsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got {
+	if got.anchor {
 		t.Fatal("expected no anchor flag")
+	}
+	if got.logLevel != "info" {
+		t.Fatalf("expected default info level, got %q", got.logLevel)
 	}
 }
 
@@ -28,8 +31,21 @@ func TestParseDaemonFlagsAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got {
+	if !got.anchor {
 		t.Fatal("expected anchor flag")
+	}
+}
+
+// --log-level selects verbosity; unknown levels fail.
+func TestParseDaemonFlagsLogLevel(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseDaemonFlags([]string{"--log-level", "debug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.logLevel != "debug" {
+		t.Fatalf("expected debug level, got %q", got.logLevel)
 	}
 }
 
