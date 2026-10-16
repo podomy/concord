@@ -102,7 +102,8 @@ a week of rule archaeology.
 ## Part 3: why Concord stood on this ground
 
 With the four gates on the table, follow one container from submit
-to start and watch where its files live. The daemon keeps per-node state under the config directory,
+to start and watch where its files live. The daemon keeps per-node
+state under the config directory,
 which defaults to `~/.config` and moves wherever `XDG_CONFIG_HOME`
 points. Image layers unpack into
 `$XDG_CONFIG_HOME/concord/bundles/<workload>/rootfs` at pull time.
