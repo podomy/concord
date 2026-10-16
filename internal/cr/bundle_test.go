@@ -6,6 +6,7 @@ package cr
 import (
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/google/uuid"
@@ -288,6 +289,39 @@ func TestDefaultHostDevicesDenyNothingThrough(t *testing.T) {
 	for _, dev := range defaultHostDevices() {
 		if deniedDevice(dev.Path) {
 			t.Errorf("scan exposed denied node %q", dev.Path)
+		}
+	}
+}
+
+// A FIFO under the scan never leaves it: the cgroup device controller
+// only understands character, block, and wildcard rules, so one named
+// pipe anywhere in /dev would fail program compilation for every
+// container on the host. A synthetic fifo pins the filter with no
+// privileges and no host fifo required.
+func TestScanEntrySkipsFifo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	err := syscall.Mkfifo(dir+"/pipe", 0o666)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	devs, ok := scanEntry(dir, mustDirEntry(t, dir, "pipe"), 0)
+	if ok || len(devs) != 0 {
+		t.Fatalf("scan = %v, %v, want skip", devs, ok)
+	}
+}
+
+// Every rule the live host scan emits must satisfy the compiler's own
+// predicate: on a host with a FIFO in /dev this fails before the fix
+// and passes after, deterministically per machine.
+func TestScannedRulesAreCgroupable(t *testing.T) {
+	t.Parallel()
+
+	for _, dev := range defaultHostDevices() {
+		if !dev.Type.CanCgroup() {
+			t.Errorf("scan emitted non-cgroup type %q for %q", dev.Type, dev.Path)
 		}
 	}
 }

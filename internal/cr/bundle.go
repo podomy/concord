@@ -176,7 +176,9 @@ const scanDepth = 3
 // defaultHostDevices exposes host devices to every container. The scan
 // walks /dev and lets everything through except the deny lists, so a
 // sensor nobody has heard of yet works on first plug with no code
-// change. Symlinks resolve first: a udev stable name like
+// change. Only character and block devices pass: FIFOs and anything
+// else unnumbered would fail program compilation for every container.
+// Symlinks resolve first: a udev stable name like
 // /dev/camera-front is exposed under its own name with the target's
 // numbers, and a symlink into denied storage stays denied. Absent
 // hardware contributes nothing; a node without sensors runs the same
@@ -223,6 +225,13 @@ func scanEntry(dir string, entry os.DirEntry, depth int) ([]*cdevices.Device, bo
 	}
 	dev, err := runcdevices.DeviceFromPath(target, "rwm")
 	if err != nil {
+		return nil, false
+	}
+	// The cgroup device controller only understands character, block,
+	// and wildcard rules: a FIFO (or anything else unnumbered the scan
+	// resolves) would fail program compilation for every container on
+	// the host, so it never leaves the scan.
+	if !dev.Type.CanCgroup() {
 		return nil, false
 	}
 	// DeviceFromPath leaves Allow at its zero value, which means DENY:

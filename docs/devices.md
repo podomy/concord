@@ -74,8 +74,12 @@ never exposed
 Symlinks are judged by their target: `/dev/disk/by-uuid/X` is refused
 as the `/dev/sda1` it points at. Symlink trees that only alias other
 nodes (`/dev/block/`, `/dev/char/`) are skipped for the same reason.
-Subdirectories deeper than bus addresses and driver folders are not
-walked; nothing sensor-shaped lives deeper.
+Non-device entries never leave the scan either: a FIFO or socket
+under `/dev` carries no device numbers, and the controller only
+understands character, block, and wildcard rules. One named pipe
+would otherwise fail program compilation for every container on that
+host. Subdirectories deeper than bus addresses and driver folders are
+not walked; nothing sensor-shaped lives deeper.
 
 GPUs need more than nodes: an NVIDIA card also needs its driver
 libraries injected into the container, which is a toolkit integration

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Device scan passes only character and block devices: a FIFO under
+  `/dev` used to reach the cgroup program and fail compilation for
+  every container on that host. Pinned by test.
+
 ## v1.1.1 (2026-10-16)
 
 Containers now start end to end. A nodev bundle directory used to
