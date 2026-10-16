@@ -1,24 +1,27 @@
 # The ground under the bundles: filesystems that forbid devices
 
-This page explains one failure mode in full: every container dies in
-init with `open /dev/null: permission denied`, while every device
-rule is correct. The cause is not a rule. It is the ground the rules
-stand on: the bundle directory sits on a filesystem mounted with
-`nodev`, and that flag alone refuses every device open. Read this
-page if a container will not start and the logs blame `/dev/null`.
+This page is a record of an incident, written down so the next one
+goes faster. Every container on one node died in init with `open
+/dev/null: permission denied`, while every device rule was correct.
+The cause was not a rule. It was the ground the rules stood on: the
+bundle directory sat on a filesystem mounted with `nodev`, and that
+flag alone refuses every device open. Nothing below is hypothetical;
+each section is what the investigation found, in the order it found
+it. Read this page if a container will not start and the logs blame
+`/dev/null`.
 
 ## The failure, exactly
 
-The daemon log shows this line and the container never runs:
+The daemon log showed this line and the container never ran:
 
 ```
 error reopening /dev/null inside container:
 open /dev/null: permission denied
 ```
 
-The device rules allow null. The node exists with mode 0666. Nothing
-about the rule set is wrong, and changing rules cannot fix it. The
-rest of this page is why.
+The device rules allowed null. The node existed with mode 0666.
+Nothing about the rule set was wrong, and changing rules could not
+fix it. The rest of this page is why.
 
 ## Part 1: the pieces, from zero
 
@@ -96,10 +99,10 @@ or 4: read the node, the policy, and the mount table, in that order.
 Conflating the two texts is what turns a one-line mount problem into
 a week of rule archaeology.
 
-## Part 3: why Concord stands on this ground
+## Part 3: why Concord stood on this ground
 
-Follow one container from submit to start and watch where its files
-live. The daemon keeps per-node state under the config directory,
+With the four gates on the table, follow one container from submit
+to start and watch where its files live. The daemon keeps per-node state under the config directory,
 which defaults to `~/.config` and moves wherever `XDG_CONFIG_HOME`
 points. Image layers unpack into
 `$XDG_CONFIG_HOME/concord/bundles/<workload>/rootfs` at pull time.
@@ -117,9 +120,10 @@ not a misconfiguration of devices. It is a misplacement of state.
 
 ## Part 4: how the innocent were eliminated
 
-This actually happened, and the order is worth keeping, because it is
-the runbook for the next `permission denied`. Each suspect below was
-closed with one observation, cheapest first.
+The investigation went suspect by suspect, cheapest first, and the
+order is worth keeping, because it doubles as the runbook for the
+next `permission denied`. Each suspect below was closed with one
+observation.
 
 - Stale binary. The running daemon's hash was compared against a
   fresh build from the same commit. Identical, so the code under test
@@ -186,11 +190,12 @@ controller, because the controller answers `EPERM`.
 
 ## Part 7: what the fix promoted
 
-Moving state off `nodev` did not produce a working container. It
-produced the next failure, and that is the pattern to expect: init
-runs stages in order, so a fixed blocker promotes the failure waiting
-one stage downstream. Each new log line names its stage; read it
-literally instead of reopening the closed case.
+The placement rules closed this incident, but they did not produce
+a working container. They produced the next failure, and that is the
+pattern to expect: init runs stages in order, so a fixed blocker
+promotes the failure waiting one stage downstream. Each new log line
+names its stage; read it literally instead of reopening the closed
+case.
 
 **Empty argv.** The new line was `panic from initialization:
 ... index out of range ... exec.LookPath`: the container process had
