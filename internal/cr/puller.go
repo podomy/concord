@@ -46,13 +46,13 @@ type PullResult struct {
 }
 
 // Pull fetches the image, resolves the platform, and extracts layers
-// into the rootfs directory under bundleDir.
+// into the rootfs directory under bundleDir. A stale rootfs from a
+// previous attempt is removed first so a failed start retries cleanly
+// instead of wedging every later tick on an already-exists error.
+// A failed extraction also removes the partial rootfs for the same
+// reason.
 func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullResult, error) {
 	rootfs := filepath.Join(bundleDir, "rootfs")
-
-	if _, err := os.Stat(rootfs); err == nil {
-		return nil, fmt.Errorf("rootfs already exists at %s", rootfs)
-	}
 
 	tag, err := name.ParseReference(ref)
 	if err != nil {
@@ -74,16 +74,24 @@ func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullRes
 		return nil, fmt.Errorf("image config file: %w", err)
 	}
 
-	if err = os.MkdirAll(rootfs, 0o700); err != nil {
-		return nil, fmt.Errorf("create rootfs: %w", err)
-	}
-
 	layers, err := img.Layers()
 	if err != nil {
 		return nil, fmt.Errorf("get image layers: %w", err)
 	}
 
-	if err := extractLayers(ctx, layers, rootfs); err != nil {
+	err = os.RemoveAll(rootfs)
+	if err != nil {
+		return nil, fmt.Errorf("clear stale rootfs: %w", err)
+	}
+
+	err = os.MkdirAll(rootfs, 0o700)
+	if err != nil {
+		return nil, fmt.Errorf("create rootfs: %w", err)
+	}
+
+	err = extractLayers(ctx, layers, rootfs)
+	if err != nil {
+		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort cleanup so the next tick retries
 		return nil, err
 	}
 
