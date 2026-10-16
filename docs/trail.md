@@ -98,7 +98,9 @@ PUT /v1/nodes/self/position (one fix)
   matching gossip). Scrapers reconstruct trails by polling; gaps in
   scraping are gaps in history. The gauges read the memberlist self
   entry, so scraped points match `node list` exactly, at the cost of one
-  gossip round of staleness behind `SetPosition`.
+  gossip round of staleness behind `SetPosition`. Boot seeds the gossip
+  atomics, ordering, and trail from config; the first discovery
+  `Publish` broadcasts the seeded fix.
 
 ## Gossip vs trail
 
@@ -134,8 +136,11 @@ influences placement.
   of trails is meaningless.
 * Concurrency: fast beat (pressure `Publish`), IPC setter, and IPC reads
   share the sampler and the delegate. Sets are lock-free atomics;
-  `Publish` serializes the read-compare-broadcast; the sampler mutex
-  guards ring, last fix, and sink.
+  `Publish` serializes the read-compare-broadcast; the one sampler mutex
+  guards pressure, samples, trends, logs, ring, last fix, and the track
+  pointer, while the track file has its own mutex. `RecordPosition`
+  releases the sampler lock before the file append so one slow fsync
+  never stalls sampling or reads.
 
 ## Where it lives
 

@@ -213,24 +213,28 @@ func mergeLogLines(a, b []LogLine) []LogLine {
 // and node list, so recording them would plant a Null Island waypoint
 // no node ever visited. Gated points land in the ring and the track log
 // together, so the file always holds everything the ring does and more.
+// The sampler lock covers the ring insert only; the track append runs
+// after unlock so one slow fsync never stalls pressure sampling or reads.
 func (s *Sampler) RecordPosition(pos geo.Point) {
 	if !pos.Valid() || (pos.Lat == 0 && pos.Lon == 0) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.lastFix = pos
 	s.haveFix = true
 	if last, ok := s.path.last(); ok && geo.DistanceKM(last.Pos, pos) < trailMoveKM {
+		s.mu.Unlock()
 		return
 	}
 	now := time.Now()
 	s.path.add(trailPoint{At: now, Pos: pos})
-	if s.track != nil {
+	track := s.track
+	s.mu.Unlock()
+	if track != nil {
 		// Best-effort: the track log is an audit trail, not coordination.
 		// A failed append (full disk) must not break gossip or the ring;
 		// disk trouble already surfaces loudly through journal appends.
-		_ = s.track.Append(now, pos.Lat, pos.Lon) //nolint:errcheck // best-effort audit write
+		_ = track.Append(now, pos.Lat, pos.Lon) //nolint:errcheck // best-effort audit write
 	}
 }
 
