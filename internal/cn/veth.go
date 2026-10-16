@@ -14,8 +14,9 @@ import (
 // 1. One veth pair per container. Created on container start, cleaned up on stop.
 // 2. The host end attached to cn0. The container end moves into the workload's
 // network namespace.
-// 3. Veth names are deterministic. veth-<workload-id>a and veth-<workload-id>b.
-// a is the host side, b is the container side.
+// 3. Veth names are deterministic and short. veth-<first-8-of-workload-id>a
+// and veth-<first-8-of-workload-id>b fit the kernel's 15-character
+// IFNAMSIZ limit. a is the host side, b is the container side.
 // 4. IP assignment happens outside the container's namespace before veth is moved.
 // 5. Cleanup removes both ends. The kernel deletes the container end when its
 // namespace dies, but the host end must be explicitly removed.
@@ -156,6 +157,15 @@ const (
 	VethB VethEnd = "b"
 )
 
+// VethHostName derives the deterministic interface name for one end of a
+// workload's veth pair. Names stay within the kernel's 15-character
+// IFNAMSIZ limit: "veth-" plus the first 8 characters of the workload ID
+// plus the end letter (14 chars for UUID IDs). Short IDs are used whole
+// so test and debug names never panic the slice.
 func VethHostName(containerID string, whichEnd VethEnd) string {
-	return "veth-<" + containerID + ">" + string(whichEnd)
+	short := containerID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return "veth-" + short + string(whichEnd)
 }
