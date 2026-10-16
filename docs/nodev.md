@@ -184,6 +184,50 @@ controller, because the controller answers `EPERM`.
   Refuse early with that message instead of failing every container
   with a line that blames the rules.
 
+## Part 7: what the fix promoted
+
+Moving state off `nodev` did not produce a working container. It
+produced the next failure, and that is the pattern to expect: init
+runs stages in order, so a fixed blocker promotes the failure waiting
+one stage downstream. Each new log line names its stage; read it
+literally instead of reopening the closed case.
+
+**Empty argv.** The new line was `panic from initialization:
+... index out of range ... exec.LookPath`: the container process had
+an empty argv. The submit ran `workload run <image>` with no command,
+and the reconciler passed the empty spec command straight through
+with no fallback to the image default. It never appeared before
+because reopening `/dev/null` runs before the argv lookup: the nodev
+denial killed every run at the earlier stage and masked this one. The
+fix defaults a commandless submit to the image entrypoint plus cmd
+(the contract in `docs/cli.md`); both empty is a logged build error,
+never an empty argv. See `buildProcess` in
+`internal/reconciler/reconciler.go`.
+
+**Stale bundle.** After the first start failure, every later tick
+failed at `pull image: rootfs already exists`. The bundle directory
+was never reused or cleaned, so a workload whose start failed once
+could never retry: every transient start failure became permanent.
+Pull now removes the stale rootfs after resolving the image (and the
+partial tree when extraction fails), and a failed start destroys its
+created container so the next tick recreates instead of wedging. See
+`Pull` in `internal/cr/puller.go` and `startContainer` in
+`internal/reconciler/reconciler.go`.
+
+**Overlong veth name.** The failure moved to `create veth pair: ...
+link add: numerical result out of range`. The host name wrapped the
+full 36-char workload ID in brackets: 44 chars against the kernel's
+15-char interface limit (`IFNAMSIZ`), so link creation failed with
+`ERANGE` on any machine before the netns or bridge was consulted.
+Names are now `veth-` plus the first 8 ID chars plus the end letter,
+14 chars, mirroring the WireGuard naming in the same package. See
+`VethHostName` in `internal/cn/veth.go`.
+
+Together the session carried one container from pull through init to
+networking. The next failure, when it comes, will sit past link
+creation (bridge attach, address, netns move): read the stage from
+the new line, fix that stage, and expect the one after.
+
 ## Where it lives
 
 Bundle placement (`bundleDirPath` in
