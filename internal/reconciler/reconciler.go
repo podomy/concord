@@ -492,10 +492,18 @@ func startContainer(
 		return
 	}
 
-	proc := buildProcess(spec, pullResult, sampler)
+	proc, err := buildProcess(spec, pullResult, sampler)
+	if err != nil {
+		logger.Error("build process", zap.Error(err))
+		return
+	}
 	processHandle, err := runtime.Start(ctr, proc)
 	if err != nil {
 		logger.Error("start container", zap.Error(err))
+		destroyErr := ctr.Destroy()
+		if destroyErr != nil {
+			logger.Error("destroy container on start failure", zap.Error(destroyErr))
+		}
 		return
 	}
 
@@ -679,9 +687,28 @@ func countRunning(running map[uuid.UUID]*ContainerAndProcess) int {
 }
 
 // buildProcess constructs a libcontainer Process from the spec and image config.
-// Container output flows into the sampler's per-workload log rings; a nil
+// A spec command overrides the image default wholesale; an empty spec
+// command falls back to the image entrypoint plus cmd, which is the
+// standard container contract for a commandless submit. Both empty is a
+// caller-visible error so runc never sees an empty argv. Container
+// output flows into the sampler's per-workload log rings; a nil
 // sampler leaves writers unset and output discards as before.
-func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampler) *libcontainer.Process {
+func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampler) (*libcontainer.Process, error) {
+	args := spec.Command
+	if len(args) == 0 {
+		if result == nil || result.Config == nil {
+			return nil, fmt.Errorf("workload %s has no command and no image config to fall back to", spec.ID)
+		}
+		img := result.Config.Config
+		fallback := make([]string, 0, len(img.Entrypoint)+len(img.Cmd))
+		fallback = append(fallback, img.Entrypoint...)
+		fallback = append(fallback, img.Cmd...)
+		if len(fallback) == 0 {
+			return nil, fmt.Errorf("workload %s has no command and image %q sets no entrypoint or cmd", spec.ID, spec.Image)
+		}
+		args = fallback
+	}
+
 	env := result.Config.Config.Env
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
@@ -693,7 +720,7 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 	}
 
 	proc := &libcontainer.Process{
-		Args: spec.Command,
+		Args: args,
 		Env:  env,
 		Cwd:  cwd,
 		// Init selects the container-creation path: the init process
@@ -708,7 +735,7 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 		proc.Stderr = sampler.LogWriter(spec.ID, node.LogStderr)
 	}
 
-	return proc
+	return proc, nil
 }
 
 // recordInstanceEvent writes a workload instance state event to the journal

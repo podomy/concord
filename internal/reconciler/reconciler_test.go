@@ -300,7 +300,10 @@ func TestBuildProcessAttachesLogWriters(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Command: []string{"/bin/true"}}
 	result := &cr.PullResult{Config: &v1.ConfigFile{}}
 
-	proc := buildProcess(spec, result, node.NewSampler())
+	proc, err := buildProcess(spec, result, node.NewSampler())
+	if err != nil {
+		t.Fatalf("build process: %v", err)
+	}
 	if proc.Stdout == nil || proc.Stderr == nil {
 		t.Fatal("expected log writers attached")
 	}
@@ -308,9 +311,62 @@ func TestBuildProcessAttachesLogWriters(t *testing.T) {
 		t.Fatal("initial process must take the init path, not setns join")
 	}
 
-	plain := buildProcess(spec, result, nil)
+	plain, err := buildProcess(spec, result, nil)
+	if err != nil {
+		t.Fatalf("build process without sampler: %v", err)
+	}
 	if plain.Stdout != nil || plain.Stderr != nil {
 		t.Fatal("expected unset writers without sampler")
+	}
+}
+
+// A commandless submit runs the image default: entrypoint plus cmd.
+// This is the standard container contract the probe image relies on.
+func TestBuildProcessFallsBackToImageEntrypoint(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), Image: "probe:latest"}
+	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result.Config.Config.Entrypoint = []string{"/probe"}
+	result.Config.Config.Cmd = []string{"--serve"}
+
+	proc, err := buildProcess(spec, result, nil)
+	if err != nil {
+		t.Fatalf("build process: %v", err)
+	}
+	want := []string{"/probe", "--serve"}
+	if len(proc.Args) != len(want) || proc.Args[0] != want[0] || proc.Args[1] != want[1] {
+		t.Fatalf("args = %v, want %v", proc.Args, want)
+	}
+}
+
+// An explicit spec command overrides the image default wholesale.
+func TestBuildProcessSpecCommandWins(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), Command: []string{"/bin/sh", "-c", "x"}}
+	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result.Config.Config.Entrypoint = []string{"/probe"}
+
+	proc, err := buildProcess(spec, result, nil)
+	if err != nil {
+		t.Fatalf("build process: %v", err)
+	}
+	if len(proc.Args) != 3 || proc.Args[0] != "/bin/sh" {
+		t.Fatalf("args = %v, want spec command", proc.Args)
+	}
+}
+
+// No spec command and no image default is a plain error at build time,
+// never an empty argv reaching runc init.
+func TestBuildProcessRejectsEmptyCommand(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), Image: "empty:latest"}
+	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+
+	_, err := buildProcess(spec, result, nil)
+	if err == nil {
+		t.Fatal("expected error for empty command and empty image default")
+	}
+
+	_, err = buildProcess(spec, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for empty command and nil pull result")
 	}
 }
 
