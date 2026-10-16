@@ -83,6 +83,8 @@ chmod 600 ~/.config/concord/certs/ca.key
 
 > **Custom Config Directory**: Concord adheres to the XDG Base Directory specification. You can override the base configuration directory by setting the `XDG_CONFIG_HOME` environment variable (e.g. `export XDG_CONFIG_HOME=/etc` will store certificates in `/etc/concord/certs`).
 
+> **State needs a dev-capable filesystem**: bundles unpack under `<config>/concord/bundles`, and container device nodes are created inside them. A config directory on a `nodev` mount (the `/tmp` tmpfs on most systems) makes every container fail opening `/dev/null` with `permission denied`, which reads like a device-rule bug but involves no rule. Keep `XDG_CONFIG_HOME` on the system volume; see `docs/nodev.md` for the full diagnosis.
+
 When Concord starts:
 1. It verifies that the shared `ca.crt` and `ca.key` exist.
 2. It generates a long-term X25519 static keypair (`~/.config/concord/noise/secret.key`, created once and reused) and signs the binding of node ID, key generation, and public key with the shared CA.

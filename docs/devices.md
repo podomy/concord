@@ -41,6 +41,24 @@ that needs write commands must not discover the refusal at 3 AM.
 Per-device trimming would rebuild the policy complexity this default
 exists to avoid.
 
+## The ground counts too: no nodev under bundles
+
+A device open passes four gates and the rule set is only the first:
+the cgroup program, the node's own bits, mandatory-access policy,
+and the mount flags holding the node. A cgroup refusal reads
+`operation not permitted`; anything else reads `permission denied`.
+The filesystem gate is the trap: a `nodev` mount lets `mknod`
+succeed and refuses every open, so the node exists at 0666 with an
+allowing program and still fails. Bundles live under the config
+directory, so aiming `XDG_CONFIG_HOME` at a `nodev` mount (the `/tmp`
+tmpfs on most systems) kills every container on `/dev/null` with a
+line identical to a rule bug. The full story, including the errno
+discriminator and the elimination runbook, is `docs/nodev.md`.
+
+Operational rule: keep the config directory on the system volume.
+The `~/.config` default is fine; `/var/tmp` works for harnesses.
+Never aim `XDG_CONFIG_HOME` at `/tmp`.
+
 ## What stays out, and why
 
 ```
@@ -155,4 +173,6 @@ Deny lists and scan (`deniedDeviceNames`, `deniedDevicePrefixes`,
 `scanDevices` in `internal/cr/bundle.go`), node/rule split
 (`splitDevices`, same file), libcontainer application
 (`configs.Config.Devices` plus `Resources.Devices`, applied by runc's
-device cgroup controller).
+device cgroup controller), bundle placement (`bundleDirPath` in
+`internal/reconciler/reconciler.go`: bundles must sit on a
+dev-capable filesystem, see above).
