@@ -71,6 +71,18 @@ concord workload run -e ENV=prod -e DB_HOST=10.0.0.5 --memory 512 redis:alpine
 concord workload run alpine:latest /bin/sh -c "while true; do echo hello; sleep 5; done"
 ```
 
+**Omitting the command runs the image default.** The `[command...]`
+is optional: without it the container starts the image's own
+entrypoint plus cmd (what the image author set with `ENTRYPOINT` and
+`CMD`). `concord workload run probe:latest` starts `/probe` because
+the image says so, not because the CLI guessed. A command on the line
+replaces that default wholesale; nothing is appended. An image that
+sets neither entrypoint nor cmd, combined with no command on the line,
+fails the start with a logged `build process` error and retries next
+tick: an empty argv would panic container init, so the reconciler
+refuses to build one. See `buildProcess` in
+`internal/reconciler/reconciler.go`.
+
 ---
 
 ### List Workloads

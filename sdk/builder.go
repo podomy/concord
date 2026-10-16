@@ -60,6 +60,7 @@ func (b *Builder) Image(image string) *Builder {
 }
 
 // Command sets the entrypoint and argument list override for the container process.
+// Empty keeps the image default: entrypoint plus cmd resolve at start time.
 func (b *Builder) Command(cmd ...string) *Builder {
 	b.workload.Command = slices.Clone(cmd)
 
