@@ -50,6 +50,14 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	if len(r.Question) == 0 {
+		// Construct the error response.
+		msg.SetRcodeFormatError(r)
+
+		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
+		return
+	}
+
 	switch r.Question[0].Qtype {
 	case dns.TypeSRV:
 		h.populateSRV(&msg, nodes, r.Question[0].Name)
