@@ -28,7 +28,7 @@ rm concord-linux-amd64.zip
 ### 2. Build from Source
 
 ```bash
-go install github.com/podomy/concord@latest
+go install github.com/podomy/concord/cmd/concord@latest
 ```
 
 ---
