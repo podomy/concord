@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/concordlogo.png" alt="Concord" width="60%">
+  <img src="./assets/concordlogo.png" alt="Concord" width="40%">
 </p>
 
 <p align="center">
