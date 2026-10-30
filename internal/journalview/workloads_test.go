@@ -6,10 +6,10 @@ package journalview
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/internal/journal"
@@ -47,8 +47,8 @@ func TestWorkloadsApplyAndGet(t *testing.T) {
 	if got == nil {
 		t.Fatalf("expected spec, got nil")
 	}
-	if diff := cmp.Diff(spec, *got); diff != "" {
-		t.Fatalf("spec mismatch (-want +got):\n%s", diff)
+	if !reflect.DeepEqual(spec, *got) {
+		t.Fatalf("spec mismatch: want %#v got %#v", spec, *got)
 	}
 }
 
@@ -200,12 +200,16 @@ func TestWorkloadsList(t *testing.T) {
 		t.Fatalf("expected 2 specs, got %d", len(specs))
 	}
 
-	sortByID := cmpopts.SortSlices(func(a, b workload.Spec) bool {
-		return a.ID.String() < b.ID.String()
-	})
+	sortSpecsByID := func(specs []workload.Spec) {
+		sort.Slice(specs, func(i, j int) bool {
+			return specs[i].ID.String() < specs[j].ID.String()
+		})
+	}
 	expected := []workload.Spec{spec1, spec2}
-	if diff := cmp.Diff(expected, specs, sortByID); diff != "" {
-		t.Fatalf("list mismatch (-want +got):\n%s", diff)
+	sortSpecsByID(expected)
+	sortSpecsByID(specs)
+	if !reflect.DeepEqual(expected, specs) {
+		t.Fatalf("list mismatch: want %#v got %#v", expected, specs)
 	}
 }
 

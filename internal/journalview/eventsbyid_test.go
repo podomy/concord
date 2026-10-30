@@ -6,10 +6,10 @@ package journalview
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/internal/journal"
@@ -127,12 +127,16 @@ func TestEventsByIDList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("view list: %v", err)
 	}
-	sortEventsByTimestamp := cmpopts.SortSlices(func(a, b journal.Event) bool { return a.Timestamp.After(b.Timestamp) })
+	sortEventsByTimestamp := func(events []journal.Event) {
+		sort.Slice(events, func(i, j int) bool { return events[i].Timestamp.After(events[j].Timestamp) })
+	}
 	// We compare the journals exactly, and before comparing them we sort them
 	// in order, because bbolt cursor returns the events in unordered slice.
 	// If we don't order both we get an error of the slices not matching.
-	if diff := cmp.Diff(sampleJournalEvents, journalEvents, sortEventsByTimestamp); diff != "" {
-		t.Fatalf("events mismatch (-want +got):\n%s", diff)
+	sortEventsByTimestamp(sampleJournalEvents)
+	sortEventsByTimestamp(journalEvents)
+	if !reflect.DeepEqual(sampleJournalEvents, journalEvents) {
+		t.Fatalf("events mismatch: want %#v got %#v", sampleJournalEvents, journalEvents)
 	}
 }
 

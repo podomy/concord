@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -145,9 +144,8 @@ func TestIPCSubmitAndGet(t *testing.T) {
 		t.Fatalf("get workload: %v", err)
 	}
 
-	diff := cmp.Diff(id, got.ID)
-	if diff != "" {
-		t.Fatalf("workload ID mismatch (-want +got):\n%s", diff)
+	if id != got.ID {
+		t.Fatalf("workload ID mismatch: want %s got %s", id, got.ID)
 	}
 }
 
