@@ -35,8 +35,8 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/node"
-	"github.com/podomy/concord/internal/or"
 	"github.com/podomy/concord/internal/peerdiscovery"
+	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/internal/workload"
 	"github.com/podomy/concord/sdk/fileart"
 )
@@ -427,7 +427,7 @@ func cleanupContainerStartFailure(logger *zap.Logger, ctr *libcontainer.Containe
 // Loopback only: artifacts never cross the network except through the
 // registry's own peer sync.
 func registryAddr() string {
-	return "127.0.0.1:" + strconv.Itoa(or.Port)
+	return "127.0.0.1:" + strconv.Itoa(registry.Port)
 }
 
 // startContainer pulls the image, builds the bundle, creates the container,

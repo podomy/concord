@@ -22,10 +22,10 @@ import (
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
-	"github.com/podomy/concord/internal/or"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/peersync"
 	"github.com/podomy/concord/internal/reconciler"
+	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/internal/transport"
 )
 
@@ -176,7 +176,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 			err,
 		)
 	}
-	defer ocireg.Stop()
+	defer ocireg.Stop() //nolint:contextcheck // Stop owns a 5s shutdown timeout; Run ctx may already be cancelled
 
 	// Start local IPC server for CLI and SDK access.
 	ipcServer := ipc.NewServer(
@@ -299,7 +299,7 @@ func startWorkloadInfrastructure(
 	workloads *journalview.Workloads,
 	views []journalview.View,
 	sampler *node.Sampler,
-) (*or.Registry, error) {
+) (*registry.Registry, error) {
 	// Start the OCI registry.
 	ocireg, err := startOCIRegistry(
 		ctx,
@@ -312,7 +312,7 @@ func startWorkloadInfrastructure(
 	}
 	logger.Info(
 		"oci registry started",
-		zap.Int("port", or.Port),
+		zap.Int("port", registry.Port),
 	)
 
 	// Start the workload reconciler loop.
@@ -348,7 +348,7 @@ func startWorkloadAndNetwork(
 	views []journalview.View,
 	wgKey cn.Key,
 	sampler *node.Sampler,
-) (*or.Registry, error) {
+) (*registry.Registry, error) {
 	ocireg, err := startWorkloadInfrastructure(
 		ctx,
 		nodeID,
@@ -858,8 +858,8 @@ func startOCIRegistry(
 	nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService,
 	logger *zap.Logger,
-) (*or.Registry, error) {
-	ocireg, err := or.New(nodeID)
+) (*registry.Registry, error) {
+	ocireg, err := registry.New(nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("oci registry new: %w", err)
 	}

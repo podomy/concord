@@ -17,7 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/podomy/concord/internal/or"
+	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/sdk"
 	"github.com/podomy/concord/sdk/fileart"
 )
@@ -235,7 +235,7 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 	// digests only, and a failed push fails the run instead of
 	// submitting a workload that can never start.
 	if len(rf.fileFlags) > 0 {
-		artifacts := fileart.NewClient("127.0.0.1:" + strconv.Itoa(or.Port))
+		artifacts := fileart.NewClient("127.0.0.1:" + strconv.Itoa(registry.Port))
 		for _, flag := range rf.fileFlags {
 			ref, err := pushFileFlag(ctx, artifacts, flag)
 			if err != nil {

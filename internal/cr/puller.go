@@ -19,7 +19,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/podomy/concord/internal/or"
+	"github.com/podomy/concord/internal/registry"
 )
 
 // Puller a definition of an interface that is required to be a puller.
@@ -27,15 +27,15 @@ type Puller interface {
 	Pull(ctx context.Context, image, bundleDir string) (*PullResult, error)
 }
 
-// ImagePuller pulls OCI container images from the local zot registry
+// ImagePuller pulls OCI container images from the local registry
 // at localhost:8444 and extracts them into rootfs directories.
 type ImagePuller struct {
 	registry string
 }
 
-// NewImagePuller creates an ImagePuller targeting the local zot instance.
+// NewImagePuller creates an ImagePuller targeting the local registry instance.
 func NewImagePuller() *ImagePuller {
-	return &ImagePuller{registry: "localhost:" + strconv.Itoa(or.Port)}
+	return &ImagePuller{registry: "localhost:" + strconv.Itoa(registry.Port)}
 }
 
 // PullResult contains the extracted rootfs path and the image configuration

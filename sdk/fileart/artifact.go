@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package fileart pushes and pulls file artifacts through any OCI
-// distribution registry, including Concord's embedded zot. Every file
+// distribution registry, including Concord's embedded registry. Every file
 // a workload needs persisted becomes one artifact: the exact bytes as
 // a blob plus a manifest referencing it, under the concord-files repo.
 // The registry syncs tagged repos peer to peer, so artifacts replicate
@@ -10,6 +10,15 @@
 //
 // This package is stdlib-only on purpose: SDK users, the CLI, and the
 // daemon share this one implementation instead of three copies.
+//
+// Wire stays monolithic OCI for compat: HEAD blob exists, POST upload
+// with digest, PUT manifest, GET blob. Fileart does no chunking; the
+// store and sync layer chunk transparently so every peer sees identical
+// requests. Fileart never reads the registry data dir directly (the sdk
+// module cannot import internal stores). Pulls stream with flat memory
+// into a temp file beside dest and rename only after the digest
+// verifies, so an interrupted pull leaves nothing behind and a retry
+// converges on identical bytes.
 package fileart
 
 import (
@@ -59,6 +68,8 @@ type File struct {
 // blob existence, monolithic blob upload, manifest put, blob get.
 // No request timeout: large blobs over slow links take as long as
 // they take, and the caller's context bounds the wait instead.
+// Every operation goes over HTTP with no local shortcut, so pulls
+// and pushes replicate through the registry like any other peer.
 type Client struct {
 	base string
 	http *http.Client
@@ -145,6 +156,8 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 // through the hasher into a temp file, and only a verified complete file
 // ever appears at dest. A mismatch deletes the temp file and fails;
 // the temp file lives beside dest so the rename never crosses devices.
+// Cancelling the context aborts the copy and removes the temp file,
+// so a later retry starts clean and converges on identical bytes.
 func (c *Client) PullTo(ctx context.Context, digest, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/blobs/"+digest, nil)
 	if err != nil {

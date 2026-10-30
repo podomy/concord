@@ -20,8 +20,8 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/podomy/concord/internal/or"
 	"github.com/podomy/concord/internal/peerdiscovery"
+	"github.com/podomy/concord/internal/registry"
 )
 
 // fakeRegistry is a minimal OCI distribution server: blob existence,
@@ -276,11 +276,11 @@ func TestPushPullAgainstRealZot(t *testing.T) {
 		}
 	})
 
-	oldPort := or.Port
-	or.Port = 18444
-	t.Cleanup(func() { or.Port = oldPort })
+	oldPort := registry.Port
+	registry.Port = 18444
+	t.Cleanup(func() { registry.Port = oldPort })
 
-	registry, err := or.New(uuid.New())
+	registry, err := registry.New(uuid.New())
 	if err != nil {
 		t.Fatalf("new registry: %v", err)
 	}
