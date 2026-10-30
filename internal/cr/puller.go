@@ -9,15 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 
 	"github.com/podomy/concord/internal/registry"
 )
@@ -33,7 +29,7 @@ type ImagePuller struct {
 	registry string
 }
 
-// NewImagePuller creates an ImagePuller targeting the local registry instance.
+// NewImagePuller creates an ImagePuller targeting the local registry.
 func NewImagePuller() *ImagePuller {
 	return &ImagePuller{registry: "localhost:" + strconv.Itoa(registry.Port)}
 }
@@ -41,7 +37,7 @@ func NewImagePuller() *ImagePuller {
 // PullResult contains the extracted rootfs path and the image configuration
 // for use by the bundle builder.
 type PullResult struct {
-	Config *v1.ConfigFile
+	Config *ConfigFile
 	RootFS string
 }
 
@@ -54,29 +50,21 @@ type PullResult struct {
 func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullResult, error) {
 	rootfs := filepath.Join(bundleDir, "rootfs")
 
-	tag, err := name.ParseReference(ref)
+	parsed, err := parseImageReference(ref)
 	if err != nil {
 		return nil, fmt.Errorf("parse image reference: %w", err)
 	}
 
-	desc, err := remote.Get(tag, remote.WithAuth(authn.Anonymous))
+	client := &http.Client{}
+
+	configDigest, layerDigests, err := fetchImageManifest(ctx, client, parsed)
 	if err != nil {
-		return nil, fmt.Errorf("remote get: %w", err)
+		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
 
-	img, err := desc.Image()
-	if err != nil {
-		return nil, fmt.Errorf("image descriptor: %w", err)
-	}
-
-	cfg, err := img.ConfigFile()
+	cfg, err := fetchImageConfig(ctx, client, parsed, configDigest)
 	if err != nil {
 		return nil, fmt.Errorf("image config file: %w", err)
-	}
-
-	layers, err := img.Layers()
-	if err != nil {
-		return nil, fmt.Errorf("get image layers: %w", err)
 	}
 
 	err = os.RemoveAll(rootfs)
@@ -89,7 +77,7 @@ func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullRes
 		return nil, fmt.Errorf("create rootfs: %w", err)
 	}
 
-	err = extractLayers(ctx, layers, rootfs)
+	err = extractLayers(ctx, client, parsed, layerDigests, rootfs)
 	if err != nil {
 		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort cleanup so the next tick retries
 		return nil, err
@@ -114,26 +102,22 @@ func extractTar(ctx context.Context, r io.Reader, root string) error {
 			return fmt.Errorf("tar reader: %w", err)
 		}
 
-		if err := extractEntry(tr, hdr, root); err != nil {
+		if err := extractEntry(ctx, tr, hdr, root); err != nil {
 			return err
 		}
 	}
 }
 
-// extractLayers extracts all image layers into rootfs.
-func extractLayers(ctx context.Context, layers []v1.Layer, rootfs string) error {
-	for _, layer := range layers {
-		rc, err := layer.Uncompressed()
-		if err != nil {
-			return fmt.Errorf("layer uncompressed: %w", err)
+// extractLayers downloads each layer blob in order and extracts it into rootfs.
+func extractLayers(ctx context.Context, client *http.Client, ref imageReference, digests []string, rootfs string) error {
+	for _, digest := range digests {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("context cancelled: %w", err)
 		}
 
-		extractErr := extractTar(ctx, rc, rootfs)
-		if closeErr := rc.Close(); closeErr != nil && extractErr == nil {
-			return fmt.Errorf("close layer reader: %w", closeErr)
-		}
-		if extractErr != nil {
-			return fmt.Errorf("extract layer: %w", extractErr)
+		err := extractLayerBlob(ctx, client, ref, digest, rootfs)
+		if err != nil {
+			return fmt.Errorf("extract layer: %w", err)
 		}
 	}
 	return nil
@@ -141,7 +125,7 @@ func extractLayers(ctx context.Context, layers []v1.Layer, rootfs string) error 
 
 // extractEntry handles a single tar entry, dispatching to the appropriate
 // handler based on type and checking for OCI whiteouts first.
-func extractEntry(tr *tar.Reader, hdr *tar.Header, root string) error {
+func extractEntry(ctx context.Context, tr *tar.Reader, hdr *tar.Header, root string) error {
 	name := filepath.Clean(hdr.Name)
 	path := filepath.Join(root, name)
 	if !strings.HasPrefix(path, filepath.Clean(root)+string(os.PathSeparator)) {
@@ -167,9 +151,9 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, root string) error {
 	case tar.TypeDir:
 		return extractDir(path, hdr)
 	case tar.TypeReg:
-		return extractFile(tr, path, hdr)
+		return extractFile(ctx, tr, path, hdr)
 	case tar.TypeSymlink:
-		return extractSymlink(path, hdr)
+		return extractSymlink(path, hdr, root)
 	case tar.TypeLink:
 		return extractHardLink(path, hdr, root)
 	default:
@@ -186,7 +170,7 @@ func extractDir(path string, hdr *tar.Header) error {
 }
 
 // extractFile creates a regular file at path and copies content from the tar reader.
-func extractFile(tr *tar.Reader, path string, hdr *tar.Header) error {
+func extractFile(ctx context.Context, tr *tar.Reader, path string, hdr *tar.Header) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir parent %q: %w", path, err)
 	}
@@ -202,6 +186,12 @@ func extractFile(tr *tar.Reader, path string, hdr *tar.Header) error {
 		return fmt.Errorf("write file %q: %w", path, err)
 	}
 
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		_ = f.Close() //nolint:errcheck // best-effort close on cancel
+		return fmt.Errorf("context cancelled: %w", ctxErr)
+	}
+
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close file %q: %w", path, err)
 	}
@@ -209,8 +199,20 @@ func extractFile(tr *tar.Reader, path string, hdr *tar.Header) error {
 	return nil
 }
 
-// extractSymlink creates a symbolic link.
-func extractSymlink(path string, hdr *tar.Header) error {
+// extractSymlink creates a symbolic link. Absolute targets and targets
+// resolving outside root are rejected to keep links inside the rootfs.
+func extractSymlink(path string, hdr *tar.Header, root string) error {
+	if hdr.Linkname == "" {
+		return fmt.Errorf("symlink %q has empty target", hdr.Name)
+	}
+	if filepath.IsAbs(hdr.Linkname) {
+		return fmt.Errorf("symlink target %q escapes root", hdr.Linkname)
+	}
+	target := filepath.Join(filepath.Dir(path), hdr.Linkname) //nolint:gosec // target is validated below to stay inside root
+	cleanRoot := filepath.Clean(root)
+	if target != cleanRoot && !strings.HasPrefix(target, cleanRoot+string(os.PathSeparator)) {
+		return fmt.Errorf("symlink target %q escapes root", hdr.Linkname)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir parent for symlink %q: %w", path, err)
 	}

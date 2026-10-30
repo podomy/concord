@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
@@ -298,7 +297,7 @@ func TestRecordInstanceEventAppliesViews(t *testing.T) {
 // leaves writers unset and output discards as before.
 func TestBuildProcessAttachesLogWriters(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Command: []string{"/bin/true"}}
-	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result := &cr.PullResult{Config: &cr.ConfigFile{}}
 
 	proc, err := buildProcess(spec, result, node.NewSampler())
 	if err != nil {
@@ -324,7 +323,7 @@ func TestBuildProcessAttachesLogWriters(t *testing.T) {
 // This is the standard container contract the probe image relies on.
 func TestBuildProcessFallsBackToImageEntrypoint(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Image: "probe:latest"}
-	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result := &cr.PullResult{Config: &cr.ConfigFile{}}
 	result.Config.Config.Entrypoint = []string{"/probe"}
 	result.Config.Config.Cmd = []string{"--serve"}
 
@@ -341,7 +340,7 @@ func TestBuildProcessFallsBackToImageEntrypoint(t *testing.T) {
 // An explicit spec command overrides the image default wholesale.
 func TestBuildProcessSpecCommandWins(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Command: []string{"/bin/sh", "-c", "x"}}
-	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result := &cr.PullResult{Config: &cr.ConfigFile{}}
 	result.Config.Config.Entrypoint = []string{"/probe"}
 
 	proc, err := buildProcess(spec, result, nil)
@@ -357,7 +356,7 @@ func TestBuildProcessSpecCommandWins(t *testing.T) {
 // never an empty argv reaching runc init.
 func TestBuildProcessRejectsEmptyCommand(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Image: "empty:latest"}
-	result := &cr.PullResult{Config: &v1.ConfigFile{}}
+	result := &cr.PullResult{Config: &cr.ConfigFile{}}
 
 	_, err := buildProcess(spec, result, nil)
 	if err == nil {
