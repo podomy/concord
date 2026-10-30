@@ -144,16 +144,6 @@ linters:
     wrapcheck:
       ignore-sigs:
         - .Errorf(
-  # Intentional monorepo lockstep: root always builds against ./sdk via
-  # go.work, and the go.mod replace keeps go mod tidy resolving the
-  # workspace sdk instead of the pinned proxy version. Approved exception
-  # for this one replace line only.
-  exclusions:
-    rules:
-      - path: go\.mod$
-        linters:
-          - gomoddirectives
-        text: "local replacement"
 
 issues:
   max-issues-per-linter: 0
