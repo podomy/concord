@@ -4,6 +4,7 @@
 package fileart
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -247,11 +248,11 @@ func TestMaterializeRejectsBadPaths(t *testing.T) {
 	}
 }
 
-// Push and pull against the real embedded zot: this proves the exact
+// Push and pull against the real embedded registry: this proves the exact
 // request shapes (monolithic upload with digest query, manifest with a
 // custom layer type under a tag, HEAD semantics) are accepted by the
 // registry Concord actually runs, not just the fake.
-func TestPushPullAgainstRealZot(t *testing.T) {
+func TestPushPullAgainstRealRegistry(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
@@ -280,16 +281,16 @@ func TestPushPullAgainstRealZot(t *testing.T) {
 	registry.Port = 18444
 	t.Cleanup(func() { registry.Port = oldPort })
 
-	registry, err := registry.New(uuid.New())
+	reg, err := registry.New(uuid.New())
 	if err != nil {
 		t.Fatalf("new registry: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := registry.Start(ctx, peerService, zap.NewNop()); err != nil {
+	if err := reg.Start(ctx, peerService, zap.NewNop()); err != nil {
 		t.Fatalf("start registry: %v", err)
 	}
-	defer registry.Stop()
+	defer reg.Stop()
 
 	client := NewClient("127.0.0.1:18444")
 
@@ -301,14 +302,14 @@ func TestPushPullAgainstRealZot(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("push against real zot: %v", err)
+			t.Fatalf("push against real registry: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	dest := filepath.Join(t.TempDir(), "out")
 	if err := client.PullTo(ctx, digest, dest); err != nil {
-		t.Fatalf("pull against real zot: %v", err)
+		t.Fatalf("pull against real registry: %v", err)
 	}
 	got, err := os.ReadFile(dest)
 	if err != nil {
@@ -346,4 +347,72 @@ func bytesRepeat(n int) []byte {
 		out[i] = 0x07
 	}
 	return out
+}
+
+// A 5MB blob round-trips byte-identical through the fake registry.
+// The pull path streams through a temp file with flat memory, never
+// buffering the whole blob, and the digest names the exact bytes.
+func TestPushPullLargeBlob(t *testing.T) {
+	t.Parallel()
+
+	client, _ := dialFake(t)
+	ctx := t.Context()
+
+	const size = 5 << 20
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte((i * 31) % 251)
+	}
+
+	digest, err := client.Push(ctx, data)
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if digest != digestOf(data) {
+		t.Fatalf("digest = %q, want content hash", digest)
+	}
+
+	dest := filepath.Join(t.TempDir(), "out")
+	if err := client.PullTo(ctx, digest, dest); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != size {
+		t.Fatalf("size = %d, want %d", info.Size(), size)
+	}
+	got, err := os.ReadFile(dest) //nolint:gosec // test reads a file it just pulled
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("pulled bytes differ from pushed bytes")
+	}
+}
+
+// A cancelled context aborts the pull and leaves no file behind,
+// so the next tick retries idempotently instead of resuming garbage.
+func TestPullToRespectsCancel(t *testing.T) {
+	t.Parallel()
+
+	client, _ := dialFake(t)
+	ctx := t.Context()
+
+	digest, err := client.Push(ctx, []byte("cancel me"))
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+
+	dest := filepath.Join(t.TempDir(), "out")
+	if err := client.PullTo(cancelled, digest, dest); err == nil {
+		t.Fatal("expected context error")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("cancelled pull left %s behind", dest)
+	}
 }
