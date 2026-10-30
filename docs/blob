@@ -1,0 +1,88 @@
+Blob Store and Sync
+
+The blob store holds file bytes and image layers. Specs carry digests only,
+so the journal stays pointers-only at any size. See docs/files for use from
+CLI, SDK, and reconciler, and docs/architecture for registry placement in
+data flow.
+
+Store shape
+
+Blobs split into 256KB chunks. Each chunk hashes with sha256; the root is
+sha256 over the joined chunk hex digests. A manifest binds version,
+chunkSize, totalSize, ordered chunk list, and root. Readers stream one
+verified chunk at a time, so memory stays flat.
+
+Limits: raw in-memory reads cap at 32MB, manifests cap at 1MB, chunked blobs
+scale to 32GB on the wire. The registry keeps a 10MB manifest cap for OCI
+compat; sync enforces 1MB for chunked manifests.
+
+Two repos, one namespace
+
+File artifacts use concord-files on the wire (monolithic OCI for compat).
+Chunk sync state uses concord-blobs (one tag per replicated root as the peer
+publish index). Serving is repo-independent: the registry answers a content
+digest from its blob namespace no matter which repo pushed it, so one
+canonical fetch prefix reaches every blob on the peer.
+
+Wire verbs
+
+HEAD and GET blobs, POST uploads with digest query, PUT and GET manifests,
+GET tags list. Status codes follow distribution conventions: 200 on hit, 201
+on upload or manifest put, 400 on bad digest or tag, 404 on unknown blob or
+manifest, 413 over size caps.
+
+Sync tick
+
+Anti-entropy runs every 5s, mirroring the journal pull cadence
+(internal/peersync blobPullInterval). Each tick tries wanted digests first,
+then peer-published tags, against alive peers in rotated order. Worker starts
+stagger by 100ms slots plus 0-200ms jitter, with at most 4 concurrent fetches
+and 8 roots per tick, so one far-behind peer cannot starve the loop.
+
+Two shapes replicate. Chunked roots arrive as manifest plus chunks. Raw
+content digests (file bytes, image layers) arrive as one stream, split
+locally into fixed pieces, and publish as an alias manifest so later ticks
+use the resumable chunked path. Each digest comes from the first peer that
+serves it; there is no all to all exchange.
+
+Cursors
+
+Blob cursors record next chunk index per peer and root in bbolt
+(blobcursors bucket, memory mirror for tests). Saves only advance, never
+retreat, so restarts and partitions resume mid-blob instead of refetching
+from chunk zero. A corrupt entry self-heals to zero and retries.
+
+Blocking rule
+
+A missing blob blocks its workload by design. Ensure reports an error until
+every wanted digest is complete, and the reconciler must not start before
+Ensure returns nil. The miss path fails the pull, aborts the start, and
+retries next tick, with Ensure as a fast-path nudge over the background tick.
+A digest that never arrives blocks that workload indefinitely on a partition:
+half-provisioned is worse than waiting.
+
+Depot doctrine
+
+Treat bulk bytes as freight, not signal. Stage large models at the depot
+anchor over wire before the mission, pre-warm nodes while charging so
+rollouts cost nothing, stagger version rollouts across groups sharing one
+cell, and measure a full-size push over the real link before changing
+protocol (see docs/deployment).
+
+Closed durables and bind
+
+There are exactly four durable things: journal, kv store (bbolt views plus
+sync cursors), blob store (chunks, content-addressed), track file. Clients
+use 127.0.0.1 loopback on registry port 8444; the registry binds 0.0.0.0 on
+the same port so peers sync over the mesh with no second listener.
+
+Caps
+
+  chunk size: 256KB (blob.ChunkSize)
+  manifest JSON sync and store readback: 1MB
+  registry manifest compat: 10MB
+  raw in-memory (GetRaw, MaxRawGet): 32MB
+  streaming wire fetch and blob cap: 32GB
+  concurrent root fetches per tick: 4
+  roots per tick: 8
+  tick: 5s, stagger 100ms plus 0-200ms jitter

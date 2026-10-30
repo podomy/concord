@@ -1,11 +1,11 @@
 Files: Getting Data Into Containers
 
 A workload that needs a config file, a calibration table, or a model
-has one path: the bytes become an OCI artifact in the registry, and
-the spec carries only the digest. The journal stays pointers-only no
-matter how large the files grow. This document covers the mechanism,
-the blocking rule, and how to use it from the CLI, the SDK, or raw
-HTTP.
+has one path: the bytes become an artifact in the local blob store,
+and the spec carries only the digest. The journal stays pointers-only
+no matter how large the files grow. This document covers the
+mechanism, the blocking rule, and how to use it from the CLI, the
+SDK, or raw HTTP.
 
 The rule
 
@@ -13,48 +13,63 @@ Every persisted file becomes an artifact. There is no inline content
 in specs, no size threshold with two behaviors, no second path. One
 mechanism for 200 bytes and 5 gigabytes alike:
 
-  local bytes ──push──▶ registry blob + manifest (concord-files repo)
-                             │ syncs peer to peer like any image
+  local bytes ──push──▶ blob store via concord-files repo (compat wire)
+                              │ syncs peer to peer as chunks, indexed under concord-blobs
   spec ──carries──▶ {path, digest, mode} ──journal──▶ every node
-                             │
-  assigned node ──pulls──▶ verifies digest ──writes──▶ container rootfs
+                              │
+  assigned node ──pulls──▶ verifies ──writes──▶ container rootfs
+
+Two repos, one blob namespace. File artifacts use the concord-files
+repo on the wire (monolithic OCI for compat: HEAD and GET blobs, POST
+uploads with digest, PUT and GET manifests). Chunk sync state
+uses the concord-blobs repo (one tag per replicated root as the peer
+publish index). Serving is repo-independent: the registry answers a
+content digest from its blob namespace no matter which repo pushed it,
+so one canonical fetch prefix reaches every blob on the peer.
 
 Content addressing does three jobs at once. Dedup: ten workloads
 sharing one calibration file store it once; re-pushes upload nothing.
 Verification: addressing *is* the checksum, so tampered bytes fail the
-pull, never the container. Replication: tagged repos sync through the
-existing registry machinery with no new protocol.
+pull, never the container. Replication: chunk sync moves only missing
+pieces peer to peer with no new control plane.
 
 Pushing: the artifact client
 
 One implementation, shared three ways (sdk/fileart): SDK users call
 it directly, the CLI calls it before submit, the daemon calls it at
-start. It speaks four OCI calls and nothing else:
+start. Storage underneath is a chunk store, and the client shape is
+unchanged:
 
-- HEAD blob: smart push. Bytes already stored skip the upload, so
-  shared content costs two existence checks and zero bandwidth.
-- POST uploads: monolithic blob store with the digest attached.
-- PUT manifest: one manifest per file (exact bytes as the layer, an
-  empty config, a tag from the blob hex so sync picks it up).
-- GET blob: pull with hash verification on receipt.
+- Split. The store splits files into 256KB chunks. The wire stays
+  monolithic OCI for compat; chunking lives in the store and sync
+  layer transparently.
+- Hash. Each chunk hashed with sha256; the root hash is the file
+  digest carried in the spec.
+- Resume. Store and sync resume at chunk granularity; each
+  received chunk verifies against its hash before use.
+- Compat. The manifest tag still derives from the blob hex, so sync
+  that follows tagged repos keeps working.
 
   artifacts := fileart.NewClient("127.0.0.1:8444")
   digest, err := artifacts.Push(ctx, content)  // sha256:...; skipped if stored
 
-The registry is always the loopback-local one. Bytes never cross the
-network except through registry peer sync.
+The store is always the loopback-local one. Bytes never cross the
+network except through peer sync.
 
 Blocking: the workload waits
 
 A required blob that has not synced to the assigned node blocks the
-workload: the start fails, the next tick retries, and the container
-never runs without its files. This can last indefinitely on a
-partition, by design. Starting half-provisioned is worse than waiting:
-a planner without its map or a driver without its calibration does
-damage, not work. The debug line per tick says which digest is
-missing; concord workload inspect shows the pointers. Pulls stream
-to disk with memory flat no matter the blob size: a 5 GB model never
-sits in daemon RAM.
+workload by design. The mechanism is the fetch error plus retry: a
+missing file fails PullTo inside materialize, a missing image layer
+fails the pull, the start aborts, and the next tick retries. The
+reconciler also nudges the blob syncer (Ensure) with the spec file
+digests on a miss as a fast-path optimization over the background
+tick; the blocking behavior is unchanged. A digest that never arrives
+blocks that workload indefinitely on a partition: starting
+half-provisioned is worse than waiting. The debug line per tick says
+which digest is missing; concord workload inspect shows the pointers.
+Pulls stream to disk with memory flat no matter the blob size: a 5 GB
+model never sits in daemon RAM.
 
 Paths and modes
 
@@ -89,14 +104,14 @@ pointers, never bytes.
     Build()
   id, err := client.Submit(ctx, w)
 
-From raw HTTP: push per the OCI distribution calls above, then submit
+From raw HTTP: push per the artifact calls above, then submit
 the spec JSON with a files array (path, digest, mode). The
 endpoint shapes live in docs/ipc.
 
 Size, secrets, garbage: documented, not solved
 
 - Size. No cap. The journal is protected structurally (digests
-  only), so registry growth is disk planning. The distribution
+  only), so store growth is disk planning. The distribution
   doctrine still applies to large models: stage at the depot, pre-warm
   while charging, stagger rollouts (docs/deployment).
 - Secrets. Blobs replicate in plaintext to every node. The mesh
@@ -105,16 +120,17 @@ Size, secrets, garbage: documented, not solved
   should be encrypted before the push and decrypted inside the
   container at start: Concord stays a byte store that never sees the
   key, and the application owns its secrecy end to end.
-- Garbage. Stopped workloads leave their blobs; dedup softens it,
+- Garbage. Stopped workloads leave their chunks; dedup softens it,
   cleanup is operator-owned like track rotation and journal archival.
-  Registry-side collection is a later lever with numbers behind it.
+  Store-side collection is a later lever with numbers behind it.
 
 The closed storage list
 
-There are exactly three durable things: the journal (small state,
-converges), the registry (blobs, content-addressed), the track file
-(local history). Everything else is ephemeral inside the container
-and dies with the workload.
+There are exactly four durable things: the journal (small state,
+converges), the kv store (bbolt: views plus sync cursors so restarts
+resume mid-history), the blob store (chunks, content-addressed), the
+track file (local history). Everything else is ephemeral inside the
+container and dies with the workload.
 
 Where it lives
 
@@ -122,5 +138,10 @@ Artifact client (sdk/fileart, shared by SDK, CLI, and daemon),
 spec pointers (Files in internal/workload/workload.go, mirrored
 in sdk/types.go), submit validation (internal/ipc/handlers.go),
 materialization (startContainer in
-internal/reconciler/reconciler.go), flags (--file in
-internal/cli/workload.go).
+internal/reconciler/reconciler.go, nudges syncer Ensure on miss, retries
+next tick), flags (--file in
+internal/cli/workload.go), store (internal/registry binds 0.0.0.0:registry.Port
+for peer sync; clients use 127.0.0.1:registry.Port loopback), chunk sync (internal/peersync, started in
+internal/runtime/runtime.go before the reconciler, wired via
+SetBlobEnsurer). Store shape, wire verbs, caps, and sync details live in
+docs/blob.

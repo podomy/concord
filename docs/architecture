@@ -40,7 +40,7 @@ Data Flow Diagrams
        │         │
        │         ▼
        │    Embedded OCI Registry
-       │    (Zot localhost:8444)
+       │    (blob store localhost:8444)
        │
        └──► (6) Lifecycle Control
                  │
@@ -100,6 +100,21 @@ Data Flow Diagrams
                    ▼
               Embedded OCI Registry
               (localhost:8444)
+
+---
+
+Embedded registry
+
+Each node runs a blob-backed OCI registry on loopback. Wire stays
+monolithic OCI for compat: HEAD and GET blobs, POST uploads with
+digest query, PUT and GET manifests, GET tags list. Store splits
+blobs into 256KB chunks with per-chunk sha plus root; peersync moves
+only missing chunks peer to peer with no new control plane. File
+artifacts use concord-files on the wire and index sync state under
+concord-blobs; serving answers by digest no matter the repo. Clients
+use 127.0.0.1 loopback; the registry binds 0.0.0.0 so peers sync on
+the same port. Store shape, wire verbs, caps, and sync details live in
+docs/blob.
 
 ---
 
