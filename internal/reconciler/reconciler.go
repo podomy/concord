@@ -68,6 +68,72 @@ type ExitEvent struct {
 	WorkloadID uuid.UUID
 }
 
+// BlobEnsurer is the sync fast path the reconciler nudges on a miss.
+// It matches peersync.BlobSyncer.Ensure structurally so runtime can pass
+// the syncer without reconciler importing peersync.
+//
+// Decision: package setter, not a direct peersync import or a new RunLoop
+// parameter. Grep shows peersync never imports reconciler, so no cycle
+// exists today, but a direct import would couple execution to sync and a
+// new parameter would churn RunLoop plus every test caller. The setter
+// keeps the dependency inverted, preserves all callers, and stays nil
+// safe in tests where no syncer is wired.
+type BlobEnsurer interface {
+	Ensure(ctx context.Context, digests []string) error
+}
+
+// blobEnsurer is set by runtime after the registry store exists and
+// before the reconciler starts. Nil means no syncer (tests, or nil peer
+// service); miss paths then just retry next tick.
+var blobEnsurer BlobEnsurer
+
+// SetBlobEnsurer wires the blob syncer into miss handling. Call once
+// before RunLoop; runtime owns the ordering.
+func SetBlobEnsurer(e BlobEnsurer) {
+	blobEnsurer = e
+}
+
+// ensureWantedFiles nudges the syncer with this spec's file digests after
+// a pull or materialize miss. Ensure registers the digests as wanted and
+// fetches now; the start still fails and the next tick retries. A nil
+// ensurer or empty digest list is a no-op. Errors stay debug: a miss is
+// routine until the background tick converges.
+func ensureWantedFiles(ctx context.Context, logger *zap.Logger, spec workload.Spec) {
+	if blobEnsurer == nil {
+		return
+	}
+	digests := wantedFileDigests(spec)
+	if len(digests) == 0 {
+		return
+	}
+	err := blobEnsurer.Ensure(ctx, digests)
+	if err != nil {
+		logger.Debug("blob sync requested, retrying next tick", zap.String("id", spec.ID.String()), zap.Error(err))
+	}
+}
+
+// wantedFileDigests mirrors peersync.WantedFromSpecs for one spec: the
+// deduped file pointer digests, first seen order. Skips blanks and
+// non-canonical prefixes; full validation lives in the syncer. Image
+// layer digests are not listed: the reconciler only learns them inside
+// the pull, so image misses retry on the background tick.
+func wantedFileDigests(spec workload.Spec) []string {
+	seen := make(map[string]struct{}, len(spec.Files))
+	var out []string
+	for _, file := range spec.Files {
+		digest := file.Digest
+		if len(digest) < 8 || digest[:7] != "sha256:" {
+			continue
+		}
+		if _, ok := seen[digest]; ok {
+			continue
+		}
+		seen[digest] = struct{}{}
+		out = append(out, digest)
+	}
+	return out
+}
+
 // RunLoop watches for workload events and drives the container lifecycle.
 // It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
@@ -456,6 +522,7 @@ func startContainer(
 	pullResult, err := puller.Pull(ctx, spec.Image, bundleDir)
 	if err != nil {
 		logger.Error("pull image", zap.String("image", spec.Image), zap.Error(err))
+		ensureWantedFiles(ctx, logger, spec)
 		return
 	}
 
@@ -475,6 +542,7 @@ func startContainer(
 		}
 		if err := fileart.Materialize(ctx, pullResult.RootFS, refs, fetch); err != nil {
 			logger.Debug("materialize files, retrying next tick", zap.String("id", spec.ID.String()), zap.Error(err))
+			ensureWantedFiles(ctx, logger, spec)
 			return
 		}
 	}

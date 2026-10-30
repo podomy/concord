@@ -290,6 +290,9 @@ func setupNetwork(ctx context.Context, nodeIndex int) error {
 	return nil
 }
 
+// startWorkloadInfrastructure starts the local blob store before the
+// reconciler. Pulls must never run before the store serves; blob sync
+// starts here after the registry, before the reconciler.
 func startWorkloadInfrastructure(
 	ctx context.Context,
 	nodeID uuid.UUID,
@@ -314,6 +317,21 @@ func startWorkloadInfrastructure(
 		"oci registry started",
 		zap.Int("port", registry.Port),
 	)
+
+	// Start blob sync after the registry store exists. A nil member
+	// service (tests) skips sync; otherwise Run stops on ctx cancel.
+	// The syncer is also wired into the reconciler miss path so a
+	// missing blob nudges a fetch now instead of waiting for the
+	// background tick; the start still fails and retries next tick.
+	if peerService != nil {
+		syncer := peersync.New(ocireg.Store(), peerService, logger)
+		if st != nil {
+			syncer.AttachCursorStore(st.kv)
+		}
+		reconciler.SetBlobEnsurer(syncer)
+		go syncer.Run(ctx)
+		logger.Info("blob sync started")
+	}
 
 	// Start the workload reconciler loop.
 	puller := cr.NewImagePuller()
