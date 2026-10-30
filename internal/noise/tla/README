@@ -1,0 +1,34 @@
+Noise IK TLA+ model
+
+Verifies the internal/noise IK state machine in ../ik.go.
+
+What is modeled in ik.tla
+
+  Initiator iWrote, iFailed, iDone with IWrite, IReadOk, IReadFail.
+  Responder rRead, rFailed, rDone with RRead, RWriteOk, RWriteFail.
+  Key mirror on success: initiator send equals responder recv and reverse.
+  Transport nonces start 0, increment on successful encrypt and decrypt
+  only, fail closed, Rekey preserves nonce, cap 3 with terminal overflow.
+  Adversary drop, duplicate, replay, tamper. Failed is terminal. No
+  deadlock via stuttering Done.
+
+What is checked in ik.cfg
+
+  KeyMirror, TerminalFailed, NoDoubleWrite, NonceMonotonic.
+  Liveness to both done on a fair schedule without adversary.
+
+How to verify
+
+  tlc -workers 2 -config internal/noise/tla/ik.cfg internal/noise/tla/ik.tla
+
+Expected: Model checking completed. No error has been found, about
+140005 generated and 15592 distinct states, depth 24, about 1s.
+
+Go adherence
+
+  go test -race -run TestModel ./internal/noise/...
+  go test -race ./internal/noise/...
+  go vet ./internal/noise/...
+
+ik_model_test.go maps IWrite, IRead, RRead, RWrite to real calls plus
+key mirror by cross decrypt and nonce rules.

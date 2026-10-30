@@ -14,8 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/noise"
 	"github.com/google/uuid"
+
+	"github.com/podomy/concord/internal/noise"
 
 	"github.com/podomy/concord/internal/certs"
 )
@@ -25,10 +26,20 @@ import (
 // protocol and blocks cross-protocol splice attacks.
 const noisePrologue = "concord-noise-transport-v1"
 
-// noiseSuite is the single Noise suite for the transport: IK or XX pattern
-// over X25519, ChaCha20-Poly1305 framing, SHA-256 hashing.
-func noiseSuite() noise.CipherSuite {
-	return noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+// toNoiseStatic converts a transport key to the fixed-size noise key. It
+// rejects halves of the wrong length here so a truncated key never reaches
+// the handshake.
+func toNoiseStatic(self StaticKey) (noise.StaticKey, error) {
+	if len(self.Private) != 32 {
+		return noise.StaticKey{}, fmt.Errorf("noise private key must be 32 bytes, got %d", len(self.Private))
+	}
+	if len(self.Public) != 32 {
+		return noise.StaticKey{}, fmt.Errorf("noise public key must be 32 bytes, got %d", len(self.Public))
+	}
+	var out noise.StaticKey
+	copy(out.Private[:], self.Private)
+	copy(out.Public[:], self.Public)
+	return out, nil
 }
 
 // handshakeTimeout bounds one Noise handshake over TCP.
@@ -188,28 +199,24 @@ func dialHandshake(
 // responder's pre-known static key. It returns the channel plus the
 // responder's encoded parcel. The caller sets a deadline on raw first.
 func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []byte) (*noiseConn, []byte, error) {
+	selfKey, err := toNoiseStatic(self)
+	if err != nil {
+		return nil, nil, err
+	}
+	var peerStatic [32]byte
 	if len(expectPub) != 32 {
 		return nil, nil, fmt.Errorf("peer public key must be 32 bytes, got %d", len(expectPub))
 	}
+	copy(peerStatic[:], expectPub)
 
-	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite: noiseSuite(),
-		Pattern:     noise.HandshakeIK,
-		Initiator:   true,
-		Prologue:    []byte(noisePrologue),
-		StaticKeypair: noise.DHKey{
-			Private: self.Private,
-			Public:  self.Public,
-		},
-		PeerStatic: expectPub,
-	})
+	hs, err := noise.NewIKInitiator([]byte(noisePrologue), selfKey, peerStatic)
 	if err != nil {
-		return nil, nil, fmt.Errorf("noise handshake state: %w", err)
+		return nil, nil, fmt.Errorf("noise initiator: %w", err)
 	}
 
-	msg, _, _, err := hs.WriteMessage(nil, selfParcel)
+	msg, err := hs.WriteRequest(selfParcel)
 	if err != nil {
-		return nil, nil, fmt.Errorf("noise write message: %w", err)
+		return nil, nil, fmt.Errorf("noise write request: %w", err)
 	}
 
 	err = writeFrame(raw, msg)
@@ -222,20 +229,12 @@ func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []by
 		return nil, nil, err
 	}
 
-	// The responder's parcel arrives as the reply payload, encrypted under
-	// the fresh session keys.
-	parcel, toPeer, fromPeer, err := hs.ReadMessage(nil, reply)
+	parcel, send, recv, err := hs.ReadResponse(reply)
 	if err != nil {
-		return nil, nil, fmt.Errorf("noise read message: %w", err)
+		return nil, nil, fmt.Errorf("noise read response: %w", err)
 	}
 
-	if toPeer == nil || fromPeer == nil {
-		return nil, nil, fmt.Errorf("noise handshake did not complete") //nolint:perfsprint // plain sentinel, no wrap target
-	}
-
-	// Split order: the first state serves the initiator, so it encrypts our
-	// traffic and the second decrypts the responder's.
-	conn := &noiseConn{conn: raw, send: toPeer, recv: fromPeer}
+	conn := &noiseConn{conn: raw, send: send, recv: recv}
 
 	return conn, parcel, nil
 }
@@ -246,18 +245,14 @@ func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []by
 // returns the encrypted channel, or an error after which the caller must close
 // raw. The caller sets a deadline on raw first.
 func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Verifier) (*noiseConn, error) {
-	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite: noiseSuite(),
-		Pattern:     noise.HandshakeIK,
-		Initiator:   false,
-		Prologue:    []byte(noisePrologue),
-		StaticKeypair: noise.DHKey{
-			Private: static.Private,
-			Public:  static.Public,
-		},
-	})
+	selfKey, err := toNoiseStatic(static)
 	if err != nil {
-		return nil, fmt.Errorf("noise handshake state: %w", err)
+		return nil, err
+	}
+
+	hs, err := noise.NewIKResponder([]byte(noisePrologue), selfKey)
+	if err != nil {
+		return nil, fmt.Errorf("noise responder: %w", err)
 	}
 
 	msg, err := readFrame(raw, handshakeFrameMax)
@@ -265,9 +260,9 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 		return nil, err
 	}
 
-	payload, _, _, err := hs.ReadMessage(nil, msg)
+	payload, peerStatic, err := hs.ReadRequest(msg)
 	if err != nil {
-		return nil, fmt.Errorf("noise read message: %w", err)
+		return nil, fmt.Errorf("noise read request: %w", err)
 	}
 
 	peerID, generation, sig, err := decodeParcel(payload)
@@ -278,14 +273,14 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 	// The presented static key must be the membership-bound key for the
 	// claimed node ID: same bytes the CA signed, not a substitute. Checked
 	// before any reply bytes go out.
-	err = verify(peerID, generation, hs.PeerStatic(), sig)
+	err = verify(peerID, generation, peerStatic[:], sig)
 	if err != nil {
 		return nil, err
 	}
 
-	reply, toPeer, fromPeer, err := hs.WriteMessage(nil, selfParcel)
+	reply, send, recv, err := hs.WriteResponse(selfParcel)
 	if err != nil {
-		return nil, fmt.Errorf("noise write message: %w", err)
+		return nil, fmt.Errorf("noise write response: %w", err)
 	}
 
 	err = writeFrame(raw, reply)
@@ -293,13 +288,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 		return nil, err
 	}
 
-	if toPeer == nil || fromPeer == nil {
-		return nil, fmt.Errorf("noise handshake did not complete") //nolint:perfsprint // plain sentinel, no wrap target
-	}
-
-	// Mirrored: our sending state is the pair's second, our receiving state
-	// the first.
-	conn := &noiseConn{conn: raw, send: fromPeer, recv: toPeer}
+	conn := &noiseConn{conn: raw, send: send, recv: recv}
 
 	return conn, nil
 }
@@ -333,11 +322,11 @@ const maxTransportFrame = noise.MaxMsgLen + 16 + frameLenBytes
 
 // noiseConn is a net.Conn carrying length-prefixed Noise transport messages.
 // Reads and writes may proceed concurrently; each direction holds its own
-// CipherState and mutex.
+// Transport and mutex.
 type noiseConn struct {
 	conn net.Conn
-	send *noise.CipherState
-	recv *noise.CipherState
+	send *noise.Transport
+	recv *noise.Transport
 
 	sendMu sync.Mutex
 	recvMu sync.Mutex
