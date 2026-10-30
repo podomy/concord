@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -140,7 +141,7 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 		Config:        descriptor{MediaType: ConfigMediaType, Digest: configDigest, Size: int64(len(config))},
 		Layers:        []descriptor{{MediaType: LayerMediaType, Digest: blobDigest, Size: int64(len(data))}},
 	}
-	raw, err := json.Marshal(doc)
+	raw, err := json.Marshal(doc) //nolint:errchkjson // struct encoding never fails, checked for symmetry
 	if err != nil {
 		return "", fmt.Errorf("marshal manifest: %w", err)
 	}
@@ -167,7 +168,10 @@ func (c *Client) PullTo(ctx context.Context, digest, dest string) error {
 	if err != nil {
 		return fmt.Errorf("get blob: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort body drain
+		_ = resp.Body.Close()                 //nolint:errcheck // best-effort response close
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -218,36 +222,67 @@ func (c *Client) PullTo(ctx context.Context, digest, dest string) error {
 // identical bytes, so a partial rootfs converges instead of corrupting.
 // Modes of 0 become DefaultMode; modes above 0777 fail.
 func Materialize(ctx context.Context, rootfs string, files []File, fetch func(ctx context.Context, digest, dest string) error) error {
+	dests, err := resolveDests(rootfs, files)
+	if err != nil {
+		return err
+	}
+	err = fetchAll(ctx, files, dests, fetch)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// resolveDests validates every path and mode, then creates parent dirs.
+// It returns the dest per file in input order.
+func resolveDests(rootfs string, files []File) ([]string, error) {
 	dests := make([]string, len(files))
 	for i, file := range files {
-		if err := checkPath(file.Path); err != nil {
-			return err
+		err := checkPath(file.Path)
+		if err != nil {
+			return nil, err
 		}
-		mode := file.Mode
-		if mode == 0 {
-			mode = DefaultMode
-		}
-		if mode > 0o777 {
-			return fmt.Errorf("file mode %o exceeds 0777: %s", mode, file.Path)
+		_, err = validatedMode(file)
+		if err != nil {
+			return nil, err
 		}
 		dests[i] = filepath.Join(rootfs, filepath.Clean("/"+file.Path))
-		if err := os.MkdirAll(filepath.Dir(dests[i]), 0o755); err != nil {
-			return fmt.Errorf("create parent dirs: %w", err)
+		err = os.MkdirAll(filepath.Dir(dests[i]), 0o750)
+		if err != nil {
+			return nil, fmt.Errorf("create parent dirs: %w", err)
 		}
 	}
+	return dests, nil
+}
+
+// fetchAll pulls each digest into its dest and applies the file mode.
+func fetchAll(ctx context.Context, files []File, dests []string, fetch func(ctx context.Context, digest, dest string) error) error {
 	for i, file := range files {
-		if err := fetch(ctx, file.Digest, dests[i]); err != nil {
+		err := fetch(ctx, file.Digest, dests[i])
+		if err != nil {
 			return fmt.Errorf("fetch %s: %w", file.Digest, err)
 		}
-		mode := file.Mode
-		if mode == 0 {
-			mode = DefaultMode
+		mode, err := validatedMode(file)
+		if err != nil {
+			return err
 		}
-		if err := os.Chmod(dests[i], os.FileMode(mode)); err != nil {
+		err = os.Chmod(dests[i], os.FileMode(mode))
+		if err != nil {
 			return fmt.Errorf("chmod file: %w", err)
 		}
 	}
 	return nil
+}
+
+// validatedMode returns the effective mode, defaulting zero to DefaultMode.
+func validatedMode(file File) (uint32, error) {
+	if file.Mode == 0 {
+		return DefaultMode, nil
+	}
+	if file.Mode > 0o777 {
+		return 0, fmt.Errorf("file mode %o exceeds 0777: %s", file.Mode, file.Path)
+	}
+	return file.Mode, nil
 }
 
 // checkPath rejects anything but a clean absolute path without parent
@@ -261,10 +296,8 @@ func checkPath(path string) error {
 	if clean != path {
 		return fmt.Errorf("file path must be clean: %q", path)
 	}
-	for _, part := range strings.Split(clean, string(filepath.Separator)) {
-		if part == ".." {
-			return fmt.Errorf("file path must not escape: %q", path)
-		}
+	if slices.Contains(strings.Split(clean, string(filepath.Separator)), "..") {
+		return fmt.Errorf("file path must not escape: %q", path)
 	}
 	return nil
 }
@@ -279,7 +312,10 @@ func (c *Client) blobExists(ctx context.Context, digest string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("check blob: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort body drain
+		_ = resp.Body.Close()                 //nolint:errcheck // best-effort response close
+	}()
 
 	if resp.StatusCode == http.StatusOK {
 		return true, nil

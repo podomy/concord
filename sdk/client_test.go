@@ -57,6 +57,22 @@ func writeJSONResponse(t *testing.T, w http.ResponseWriter, status int, data any
 	}
 }
 
+// dialMockClient starts a unix socket server and returns a connected client.
+func dialMockClient(t *testing.T, handler http.Handler) sdk.Client {
+	t.Helper()
+
+	sockPath, cleanup := setupMockUnixServer(t, handler)
+	t.Cleanup(cleanup)
+	client, err := sdk.Dial(sockPath)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close() //nolint:errcheck // best-effort close in test cleanup
+	})
+	return client
+}
+
 func TestClient_Stats_Success(t *testing.T) {
 	t.Parallel()
 
@@ -82,14 +98,7 @@ func TestClient_Stats_Success(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	stats, err := client.Stats(context.Background(), targetID)
 	if err != nil {
@@ -118,14 +127,7 @@ func TestClient_Metrics(t *testing.T) {
 		_, _ = w.Write([]byte("concord_node_cpu_percent 10\n")) //nolint:errcheck // test stub
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	body, err := client.Metrics(context.Background())
 	if err != nil {
@@ -149,14 +151,7 @@ func TestClient_Trail(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	trail, err := client.Trail(context.Background())
 	if err != nil {
@@ -183,14 +178,7 @@ func TestClient_Logs(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	logs, err := client.Logs(context.Background(), id, 1)
 	if err != nil {
@@ -222,14 +210,7 @@ func TestClient_SetPosition(t *testing.T) {
 		writeJSONResponse(t, w, http.StatusOK, map[string]any{"lat": got.Lat, "lon": got.Lon})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	if err := client.SetPosition(context.Background(), 47.6, 8.9); err != nil {
 		t.Fatalf("unexpected set position error: %v", err)
@@ -249,14 +230,7 @@ func TestClient_Submit(t *testing.T) {
 		writeJSONResponse(t, w, http.StatusOK, map[string]any{"id": expectedID})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial mock server: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	workload := sdk.NewWorkload().Image("nginx:alpine").MustBuild()
 	id, err := client.Submit(context.Background(), workload)
@@ -278,17 +252,10 @@ func TestClient_Submit_ServerError(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	workload := sdk.NewWorkload().Image("nginx").MustBuild()
-	_, err = client.Submit(context.Background(), workload)
+	_, err := client.Submit(context.Background(), workload)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -307,14 +274,7 @@ func TestClient_Stop_Success(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	if err := client.Stop(context.Background(), targetID); err != nil {
 		t.Fatalf("unexpected stop error: %v", err)
@@ -329,16 +289,9 @@ func TestClient_Stop_NotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
+	client := dialMockClient(t, mux)
 
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
-
-	err = client.Stop(context.Background(), uuid.New())
+	err := client.Stop(context.Background(), uuid.New())
 	if !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -363,14 +316,7 @@ func TestClient_Get_Success(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	w, err := client.Get(context.Background(), targetID)
 	if err != nil {
@@ -389,16 +335,9 @@ func TestClient_Get_NotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
+	client := dialMockClient(t, mux)
 
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
-
-	_, err = client.Get(context.Background(), uuid.New())
+	_, err := client.Get(context.Background(), uuid.New())
 	if !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -423,14 +362,7 @@ func TestClient_List(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	workloads, err := client.List(context.Background())
 	if err != nil {
@@ -470,14 +402,7 @@ func TestClient_Nodes(t *testing.T) {
 		})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	nodes, err := client.Nodes(context.Background())
 	if err != nil {
@@ -529,14 +454,7 @@ func TestClient_UpdateImage(t *testing.T) {
 		writeJSONResponse(t, w, http.StatusOK, map[string]any{"id": id.String(), "image": got.Image})
 	})
 
-	sockPath, cleanup := setupMockUnixServer(t, mux)
-	defer cleanup()
-
-	client, err := sdk.Dial(sockPath)
-	if err != nil {
-		t.Fatalf("failed to dial: %v", err)
-	}
-	defer client.Close() //nolint:errcheck // best-effort close in test defer
+	client := dialMockClient(t, mux)
 
 	if err := client.UpdateImage(context.Background(), id, "app:v2"); err != nil {
 		t.Fatalf("unexpected update error: %v", err)

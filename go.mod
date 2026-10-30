@@ -10,7 +10,6 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
-	github.com/podomy/concord/sdk v0.0.0-20261013105412-8b22d6c65b45
 	github.com/spf13/cobra v1.10.2
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
@@ -67,5 +66,3 @@ require (
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 )
-
-replace github.com/podomy/concord/sdk => ./sdk

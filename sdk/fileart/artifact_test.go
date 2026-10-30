@@ -120,7 +120,7 @@ func TestPushPullRoundTrip(t *testing.T) {
 	if err := client.PullTo(ctx, digest, dest); err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	got, err := os.ReadFile(dest)
+	got, err := os.ReadFile(dest) //nolint:gosec // test reads a file it just pulled
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,16 +253,32 @@ func TestMaterializeRejectsBadPaths(t *testing.T) {
 // custom layer type under a tag, HEAD semantics) are accepted by the
 // registry Concord actually runs, not just the fake.
 func TestPushPullAgainstRealRegistry(t *testing.T) {
+	setupRealRegistryKeys(t)
+	ctx, client := startRealRegistry(t)
+	digest := pushUntilReady(t, ctx, client)
+	pullAndVerify(t, ctx, client, digest)
+}
+
+// setupRealRegistryKeys points XDG at a temp dir and writes a member key.
+func setupRealRegistryKeys(t *testing.T) {
+	t.Helper()
+
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-
 	keyDir := filepath.Join(dir, "concord", "memberservice")
-	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+	err := os.MkdirAll(keyDir, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(keyDir, "secret.key"), bytesRepeat(32), 0o600); err != nil {
+	err = os.WriteFile(filepath.Join(keyDir, "secret.key"), bytesRepeat(32), 0o600)
+	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// startRealRegistry starts peer discovery and the registry on 18444.
+func startRealRegistry(t *testing.T) (context.Context, *Client) {
+	t.Helper()
 
 	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
@@ -272,7 +288,8 @@ func TestPushPullAgainstRealRegistry(t *testing.T) {
 		t.Fatalf("start peer service: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := peerService.Shutdown(); err != nil {
+		err := peerService.Shutdown()
+		if err != nil {
 			t.Errorf("shutdown peer service: %v", err)
 		}
 	})
@@ -285,41 +302,51 @@ func TestPushPullAgainstRealRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new registry: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := reg.Start(ctx, peerService, zap.NewNop()); err != nil {
+	ctx := t.Context()
+	err = reg.Start(ctx, peerService, zap.NewNop())
+	if err != nil {
 		t.Fatalf("start registry: %v", err)
 	}
-	defer reg.Stop()
+	t.Cleanup(reg.Stop)
 
-	client := NewClient("127.0.0.1:18444")
+	return ctx, NewClient("127.0.0.1:18444")
+}
 
-	var digest string
+// pushUntilReady retries the first push until the registry accepts it.
+func pushUntilReady(t *testing.T, ctx context.Context, client *Client) string {
+	t.Helper()
+
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		digest, err = client.Push(ctx, []byte("field calibration v3"))
+		digest, err := client.Push(ctx, []byte("field calibration v3"))
 		if err == nil {
-			break
+			return digest
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("push against real registry: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+// pullAndVerify pulls the digest back and checks bytes plus manifest tag.
+func pullAndVerify(t *testing.T, ctx context.Context, client *Client, digest string) {
+	t.Helper()
 
 	dest := filepath.Join(t.TempDir(), "out")
-	if err := client.PullTo(ctx, digest, dest); err != nil {
+	err := client.PullTo(ctx, digest, dest)
+	if err != nil {
 		t.Fatalf("pull against real registry: %v", err)
 	}
-	got, err := os.ReadFile(dest)
+	got, err := os.ReadFile(dest) //nolint:gosec // test reads a file it just pulled
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "field calibration v3" {
 		t.Fatalf("pull = %q", got)
 	}
-
-	if err := checkManifestStored(digest); err != nil {
+	err = checkManifestStored(digest)
+	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
 }
@@ -329,11 +356,14 @@ func TestPushPullAgainstRealRegistry(t *testing.T) {
 // still strand the blob on one node.
 func checkManifestStored(digest string) error {
 	tag := strings.TrimPrefix(digest, "sha256:")
-	resp, err := http.Get("http://127.0.0.1:18444/v2/concord-files/manifests/" + tag) //nolint:gosec,noctx // test-only loopback fetch
+	resp, err := http.Get("http://127.0.0.1:18444/v2/concord-files/manifests/" + tag) //nolint:noctx // test-only loopback fetch
 	if err != nil {
-		return err
+		return fmt.Errorf("get manifest: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort response close
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort body drain
+		_ = resp.Body.Close()                 //nolint:errcheck // best-effort response close
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("manifest status = %d", resp.StatusCode)

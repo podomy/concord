@@ -384,7 +384,7 @@ func (c *unixClient) Logs(ctx context.Context, id uuid.UUID, tail int) ([]LogLin
 
 // UpdateImage bumps a live workload to a new image keeping its ID.
 func (c *unixClient) UpdateImage(ctx context.Context, id uuid.UUID, image string) error {
-	data, err := json.Marshal(ImageUpdate{Image: image})
+	data, err := json.Marshal(ImageUpdate{Image: image}) //nolint:errchkjson // struct encoding never fails, checked for symmetry
 	if err != nil {
 		return fmt.Errorf("marshal image update: %w", err)
 	}
