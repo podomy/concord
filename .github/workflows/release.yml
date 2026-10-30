@@ -88,7 +88,7 @@ jobs:
           merge-multiple: true
 
       # Bare by policy: version and zips only, no description notes.
-      # The changelog lives in CHANGELOG.md in the repo.
+      # The changelog lives in CHANGELOG in the repo.
       - name: Create release and attach zips
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,75 @@
+Health Checks
+
+Every 500ms the fast beat asks each local workload one question: are
+you alive? The answer comes from exactly one of three probes, chosen
+per workload. Healthy answers write nothing anywhere; sickness edges
+write one journal event (signal action) or restart the container
+(restart action). Raw observations stay in memory; only the edge
+converges. The beat mechanics live in docs/metrics.
+
+The three probes
+
+  http   GET http://127.0.0.1:host-portpath   2xx means healthy
+  tcp    dial 127.0.0.1:host-port               connect means healthy
+  exec   run argv inside the container            exit code zero means healthy
+
+Configure on submit; empty probe means HTTP, so every old spec behaves
+exactly as before:
+
+  # HTTP (default): needs mapped ports and an endpoint
+  concord workload run -p 8080:80 --health-path /health nginx:alpine
+
+  # TCP: needs mapped ports, speaks no HTTP
+  concord workload run -p 1883:1883 --health-probe tcp mosquitto:alpine
+
+  # Exec: needs a command as one string, split on whitespace.
+  // Below runs /bin/check --ready inside the container.
+  concord workload run --health-probe exec \
+    --health-cmd "/bin/check --ready" \
+    mydriver:latest
+
+Rules that bite
+
+Misconfiguration is loud, never silent. Unknown probe names, TCP
+without a mapped host port, and exec without a command all report
+unhealthy: restart loops and signal edges surface the mistake instead
+of hiding it. One exception, kept for old specs: HTTP without mapped
+ports skips the check as healthy.
+
+Probes are bounded. Every probe carries a 5s cap (HTTP client,
+TCP dial, exec run with SIGKILL escalation), matching the beat's
+existing latency profile. Exec output discards into nothing: probe
+chatter stays out of log rings by design.
+
+Exec runs inside the container (namespaces joined, working dir /,
+spec env plus a default PATH), not on the host. An empty environment
+still resolves bare binary names. The container handle serves exec
+only; adopted containers probe normally from reattach on.
+
+Actions on sickness
+
+When a check fails, the workload's configured action runs. There are
+two of them.
+
+Restart stops the container and starts it again, waiting longer
+between tries each time it keeps failing. Use it for things that
+crash: a dead driver should come back fresh.
+
+Signal leaves the container running and writes one note into the
+shared journal saying this workload is sick. Exactly one note per
+sickness: nothing more until the workload recovers, then it may write
+again. Use it for things that limp: a slow inference server should be
+flagged, not killed.
+
+Probes changed none of this. They only decide how sickness is
+detected; the action decides what happens next.
+
+Where it lives
+
+Probe selection (HealthProbe in internal/workload/workload.go),
+checks (CheckHealth plus per-probe helpers in
+internal/cr/health.go), the beat (runHealthChecks in
+internal/reconciler/fastpath.go), flags (--health-probe,
+--health-cmd in internal/cli/workload.go), SDK builder
+(HealthProbe in sdk/builder.go, mirrored types in sdk/types.go),
+translation both ways (internal/ipc/handlers.go).

@@ -1,0 +1,224 @@
+CLI Reference
+
+Concord uses a noun-first command structure: concord noun action [flags].
+
+---
+
+Starting the Daemon
+
+  # Start the node daemon in the foreground
+  concord
+
+Log Verbosity
+  # Debug everything, including device rules and destroy lines
+  concord --log-level debug
+
+Levels are debug, info (the default), warn, error; anything
+else fails startup loudly instead of running quieter than asked.
+Debug is verbose by design: every container start logs its device
+rule summary, every destroy logs its initiation. Run it when
+diagnosing, never in production.
+
+Serve as a Rendezvous Anchor
+  # Mark this node as an anchor in config.json, then start
+  concord --anchor
+
+The flag persists anchor into the node config and the node gossips
+the role from its next start. Anchor addresses for off-LAN joins live
+in the config file only, never on the command line. Provisioning is
+detailed under Rendezvous Anchors in docs/deployment.
+
+---
+
+Workload Commands
+
+Run a Workload
+  concord workload run [flags] image [command...]
+
+Flags:
+  --port, -p (default ""): port mapping host:container (e.g. 8080:80)
+  --env, -e (default []): environment variables in KEY=VAL format (repeatable)
+  --restart (default always): policy always, never, on_failure
+  --cpu (default 1024): CFS CPU shares (1024 = 1 core)
+  --memory (default 0): memory limit in MB (0 = unlimited)
+  --health-path (default /health): HTTP endpoint for health checks
+  --health-action (default restart): action on failure restart or signal
+  --health-probe (default http): check type http, tcp, or exec
+  --health-cmd (default ""): exec probe command, split on whitespace
+  --depends-on (default []): wait for this workload ID or prefix on the same node (repeatable)
+  --qos (default besteffort): compute class besteffort, burstable, or guaranteed
+  --file (default []): stage a file: --file /container/path=/local/path[:mode] (repeatable)
+
+Examples:
+  # Run nginx with port mapping
+  concord workload run -p 8080:80 nginx:alpine
+
+  # Run with environment variables and memory limit
+  concord workload run -e ENV=prod -e DB_HOST=10.0.0.5 --memory 512 redis:alpine
+
+  # Run with custom entrypoint command
+  concord workload run alpine:latest /bin/sh -c "while true; do echo hello; sleep 5; done"
+
+Omitting the command runs the image default. The [command...]
+is optional: without it the container starts the image's own
+entrypoint plus cmd (what the image author set with ENTRYPOINT and
+CMD). concord workload run probe:latest starts /probe because
+the image says so, not because the CLI guessed. A command on the line
+replaces that default wholesale; nothing is appended. An image that
+sets neither entrypoint nor cmd, combined with no command on the line,
+fails the start with a logged build process error and retries next
+tick: an empty argv would panic container init, so the reconciler
+refuses to build one. See buildProcess in
+internal/reconciler/reconciler.go.
+
+---
+
+List Workloads
+  concord workload list
+
+Output:
+  ID          IMAGE              PORTS       RESTART   HEALTH
+  4b8d7a12    nginx:alpine       8080:80     always    /health
+  9c1e3f80    redis:alpine       -           always    -
+
+---
+
+Inspect a Workload
+  # Supports full UUIDs or 8-character prefixes
+  concord workload inspect id
+
+Returns the full JSON specification for the workload.
+
+---
+
+Workload Utilization
+  # Live CPU and memory readings sampled on the fast beat.
+  # Absent readings (never sampled, already stopped) report not found.
+  concord workload stats id
+
+Output:
+  Workload 4b8d7a12
+    CPU     25% (avg 22%)
+    Memory  50% (512 of 1024 MB, avg 48%)
+  Node 9f2c1a44
+    CPU     10%
+    Memory  20%
+    Disk    30%
+
+Labeled lines with units everywhere; the memory line names the limit so
+the percent means something (512 MB alone when unlimited). The node
+block is the local node's trio: stats exist only where the workload
+runs, so the local node is always the relevant context.
+
+Percents are 0-100 utilization: CPU from /proc/stat deltas between
+beats (first sample reports 0), memory as used over total, disk as used
+blocks over total on the concord data disk. A percent says how full the
+resource is, never how much room it has; the scheduler reads fullness
+from the trio and headroom from the node's totals together. Full
+definitions live in docs/metrics.
+
+---
+
+Stop a Workload
+  # Stops container and writes a tombstone event to the journal
+  concord workload stop id
+
+---
+
+Update a Workload
+  # Moves a live workload to a new image keeping its ID, assignment,
+  # and history. Rollback is another bump
+  concord workload update id --image nginx:1.28
+
+The node stops the old container and starts the new image; only the
+image changes, everything else in the spec continues. Adopted
+containers running pre-restart bytes update on their next restart:
+adoption cannot see the old image, so no drift is detected. Other
+spec changes still mean stop plus run.
+
+---
+
+Node Commands
+
+List Cluster Nodes
+  concord node list
+
+Output:
+  NODE ID                                ADDRESS             STATE    WIREGUARD PUBLIC KEY    PRESSURE    LAT       LON        ANCHOR
+  a1b2c3d4-e5f6-7890-abcd-ef1234567890   192.168.1.10:17946  alive    +abc123xyz...           23%         47.6000   8.9000     yes
+
+PRESSURE is the highest of the node's gossiped CPU, memory, and disk
+utilization: the number the scheduler places by. Each percent is 0-100
+utilization of that resource, how full it is rather than how much room
+remains. Full definitions live in docs/metrics.
+
+Workload Logs
+  # Last 1000 lines at most; rings are memory-only and start empty at
+  # container start. Adopted containers (reattached after a daemon
+  # restart) capture nothing: their output pipes died with the old
+  # daemon, so rings stay empty until the workload restarts.
+  concord workload logs id [--tail 200] [--follow]
+
+Prints captured stdout/stderr oldest-first, one line per line. Absent
+output (never logged, already stopped) reports not found, mirroring
+stats. Follow polls every second until interrupted.
+
+---
+
+Rotate the Noise Key
+  concord node rotate-key
+
+Deletes the static key and bumps the generation counter. Local file ops
+only, no daemon involved: restart the daemon to apply. The full
+procedure and the pin rules live in docs/noise.
+
+Node Trail
+  concord node trail
+
+Prints this node's recorded positions oldest-first, one timestamped
+coordinate per line. Positions record on 10m moves. The ring holds the
+roam since boot (720 points); full history lives in track.jsonl.
+Full behavior lives in docs/trail:
+
+  2026-10-09T10:00:00Z 47.600000 8.900000
+  2026-10-09T10:05:00Z 47.610000 8.910000
+
+Node Position
+  concord node position set --lat 47.6 --lon 8.9
+
+Applies one live position fix: persisted for reboot, gossiped to the
+fleet, recorded to trail and track log. Out-of-planet coordinates are
+rejected. This is the only position writer; the config file is storage,
+never polled.
+
+---
+
+Metrics
+
+Scrape Node Metrics
+  concord metrics
+
+Prints sampler state in Prometheus text exposition format: per-workload
+CPU, memory, and usage plus the node trio. Point readings from memory,
+scraped by anything that speaks the format.
+
+Output:
+  # HELP concord_node_cpu_percent Node CPU utilization percent.
+  # TYPE concord_node_cpu_percent gauge
+  concord_node_cpu_percent 10
+  # HELP concord_workload_cpu_percent Workload CPU utilization percent.
+  # TYPE concord_workload_cpu_percent gauge
+  concord_workload_cpu_percent{id="4b8d7a12-..."} 25
+
+---
+
+Autocompletion
+
+  # Bash
+  source <(concord completion bash)
+
+  # Zsh
+  source <(concord completion zsh)
+
+  # Fish
+  concord completion fish | source

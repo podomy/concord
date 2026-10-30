@@ -14,24 +14,24 @@ reunion, and scheduling.
 
 Documentation
 
-  Overview - /docs/overview.md
-  Architecture - /docs/architecture.md
-  Noise Transport - /docs/noise.md
-  Journal Sync - /docs/cursors.md
-  Metrics and Pressure - /docs/metrics.md
-  Position Trail - /docs/trail.md
-  Files - /docs/files.md
-  Devices - /docs/devices.md
-  Nodev: filesystems that forbid devices - /docs/nodev.md
-  Startup Order - /docs/startup.md
-  QoS - /docs/qos.md
-  Health Checks - /docs/health.md
-  Scaling - /docs/scaling.md
-  Radio Planning - /docs/radio.md
-  IPC Reference - /docs/ipc.md
-  CLI Reference - /docs/cli.md
-  Go SDK Reference - /docs/sdk.md
-  Deployment Guide - /docs/deployment.md
+  Overview - /docs/overview
+  Architecture - /docs/architecture
+  Noise Transport - /docs/noise
+  Journal Sync - /docs/cursors
+  Metrics and Pressure - /docs/metrics
+  Position Trail - /docs/trail
+  Files - /docs/files
+  Devices - /docs/devices
+  Nodev: filesystems that forbid devices - /docs/nodev
+  Startup Order - /docs/startup
+  QoS - /docs/qos
+  Health Checks - /docs/health
+  Scaling - /docs/scaling
+  Radio Planning - /docs/radio
+  IPC Reference - /docs/ipc
+  CLI Reference - /docs/cli
+  Go SDK Reference - /docs/sdk
+  Deployment Guide - /docs/deployment
 
 Contributing
 

@@ -463,7 +463,7 @@ func startContainer(
 	// process can never observe a half-written set, and a missing blob
 	// (sync has not arrived) fails the start so the next tick retries.
 	// A required blob that never arrives blocks this workload forever by
-	// design; it must not start without its files. See docs/files.md.
+	// design; it must not start without its files. See docs/files.
 	if len(spec.Files) > 0 {
 		artifacts := fileart.NewClient(registryAddr())
 		refs := make([]fileart.File, 0, len(spec.Files))

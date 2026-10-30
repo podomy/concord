@@ -130,7 +130,7 @@ func Start(
 
 	// Production runs on real WLANs, not loopback: relax the probe path
 	// toward LAN values so jitter spikes stop false-suspecting healthy
-	// peers (see docs/scaling.md). Deliberately not the full LAN preset:
+	// peers (see docs/scaling). Deliberately not the full LAN preset:
 	// TCPTimeout stays 1s so dead anchors and TCP pings fail fast,
 	// SuspicionMult stays 3 for quick orphan failover, push/pull stays
 	// 15s for fast healing.

@@ -381,7 +381,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNodeTrail returns our recorded positions oldest-first, from the
-// ring: the roam since boot, not the full track file (see docs/trail.md).
+// ring: the roam since boot, not the full track file (see docs/trail).
 // Memory-only by design here; durability lives in track.jsonl, and
 // nothing reaches the journal either way.
 func (s *Server) handleNodeTrail(w http.ResponseWriter, _ *http.Request) {

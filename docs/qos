@@ -1,33 +1,29 @@
-# QoS: Who Gets the Node
+QoS: Who Gets the Node
 
 QoS ranks workloads for two decisions: who places first, and who gives
 way when nothing fits. Three classes, no more:
 
-```
-guaranteed    places first, never gives way
-burstable     preempts best-effort, yields to guaranteed
-besteffort    runs when room allows, gives way to everything (the default)
-```
+  guaranteed    places first, never gives way
+  burstable     preempts best-effort, yields to guaranteed
+  besteffort    runs when room allows, gives way to everything (the default)
 
-```bash
-concord workload run perception:latest --qos guaranteed --memory 2048
-concord workload run logger:latest  # best-effort unless stated
-```
+  concord workload run perception:latest --qos guaranteed --memory 2048
+  concord workload run logger:latest  # best-effort unless stated
 
 Empty means best-effort, so every old spec behaves exactly as before.
 Unknown classes are rejected at submit; a misspelling must never
 schedule by surprise.
 
-## What the name does and does not mean
+What the name does and does not mean
 
-This QoS ranks **compute**: placement order and preemption. ROS-style
-DDS QoS governs **packets**: reliability, durability, deadlines,
+This QoS ranks compute: placement order and preemption. ROS-style
+DDS QoS governs packets: reliability, durability, deadlines,
 liveliness on message delivery. Same acronym, different layers, and
 they compose freely: a guaranteed workload still sets its DDS
 reliability separately, and best-effort compute says nothing about
 how its messages travel. Confusing the two buys misconfigured fleets.
 
-## Giving way, precisely
+Giving way, precisely
 
 When a workload fits nowhere, the leader may displace exactly one
 lower-class running workload to make room:
@@ -54,7 +50,7 @@ churn, best-effort waits indefinitely. No aging, no fairness
 scheduler. If everything is guaranteed, nothing is: ranks only mean
 something relative to lower ones.
 
-## Ordering and admission, together
+Ordering and admission, together
 
 Each tick the leader handles orphans first (they were running and lost
 their owner), then the unassigned highest class first. Admission still
@@ -63,11 +59,11 @@ guaranteed, and preemption is the only way it moves. Within one tick,
 reservations make admission exact: two half-node requests on room for
 one place the first and queue the second, regardless of view order.
 
-## Where it lives
+Where it lives
 
-Classes and ranks (`QoS` in `internal/workload/workload.go`), submit
-validation (`internal/ipc/handlers.go`), tick ordering and victim
-selection (`pendingIndexes`, `tryPreempt` in
-`internal/reconciler/scheduler.go`), the reaper (`reapDisplaced` in
-`internal/reconciler/reconciler.go`), flags (`--qos` in
-`internal/cli/workload.go`), SDK (`QoS` in `sdk/types.go`).
+Classes and ranks (QoS in internal/workload/workload.go), submit
+validation (internal/ipc/handlers.go), tick ordering and victim
+selection (pendingIndexes, tryPreempt in
+internal/reconciler/scheduler.go), the reaper (reapDisplaced in
+internal/reconciler/reconciler.go), flags (--qos in
+internal/cli/workload.go), SDK (QoS in sdk/types.go).

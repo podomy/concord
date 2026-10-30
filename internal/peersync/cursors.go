@@ -18,7 +18,7 @@ import (
 //
 // The set lives in process memory only. A restart starts from empty
 // cursors and re-pulls from event zero; idempotent apply by event id
-// discards the overlap. See docs/cursors.md for the full mechanics.
+// discards the overlap. See docs/cursors for the full mechanics.
 type cursorSet map[uuid.UUID]string
 
 // newCursorSet creates an empty per-peer cursor set.

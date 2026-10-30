@@ -1,4 +1,4 @@
-# Files: Getting Data Into Containers
+Files: Getting Data Into Containers
 
 A workload that needs a config file, a calibration table, or a model
 has one path: the bytes become an OCI artifact in the registry, and
@@ -7,19 +7,17 @@ matter how large the files grow. This document covers the mechanism,
 the blocking rule, and how to use it from the CLI, the SDK, or raw
 HTTP.
 
-## The rule
+The rule
 
 Every persisted file becomes an artifact. There is no inline content
 in specs, no size threshold with two behaviors, no second path. One
 mechanism for 200 bytes and 5 gigabytes alike:
 
-```
-local bytes ──push──▶ registry blob + manifest (concord-files repo)
-                           │ syncs peer to peer like any image
-spec ──carries──▶ {path, digest, mode} ──journal──▶ every node
-                           │
-assigned node ──pulls──▶ verifies digest ──writes──▶ container rootfs
-```
+  local bytes ──push──▶ registry blob + manifest (concord-files repo)
+                             │ syncs peer to peer like any image
+  spec ──carries──▶ {path, digest, mode} ──journal──▶ every node
+                             │
+  assigned node ──pulls──▶ verifies digest ──writes──▶ container rootfs
 
 Content addressing does three jobs at once. Dedup: ten workloads
 sharing one calibration file store it once; re-pushes upload nothing.
@@ -27,28 +25,26 @@ Verification: addressing *is* the checksum, so tampered bytes fail the
 pull, never the container. Replication: tagged repos sync through the
 existing registry machinery with no new protocol.
 
-## Pushing: the artifact client
+Pushing: the artifact client
 
-One implementation, shared three ways (`sdk/fileart`): SDK users call
+One implementation, shared three ways (sdk/fileart): SDK users call
 it directly, the CLI calls it before submit, the daemon calls it at
 start. It speaks four OCI calls and nothing else:
 
-- `HEAD` blob: smart push. Bytes already stored skip the upload, so
+- HEAD blob: smart push. Bytes already stored skip the upload, so
   shared content costs two existence checks and zero bandwidth.
-- `POST` uploads: monolithic blob store with the digest attached.
-- `PUT` manifest: one manifest per file (exact bytes as the layer, an
+- POST uploads: monolithic blob store with the digest attached.
+- PUT manifest: one manifest per file (exact bytes as the layer, an
   empty config, a tag from the blob hex so sync picks it up).
-- `GET` blob: pull with hash verification on receipt.
+- GET blob: pull with hash verification on receipt.
 
-```go
-artifacts := fileart.NewClient("127.0.0.1:8444")
-digest, err := artifacts.Push(ctx, content)  // sha256:...; skipped if stored
-```
+  artifacts := fileart.NewClient("127.0.0.1:8444")
+  digest, err := artifacts.Push(ctx, content)  // sha256:...; skipped if stored
 
 The registry is always the loopback-local one. Bytes never cross the
 network except through registry peer sync.
 
-## Blocking: the workload waits
+Blocking: the workload waits
 
 A required blob that has not synced to the assigned node blocks the
 workload: the start fails, the next tick retries, and the container
@@ -56,13 +52,13 @@ never runs without its files. This can last indefinitely on a
 partition, by design. Starting half-provisioned is worse than waiting:
 a planner without its map or a driver without its calibration does
 damage, not work. The debug line per tick says which digest is
-missing; `concord workload inspect` shows the pointers. Pulls stream
+missing; concord workload inspect shows the pointers. Pulls stream
 to disk with memory flat no matter the blob size: a 5 GB model never
 sits in daemon RAM.
 
-## Paths and modes
+Paths and modes
 
-Container paths must be absolute, clean, with no `..`. Anything else
+Container paths must be absolute, clean, with no ... Anything else
 is a 400 at submit: a relative path could land anywhere, an escape
 could climb out of the container root. The materializer re-checks
 defensively, because journal lines can be hand-written.
@@ -71,64 +67,60 @@ Modes default to 0600 (owner read-write). Pass an explicit mode for
 the case that needs it, entrypoint scripts needing the execute bit
 being the classic one. Anything above 0777 fails at submit.
 
-```bash
-# One flag per file: container path, local path, optional mode
-concord workload run inference:latest --memory 2048 \
-  --file /etc/model/config.yaml=./config.yaml \
-  --file /entrypoint.sh=./entrypoint.sh:0755
-```
+  # One flag per file: container path, local path, optional mode
+  concord workload run inference:latest --memory 2048 \
+    --file /etc/model/config.yaml=./config.yaml \
+    --file /entrypoint.sh=./entrypoint.sh:0755
 
-## From a Go program
+From a Go program
 
 Push first, then reference. The builder stays pure: it carries
 pointers, never bytes.
 
-```go
-artifacts := fileart.NewClient("127.0.0.1:8444")
-digest, err := artifacts.Push(ctx, configBytes)
-if err != nil { /* push failed: submit nothing */ }
+  artifacts := fileart.NewClient("127.0.0.1:8444")
+  digest, err := artifacts.Push(ctx, configBytes)
+  if err != nil { /* push failed: submit nothing */ }
 
-w, err := sdk.NewWorkload().
-	Image("inference:latest").
-	MemoryMB(2048).
-	QoS(sdk.QoSGuaranteed).
-	File("/etc/model/config.yaml", digest, 0).
-	Build()
-id, err := client.Submit(ctx, w)
-```
+  w, err := sdk.NewWorkload().
+    Image("inference:latest").
+    MemoryMB(2048).
+    QoS(sdk.QoSGuaranteed).
+    File("/etc/model/config.yaml", digest, 0).
+    Build()
+  id, err := client.Submit(ctx, w)
 
 From raw HTTP: push per the OCI distribution calls above, then submit
-the spec JSON with a `files` array (`path`, `digest`, `mode`). The
-endpoint shapes live in `docs/ipc.md`.
+the spec JSON with a files array (path, digest, mode). The
+endpoint shapes live in docs/ipc.
 
-## Size, secrets, garbage: documented, not solved
+Size, secrets, garbage: documented, not solved
 
-- **Size.** No cap. The journal is protected structurally (digests
+- Size. No cap. The journal is protected structurally (digests
   only), so registry growth is disk planning. The distribution
   doctrine still applies to large models: stage at the depot, pre-warm
-  while charging, stagger rollouts (`docs/deployment.md`).
-- **Secrets.** Blobs replicate in plaintext to every node. The mesh
+  while charging, stagger rollouts (docs/deployment).
+- Secrets. Blobs replicate in plaintext to every node. The mesh
   is trusted, so fleet credentials ride fine as-is. Anything with a
   narrower audience than the fleet (customer data, per-tenant keys)
   should be encrypted before the push and decrypted inside the
   container at start: Concord stays a byte store that never sees the
   key, and the application owns its secrecy end to end.
-- **Garbage.** Stopped workloads leave their blobs; dedup softens it,
+- Garbage. Stopped workloads leave their blobs; dedup softens it,
   cleanup is operator-owned like track rotation and journal archival.
   Registry-side collection is a later lever with numbers behind it.
 
-## The closed storage list
+The closed storage list
 
 There are exactly three durable things: the journal (small state,
 converges), the registry (blobs, content-addressed), the track file
 (local history). Everything else is ephemeral inside the container
 and dies with the workload.
 
-## Where it lives
+Where it lives
 
-Artifact client (`sdk/fileart`, shared by SDK, CLI, and daemon),
-spec pointers (`Files` in `internal/workload/workload.go`, mirrored
-in `sdk/types.go`), submit validation (`internal/ipc/handlers.go`),
-materialization (`startContainer` in
-`internal/reconciler/reconciler.go`), flags (`--file` in
-`internal/cli/workload.go`).
+Artifact client (sdk/fileart, shared by SDK, CLI, and daemon),
+spec pointers (Files in internal/workload/workload.go, mirrored
+in sdk/types.go), submit validation (internal/ipc/handlers.go),
+materialization (startContainer in
+internal/reconciler/reconciler.go), flags (--file in
+internal/cli/workload.go).

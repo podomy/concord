@@ -49,7 +49,7 @@ type Spec struct {
 	// best-effort gives way to everything, guaranteed gives way to
 	// nothing. Empty means best-effort. This is compute allocation
 	// (who gets the node), not message delivery: ROS-style DDS QoS
-	// governs packets, this governs placement. See docs/qos.md.
+	// governs packets, this governs placement. See docs/qos.
 	QoS QoS
 }
 

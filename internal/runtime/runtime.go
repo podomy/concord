@@ -646,7 +646,7 @@ func refreshAnchors(logger *zap.Logger, fallbackAnchors []node.AnchorEntry) []no
 // discoverAndJoin performs one discovery round: mDNS LAN candidates plus
 // configured anchors ordered nearest-first, filtered, and Join. Anchors
 // reload from config every round; position arrives over IPC instead, so
-// the file is never polled for it. See docs/trail.md.
+// the file is never polled for it. See docs/trail.
 func discoverAndJoin(
 	ctx context.Context,
 	logger *zap.Logger,

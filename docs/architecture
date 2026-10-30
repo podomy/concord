@@ -1,142 +1,134 @@
-# Architecture & Data Flow
+Architecture & Data Flow
 
 Concord is a decentralized coordination engine. State is driven by an append-only event log, projected into local views, reconciled against container runtimes, and synchronized across nodes over an encrypted mesh.
 
 ---
 
-## Data Flow Diagrams
+Data Flow Diagrams
 
-### 1. Workload Submission Flow
+1. Workload Submission Flow
 
-```
-CLI / Go SDK
-     │
-     │ (1) POST /workload/submit
-     │     (JSON Workload Spec)
-     ▼
-Unix IPC Server
-(~/.config/concord/concord.sock)
-     │
-     │ (2) Record "workload.spec"
-     │     Event
-     ▼
-Append-Only Journal
-(journal.jsonl)
-     │
-     │ (3) Deterministic
-     │     Projection
-     ▼
-bbolt KV Views
-(Workloads, EventsByID, ByNode)
-```
-
-### 2. Local Workload Reconciliation & Execution Flow
-
-```
-bbolt KV Views (Desired State)
-     │
-     │ (4) Active Workload Specs
-     ▼
-Reconciler Loop
-     │
-     ├──► (5) Fetch Image
-     │         │
-     │         ▼
-     │    Embedded OCI Registry
-     │    (Zot localhost:8444)
-     │
-     └──► (6) Lifecycle Control
-               │
-               ▼
-          Container Runtime
-          (internal/cr)
-               │
-               ├──► cgroups (CPU/Mem)
-               │
-               ├──► runc (Namespaces)
-               │
-               ├──► Bridge & veth (concord0)
-               │
-               └──► Health Check (/health)
-```
-
-### 3. Peer Discovery & WireGuard Mesh Flow
-
-```
-Node Discovery
-     │
-     ├──► mDNS (LAN Multicast)
-     │         │
-     └──► SWIM Gossip (UDP :17946)
-               │
-               ▼
-     Peer Memberlist
-               │
-               │ (7) Exchange WG Keys & IPs
-               ▼
-     WireGuard Mesh (internal/cn)
-     (Flat Encrypted P2P Overlay)
-```
-
-### 4. Cross-Node State & Image Replication Flow
-
-```
-[ Remote Node B ]
-Transport Server & Registry
+  CLI / Go SDK
        │
-       │ (8) Noise Pull Events
-       │ (10) P2P Image/Blob Sync
-       │ (Over WireGuard Mesh)
+       │ (1) POST /workload/submit
+       │     (JSON Workload Spec)
        ▼
-[ Local Node A ]
-Peer Sync Loop (internal/peersync)
+  Unix IPC Server
+  (~/.config/concord/concord.sock)
        │
-       ├──► (9) Missing Events
-       │         │
-       │         ▼
-       │    Local Journal (journal.jsonl)
-       │         │
-       │         ▼
-       │    Local bbolt Views
-       │         │
-       │         ▼
-       │    Reconciler ──► runc
+       │ (2) Record "workload.spec"
+       │     Event
+       ▼
+  Append-Only Journal
+  (journal.jsonl)
        │
-       └──► (10) Missing Blobs
+       │ (3) Deterministic
+       │     Projection
+       ▼
+  bbolt KV Views
+  (Workloads, EventsByID, ByNode)
+
+2. Local Workload Reconciliation & Execution Flow
+
+  bbolt KV Views (Desired State)
+       │
+       │ (4) Active Workload Specs
+       ▼
+  Reconciler Loop
+       │
+       ├──► (5) Fetch Image
+       │         │
+       │         ▼
+       │    Embedded OCI Registry
+       │    (Zot localhost:8444)
+       │
+       └──► (6) Lifecycle Control
                  │
                  ▼
-            Embedded OCI Registry
-            (localhost:8444)
-```
+            Container Runtime
+            (internal/cr)
+                 │
+                 ├──► cgroups (CPU/Mem)
+                 │
+                 ├──► runc (Namespaces)
+                 │
+                 ├──► Bridge & veth (concord0)
+                 │
+                 └──► Health Check (/health)
+
+3. Peer Discovery & WireGuard Mesh Flow
+
+  Node Discovery
+       │
+       ├──► mDNS (LAN Multicast)
+       │         │
+       └──► SWIM Gossip (UDP :17946)
+                 │
+                 ▼
+       Peer Memberlist
+                 │
+                 │ (7) Exchange WG Keys & IPs
+                 ▼
+       WireGuard Mesh (internal/cn)
+       (Flat Encrypted P2P Overlay)
+
+4. Cross-Node State & Image Replication Flow
+
+  [ Remote Node B ]
+  Transport Server & Registry
+         │
+         │ (8) Noise Pull Events
+         │ (10) P2P Image/Blob Sync
+         │ (Over WireGuard Mesh)
+         ▼
+  [ Local Node A ]
+  Peer Sync Loop (internal/peersync)
+         │
+         ├──► (9) Missing Events
+         │         │
+         │         ▼
+         │    Local Journal (journal.jsonl)
+         │         │
+         │         ▼
+         │    Local bbolt Views
+         │         │
+         │         ▼
+         │    Reconciler ──► runc
+         │
+         └──► (10) Missing Blobs
+                   │
+                   ▼
+              Embedded OCI Registry
+              (localhost:8444)
 
 ---
 
-## Underlay vs overlay
+Underlay vs overlay
 
 Concord uses two disjoint IPv4 spaces.
 
-**Underlay** is the host NIC. Memberlist, mDNS, and the Noise
+Underlay is the host NIC. Memberlist, mDNS, and the Noise
 transport use it. Join targets are underlay addresses. Peers
-dial whatever `ResolveAdvertise` published, never `cn0`.
+dial whatever ResolveAdvertise published, never cn0.
 
-**Overlay** is `10.0.0.0/16`. Each node has `cn0` at
-`10.0.{index}.1/24` and allocates containers in that `/24`.
-WireGuard carries peer `/24`s between nodes. Memberlist
-must not advertise `cn0`, `wg-*`, or any `10.0.0.0/16`
+Overlay is 10.0.0.0/16. Each node has cn0 at
+10.0.{index}.1/24 and allocates containers in that /24.
+WireGuard carries peer /24s between nodes. Memberlist
+must not advertise cn0, wg-*, or any 10.0.0.0/16
 address. Joining an overlay IP on a node that also has
-`cn0` is a local TCP connect, not a peer.
+cn0 is a local TCP connect, not a peer.
 
 Resonance simulator attaches a tun as the
-underlay NIC. That tun must not use `10.0.0.0/16`. Use a
-disjoint prefix such as `192.168.100.0/24`, one address per
-node. Overlay stays `10.0.0.0/16` inside each netns. If the
-tun is `10.0.0.1` / `10.0.0.2`, Concord cannot tell underlay
-from `cn0`, Join hits the local bridge, and membership
+underlay NIC. That tun must not use 10.0.0.0/16. Use a
+disjoint prefix such as 192.168.100.0/24, one address per
+node. Overlay stays 10.0.0.0/16 inside each netns. If the
+tun is 10.0.0.1 / 10.0.0.2, Concord cannot tell underlay
+from cn0, Join hits the local bridge, and membership
 stays at one node.
 
 ---
 
-## Discovery
+Discovery
 
 Discovery is the first-contact problem and nothing more. Once a node
 reaches any single member, gossip hands it the whole mesh transitively;
@@ -150,20 +142,20 @@ zero priors is impossible: DHTs, blockchains, and libp2p all ship
 bootstrap lists for this reason. Concord implements both: mDNS on the
 LAN, anchors everywhere routed:
 
-* mDNS on the LAN. Nodes advertise and browse `_concord._udp`; whoever
+* mDNS on the LAN. Nodes advertise and browse _concord._udp; whoever
   hears answers. Covers the bench, the warehouse floor, any single
   broadcast domain. Dies the moment multicast does.
 * Rendezvous anchors for everything routed. Rendezvous means a
   pre-agreed meeting place: two parties who cannot find each other both
   go to the spot they already know. Anchors are stable, reachable fleet
-  members that signal the role: provisioned with `concord --anchor`,
-  gossiped as `anchor` in memberlist metadata, visible in `node list`.
+  members that signal the role: provisioned with concord --anchor,
+  gossiped as anchor in memberlist metadata, visible in node list.
   A base station, a depot server, a relay mast. Newcomers join the
   nearest configured anchor, learn the mesh, gossip takes over. One
   anchor is enough functionally; two or three cover anchor downtime,
   since a dead anchor blocks new joins but never hurts the existing
-  mesh. Provisioning is detailed under `Rendezvous Anchors`
-  in `docs/deployment.md`.
+  mesh. Provisioning is detailed under Rendezvous Anchors
+  in docs/deployment.
 
 Anchors carry geography, because a flat ordered list makes no sense
 across distance. Each anchor entry names coordinates alongside the
@@ -185,23 +177,21 @@ expiry, not a fixture.
 Concrete shape, an open-pit mine. The rim is the pit's top edge;
 a relay mast there sees the whole pit by line-of-sight:
 
-```
-              pit rim (fiber + power)
-             ┌─────────────────────────┐
-             │  depot office           │
-             │  ┌─────────┐            │
-             │  │ anchor  │◀── fiber ──┼── to internet / HQ
-             │  └────┬────┘            │
-             └───────┼─────────────────┘
-                     │ wireless coverage
-        ┌────────────┼────────────┐
-        │            │            │
-   haul truck   drill rig    haul truck
-   (roams)      (roams)      (in dead zone:
-                               partitioned,
-                               keeps working
-                               local-first)
-```
+                pit rim (fiber + power)
+               ┌─────────────────────────┐
+               │  depot office           │
+               │  ┌─────────┐            │
+               │  │ anchor  │◀── fiber ──┼── to internet / HQ
+               │  └────┬────┘            │
+               └───────┼─────────────────┘
+                       │ wireless coverage
+          ┌────────────┼────────────┐
+          │            │            │
+     haul truck   drill rig    haul truck
+     (roams)      (roams)      (in dead zone:
+                                 partitioned,
+                                 keeps working
+                                 local-first)
 
 A truck rolling into coverage joins through the depot anchor, learns
 the mesh, and runs. Rolling into a dead zone it partitions and keeps
@@ -218,13 +208,13 @@ reachable is the whole requirement. Robots sharing no routable path
 need nothing at all: they are separate fleets by definition, and no
 discovery mechanism fixes physics.
 
-The embedded DNS server (`:15353`) serves names to workloads, not to
+The embedded DNS server (:15353) serves names to workloads, not to
 discovery. Nodes find each other through the two ways above; nothing
 queries anyone's DNS to bootstrap, and no external DNS is ever required.
 
 ---
 
-## One flat segment, no hierarchy
+One flat segment, no hierarchy
 
 There is exactly one memberlist segment per fleet, and no hierarchy of
 segments above it. "Segment" elsewhere in this document means a network
@@ -234,7 +224,7 @@ super-nodes, no representatives, no cross-segment sync protocol.
 Keep one flat segment up to about 200 nodes. Past that, still do not
 add hierarchy on speculation: the revisit trigger is sustained fleets
 past ~200 with pull-tick saturation in metrics (see
-`docs/scaling.md`). The practical ceiling is low hundreds, so 200 keeps
+docs/scaling). The practical ceiling is low hundreds, so 200 keeps
 margin while the system keeps one topology, one merge path, and one
 failure model.
 
@@ -252,9 +242,9 @@ nothing.
 
 ---
 
-## Scheduling
+Scheduling
 
-In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads highest class first to the alive peer with the lowest pressure that fits the workload's memory request, breaking ties by fewest active workloads. A request nothing fits waits unassigned for the next tick instead of landing where it cannot run, unless a higher class displaces a lower one (see `docs/qos.md`). When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below. Pressure sampling and placement order are detailed in `docs/metrics.md`.
+In each connected segment, the node with the lowest UUID string is the leader. It assigns unassigned workloads highest class first to the alive peer with the lowest pressure that fits the workload's memory request, breaking ties by fewest active workloads. A request nothing fits waits unassigned for the next tick instead of landing where it cannot run, unless a higher class displaces a lower one (see docs/qos). When segments reunite, journals sync and state converges. Orphaned workloads are reassigned as described below. Pressure sampling and placement order are detailed in docs/metrics.
 
 The scheduler reads pressure only from gossip, never from the local
 sampler, and that indirection is intentional. The leader sees exactly
@@ -265,31 +255,31 @@ splitting the decision input for no gain.
 
 ---
 
-## Orphan reassignment
+Orphan reassignment
 
-An orphan is a live spec (`Removed=false`) with `AssignedNodeID != Nil` whose owner is absent from the alive membership set. Only `NodeStateAlive` counts as alive; suspect, dead, left, and unknown all mark the owner gone. This favors fast failover: a flapping node can cause temporary duplicate execution across partitions, which the merge rules converge.
+An orphan is a live spec (Removed=false) with AssignedNodeID != Nil whose owner is absent from the alive membership set. Only NodeStateAlive counts as alive; suspect, dead, left, and unknown all mark the owner gone. This favors fast failover: a flapping node can cause temporary duplicate execution across partitions, which the merge rules converge.
 
-Only the segment leader acts, via `internal/reconciler/scheduler.go:scheduleWorkloads`, invoked leader-only from `RunLoop` on each tick. Each tick does exactly this:
+Only the segment leader acts, via internal/reconciler/scheduler.go:scheduleWorkloads, invoked leader-only from RunLoop on each tick. Each tick does exactly this:
 
 1. Read members and build the alive set. Zero alive members is a no-op; nothing is assigned or reassigned.
-2. Skip tombstones. A spec with `Removed=true` is never reassigned; a stop wins over any spec copy at any epoch.
-3. Assign unassigned. A spec with `AssignedNodeID == Nil` is assigned to the `pickNode` choice (alive preferred, then lowest pressure, then fewest active workloads) and recorded as one new `workload.spec` event. Initial assignments carry epoch zero.
-4. Skip healthy owners. A spec whose `AssignedNodeID` is in the alive set is left alone.
-5. Reassign orphans. The owner is not alive, so the spec is pointed at the alive `pickNode` choice, `AssignmentEpoch` is incremented by one, and one new `workload.spec` event is recorded through `RecordEventAndLog`. The next tick reads the new copy from the view, so each orphan is rewritten once per epoch.
-6. Guard the target. If the `pickNode` choice is not alive, the spec is skipped this tick.
+2. Skip tombstones. A spec with Removed=true is never reassigned; a stop wins over any spec copy at any epoch.
+3. Assign unassigned. A spec with AssignedNodeID == Nil is assigned to the pickNode choice (alive preferred, then lowest pressure, then fewest active workloads) and recorded as one new workload.spec event. Initial assignments carry epoch zero.
+4. Skip healthy owners. A spec whose AssignedNodeID is in the alive set is left alone.
+5. Reassign orphans. The owner is not alive, so the spec is pointed at the alive pickNode choice, AssignmentEpoch is incremented by one, and one new workload.spec event is recorded through RecordEventAndLog. The next tick reads the new copy from the view, so each orphan is rewritten once per epoch.
+6. Guard the target. If the pickNode choice is not alive, the spec is skipped this tick.
 
-Convergence follows the view rules in `internal/journalview/workloads.go` (`putEvent`, `keepStored`): the higher epoch always supersedes the stored copy, equal epochs fall back to byte-larger serialization, and tombstones dominate both. Concurrent reassignments from opposite partitions therefore converge on the highest epoch, and stale copies never resurrect a stopped workload. Execution stays at-most-once per partition: the reconciler runs a spec only on its assigned node.
+Convergence follows the view rules in internal/journalview/workloads.go (putEvent, keepStored): the higher epoch always supersedes the stored copy, equal epochs fall back to byte-larger serialization, and tombstones dominate both. Concurrent reassignments from opposite partitions therefore converge on the highest epoch, and stale copies never resurrect a stopped workload. Execution stays at-most-once per partition: the reconciler runs a spec only on its assigned node.
 
 An epoch is a reassignment count. Every time the scheduler moves a workload to a new node it goes up by one, and the stored copy with the largest count wins. Without it there is no way to tell which copy is newer: a reassignment differs from the stored copy only by node ID, so byte comparison would pick the larger UUID instead of the newer assignment, and the orphan would stall whenever the dead owner's ID happened to be larger.
 
 ---
 
-## Reconciliation rhythm
+Reconciliation rhythm
 
 Every loop in concord is a tick, not a subscription. Peer sync pulls
 every 5 seconds and the reconciler compares desired against running
 every 5 seconds, while health checks and pressure sampling run a local
-500ms beat beside them (`internal/reconciler/fastpath.go`). Each pass
+500ms beat beside them (internal/reconciler/fastpath.go). Each pass
 looks at the actual state, looks at the desired state, and closes the
 gap. Nothing waits to be notified.
 
@@ -312,22 +302,22 @@ the world, the fast loop keeps the node alive between ticks.
 
 ---
 
-## Conflict model
+Conflict model
 
-Concord sidesteps most conflicts by construction: every `workload run` mints a fresh unique ID, so concurrent submissions never disagree about the same key. Merge of distinct IDs is a union.
+Concord sidesteps most conflicts by construction: every workload run mints a fresh unique ID, so concurrent submissions never disagree about the same key. Merge of distinct IDs is a union.
 
 That union is a CvRDT (convergent replicated data type): the journal is a grow-only set of immutable events, merge is set union, and union is associative, commutative, and idempotent. Sync applies unknown IDs and skips known ones, so every segment converges to the same event set regardless of partition history or arrival order. Views are deterministic projections of that set: tombstone dominance, higher assignment epoch then byte-larger live specs, and highest-generation pins all resolve without wall-clocks.
 
-The sidestep leaks in one place. Nodes re-record the spec (initial assignment writes its own `workload.spec` copy per ID, orphan reassignment writes a copy with the epoch incremented by one), so one workload ID can end up with several distinct spec events from different authors. These are conflicting same-ID writes, and the view must resolve them deterministically.
+The sidestep leaks in one place. Nodes re-record the spec (initial assignment writes its own workload.spec copy per ID, orphan reassignment writes a copy with the epoch incremented by one), so one workload ID can end up with several distinct spec events from different authors. These are conflicting same-ID writes, and the view must resolve them deterministically.
 
-Landed rules in `internal/journalview/workloads.go` (`putEvent`):
+Landed rules in internal/journalview/workloads.go (putEvent):
 
-* Tombstone dominance. A stored tombstone (`Removed=true`) is never replaced by a live spec copy, regardless of arrival order or epoch. A stop wins over any spec copy.
-* Live-live tiebreak. Two live specs for one ID resolve by deterministic comparison: the higher `AssignmentEpoch` wins. Byte comparison runs only on an epoch draw, where the byte-larger serialization wins. A reassignment therefore always supersedes the stored copy it was derived from, and concurrent reassignments from opposite partitions converge on the highest epoch, regardless of arrival order.
+* Tombstone dominance. A stored tombstone (Removed=true) is never replaced by a live spec copy, regardless of arrival order or epoch. A stop wins over any spec copy.
+* Live-live tiebreak. Two live specs for one ID resolve by deterministic comparison: the higher AssignmentEpoch wins. Byte comparison runs only on an epoch draw, where the byte-larger serialization wins. A reassignment therefore always supersedes the stored copy it was derived from, and concurrent reassignments from opposite partitions converge on the highest epoch, regardless of arrival order.
 
 All rules are order-independent: every node converges to the same stored copy no matter the sync arrival sequence. No wall-clock participates in these paths. The epoch is a per-workload generation counter, same family as the key-pin generation, incremented only by the scheduler on reassignment; initial assignments carry epoch zero.
 
-Assignment rides in `workload.spec` itself rather than a separate event
+Assignment rides in workload.spec itself rather than a separate event
 type, deliberately. A separate assignment stream would not remove the
 conflict, it would move it: opposite partitions still write concurrent
 claims for one spec id, and those still need highest-epoch-wins to
@@ -339,17 +329,17 @@ deterministic, and old journals need no migration.
 
 ---
 
-## Object model
+Object model
 
 Fleets are single tenant: one operator, one trust domain, every node provisioned with the same CA and gossip key. Nodes cooperate rather than distrust each other. Isolation between customers happens at fleet level, separate meshes, not inside one mesh: tenancy within a mesh would demand per-object auth, quotas, and tenant-aware scheduling, which is the CP machinery Concord rejects. Mutually distrustful workloads sharing one mesh would be a different system, not a new object kind.
 
-The workload is the only object. There is one spec (`internal/workload/workload.go:Spec`), one assignment flow, and one convergence story.
+The workload is the only object. There is one spec (internal/workload/workload.go:Spec), one assignment flow, and one convergence story.
 
-### One spec
+One spec
 
 New needs arrive as workload fields. Image, command, env, resources, ports, health, restart policy, and timeouts already live there. Volume mounts, network policy, and secret references belong there too.
 
-### Why not one kind per concern
+Why not one kind per concern
 
 In comparison, Kubernetes follows the CP model: a central API server backed by an etcd quorum arbitrates a registry of specialized kinds, each with its own controller and lifecycle.
 
@@ -362,22 +352,22 @@ That granularity serves multi-tenant clusters where different teams own differen
 
 Each additional kind would multiply the expensive surfaces: its own view with merge rules, scheduler handling, reconciler branch, IPC and SDK endpoints, and partition coverage in Resonance. Convergence machinery is owed per kind, and the assignment epoch is what one installment of that debt looks like.
 
-### What dies with the workload
+What dies with the workload
 
-A stop reaps everything the workload owns, storage included. The tombstone (`Removed=true`) dominates every live copy at any epoch, and nothing attached to the workload survives it. No storage survives tombstoning the workload, and this follows from failover rather than simplicity: a workload can be reassigned to another node at any time, so node-local data that outlives it strands itself where nothing runs. Making such data useful would require replicated volumes, a consistency subsystem of its own that contradicts local-first. Durable needs already have homes: shared mission state belongs in the journal where it converges, images and models in the registry, logs streamed out. What remains is scratch space, workload-scoped by nature, provisioned with the workload and deleted with it.
+A stop reaps everything the workload owns, storage included. The tombstone (Removed=true) dominates every live copy at any epoch, and nothing attached to the workload survives it. No storage survives tombstoning the workload, and this follows from failover rather than simplicity: a workload can be reassigned to another node at any time, so node-local data that outlives it strands itself where nothing runs. Making such data useful would require replicated volumes, a consistency subsystem of its own that contradicts local-first. Durable needs already have homes: shared mission state belongs in the journal where it converges, images and models in the registry, logs streamed out. What remains is scratch space, workload-scoped by nature, provisioned with the workload and deleted with it.
 
-### When a kind splits out
+When a kind splits out
 
 A new kind splits out only when it has an independent lifecycle and different merge semantics, meaning state that must survive its workload's tombstone under rules stop-wins cannot express. No such case exists today. Until one arrives with a concrete use, bake it into the workload.
 
 ---
 
-## The journal
+The journal
 
-The journal is one file, `journal.jsonl` under `XDG_CONFIG_HOME/concord`,
+The journal is one file, journal.jsonl under XDG_CONFIG_HOME/concord,
 created with owner-only permissions. Every event is one JSON line:
 marshal, append the line plus its newline in a single write, fsync before
-return. Appends serialize on a mutex and open with `O_APPEND`, so
+return. Appends serialize on a mutex and open with O_APPEND, so
 concurrent writers never interleave mid-line and every recorded byte
 offset stays a line boundary for the life of the file. Readers open
 separate read-only handles; the serving index seeks them by offset.
@@ -387,8 +377,8 @@ Coordination events are small and infrequent, so parse cost and verbosity
 never matter, while grep-able text keeps failure dumps and Resonance
 replays readable.
 
-One real limit: lines cap at 10MB (`maxJournalLineBytes` in
-`internal/journalreader/jsonl_reader.go`), far above the 64KB scanner
+One real limit: lines cap at 10MB (maxJournalLineBytes in
+internal/journalreader/jsonl_reader.go), far above the 64KB scanner
 default, so a single oversized payload fails loudly instead of
 mysteriously. High-rate telemetry never belongs here anyway: that
 traffic wants last-value semantics on a data plane, meaning each topic

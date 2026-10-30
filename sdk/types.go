@@ -51,7 +51,7 @@ const (
 // QoS is a workload's compute allocation class: who places first and
 // who gives way. Empty means best-effort. This ranks compute, not
 // packets: ROS-style DDS QoS governs message delivery, this governs
-// placement. See docs/qos.md.
+// placement. See docs/qos.
 type QoS string
 
 const (
