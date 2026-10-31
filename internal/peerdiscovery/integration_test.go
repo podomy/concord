@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
@@ -94,7 +95,7 @@ func selfMeta(t *testing.T, svc *peerdiscovery.MemberService) peerdiscovery.Node
 func startNode(t *testing.T, join []netip.AddrPort) (*peerdiscovery.MemberService, netip.AddrPort) {
 	t.Helper()
 
-	svc, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+	svc, err := peerdiscovery.Start(logs.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
 		Address: netip.MustParseAddrPort("127.0.0.1:0"),
 	}, join, netip.Addr{}, peerdiscovery.NoiseIdentity{})

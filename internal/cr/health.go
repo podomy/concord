@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/opencontainers/runc/libcontainer"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/workload"
 )
@@ -30,10 +31,10 @@ const probeTimeout = 5 * time.Second
 // exec without a command are unhealthy, loudly: silent skips hide
 // misconfiguration. The container handle serves exec probes only and may
 // be nil for the others.
-func CheckHealth(ctx context.Context, logger *zap.Logger, spec workload.Spec, ctr *libcontainer.Container) bool {
+func CheckHealth(ctx context.Context, logger *logs.Logger, spec workload.Spec, ctr *libcontainer.Container) bool {
 	err := ctx.Err()
 	if err != nil {
-		logger.Error("context cancellation", zap.Error(err))
+		logger.Error("context cancellation", logs.Error(err))
 		return false
 	}
 
@@ -50,7 +51,7 @@ func CheckHealth(ctx context.Context, logger *zap.Logger, spec workload.Spec, ct
 		return checkExec(ctx, logger, spec, ctr)
 	default:
 		logger.Warn("unknown health probe, treating as unhealthy",
-			zap.String("probe", string(spec.HealthProbe)), zap.String("id", spec.ID.String()))
+			logs.String("probe", string(spec.HealthProbe)), logs.String("id", spec.ID.String()))
 		return false
 	}
 }
@@ -59,7 +60,7 @@ func CheckHealth(ctx context.Context, logger *zap.Logger, spec workload.Spec, ct
 // returns true on a 2xx status. Workloads without mapped ports skip the
 // check as healthy: specs written before probes existed must not
 // suddenly restart-loop.
-func checkHTTP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool {
+func checkHTTP(ctx context.Context, logger *logs.Logger, spec workload.Spec) bool {
 	if spec.HostPort == 0 || spec.ContainerPort == 0 {
 		return true
 	}
@@ -75,7 +76,7 @@ func checkHTTP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", spec.HostPort, path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		logger.Error("failed to create health check request", zap.Uint16("port", spec.HostPort), zap.Error(err))
+		logger.Error("failed to create health check request", logs.Uint16("port", spec.HostPort), logs.Error(err))
 		return false
 	}
 
@@ -85,7 +86,7 @@ func checkHTTP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Warn("health check request failed", zap.Uint16("port", spec.HostPort), zap.Error(err))
+		logger.Warn("health check request failed", logs.Uint16("port", spec.HostPort), logs.Error(err))
 		return false
 	}
 	defer func() {
@@ -94,7 +95,7 @@ func checkHTTP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		logger.Warn("health check returned non-2xx status code", zap.Uint16("port", spec.HostPort), zap.Int("status_code", resp.StatusCode))
+		logger.Warn("health check returned non-2xx status code", logs.Uint16("port", spec.HostPort), logs.Int("status_code", resp.StatusCode))
 		return false
 	}
 
@@ -104,20 +105,20 @@ func checkHTTP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool
 // checkTCP dials the mapped host port and returns true on connect. Unlike
 // HTTP there is no legacy skip: a TCP probe without a host port is a
 // misconfiguration, and misconfiguration reports unhealthy, loudly.
-func checkTCP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool {
+func checkTCP(ctx context.Context, logger *logs.Logger, spec workload.Spec) bool {
 	if spec.HostPort == 0 {
-		logger.Warn("tcp probe without host port, treating as unhealthy", zap.String("id", spec.ID.String()))
+		logger.Warn("tcp probe without host port, treating as unhealthy", logs.String("id", spec.ID.String()))
 		return false
 	}
 
 	dialer := &net.Dialer{Timeout: probeTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("127.0.0.1:%d", spec.HostPort))
 	if err != nil {
-		logger.Debug("tcp probe failed", zap.Uint16("port", spec.HostPort), zap.Error(err))
+		logger.Debug("tcp probe failed", logs.Uint16("port", spec.HostPort), logs.Error(err))
 		return false
 	}
 	if err := conn.Close(); err != nil {
-		logger.Debug("tcp probe close failed", zap.Uint16("port", spec.HostPort), zap.Error(err))
+		logger.Debug("tcp probe close failed", logs.Uint16("port", spec.HostPort), logs.Error(err))
 	}
 
 	return true
@@ -127,13 +128,13 @@ func checkTCP(ctx context.Context, logger *zap.Logger, spec workload.Spec) bool 
 // exit code zero. Output discards: probe chatter stays out of log rings.
 // The run is bounded by the probe timeout with SIGKILL escalation, so a
 // hung check cannot stall the beat behind it.
-func checkExec(ctx context.Context, logger *zap.Logger, spec workload.Spec, ctr *libcontainer.Container) bool {
+func checkExec(ctx context.Context, logger *logs.Logger, spec workload.Spec, ctr *libcontainer.Container) bool {
 	if len(spec.HealthCommand) == 0 {
-		logger.Warn("exec probe without command, treating as unhealthy", zap.String("id", spec.ID.String()))
+		logger.Warn("exec probe without command, treating as unhealthy", logs.String("id", spec.ID.String()))
 		return false
 	}
 	if ctr == nil {
-		logger.Warn("exec probe without container, treating as unhealthy", zap.String("id", spec.ID.String()))
+		logger.Warn("exec probe without container, treating as unhealthy", logs.String("id", spec.ID.String()))
 		return false
 	}
 
@@ -147,7 +148,7 @@ func checkExec(ctx context.Context, logger *zap.Logger, spec workload.Spec, ctr 
 		Stderr: io.Discard,
 	}
 	if err := ctr.Start(proc); err != nil {
-		logger.Debug("exec probe start failed", zap.Strings("command", spec.HealthCommand), zap.Error(err))
+		logger.Debug("exec probe start failed", logs.Strings("command", spec.HealthCommand), logs.Error(err))
 		return false
 	}
 
@@ -178,9 +179,9 @@ func checkExec(ctx context.Context, logger *zap.Logger, spec workload.Spec, ctr 
 	case out := <-done:
 		return out.err == nil && out.code == 0
 	case <-timeout.C:
-		logger.Debug("exec probe timed out, killing", zap.Strings("command", spec.HealthCommand))
+		logger.Debug("exec probe timed out, killing", logs.Strings("command", spec.HealthCommand))
 		if err := proc.Signal(syscall.SIGKILL); err != nil {
-			logger.Debug("exec probe kill failed", zap.Error(err))
+			logger.Debug("exec probe kill failed", logs.Error(err))
 		}
 		out := <-done
 		return out.err == nil && out.code == 0

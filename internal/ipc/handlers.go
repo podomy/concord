@@ -10,7 +10,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/journal"
@@ -116,7 +117,7 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 	live, err := s.workloads.List(r.Context())
 	if err != nil {
-		s.logger.Error("failed to list workloads for dependency check", zap.Error(err))
+		s.logger.Error("failed to list workloads for dependency check", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to check dependencies: "+err.Error())
 		return
 	}
@@ -127,7 +128,7 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := json.Marshal(spec)
 	if err != nil {
-		s.logger.Error("failed to marshal workload spec", zap.Error(err))
+		s.logger.Error("failed to marshal workload spec", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to marshal workload spec")
 		return
 	}
@@ -135,7 +136,7 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEvent(r.Context(), s.journal, s.views, event)
 	if err != nil {
-		s.logger.Error("failed to commit workload event to journal", zap.Error(err))
+		s.logger.Error("failed to commit workload event to journal", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to commit workload: "+err.Error())
 		return
 	}
@@ -147,7 +148,7 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 	specs, err := s.workloads.List(r.Context())
 	if err != nil {
-		s.logger.Error("failed to list workloads from view", zap.Error(err))
+		s.logger.Error("failed to list workloads from view", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list workloads: "+err.Error())
 		return
 	}
@@ -175,7 +176,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 
 	spec, err := s.workloads.Get(r.Context(), id)
 	if err != nil {
-		s.logger.Error("failed to get workload from view", zap.Error(err), zap.String("id", idStr))
+		s.logger.Error("failed to get workload from view", logs.Error(err), logs.String("id", idStr))
 		writeError(w, http.StatusInternalServerError, "failed to get workload: "+err.Error())
 		return
 	}
@@ -219,7 +220,7 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 	if s.workloads != nil {
 		spec, err := s.workloads.Get(r.Context(), id)
 		if err != nil {
-			s.logger.Error("get workload for stats", zap.Error(err), zap.String("id", idStr))
+			s.logger.Error("get workload for stats", logs.Error(err), logs.String("id", idStr))
 		} else if spec != nil && spec.Resources.MemoryMB > 0 {
 			memLimitMB = uint64(spec.Resources.MemoryMB)
 		}
@@ -301,7 +302,7 @@ func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
 
 	spec, err := s.workloads.Get(r.Context(), id)
 	if err != nil {
-		s.logger.Error("failed to get workload for update", zap.Error(err), zap.String("id", idStr))
+		s.logger.Error("failed to get workload for update", logs.Error(err), logs.String("id", idStr))
 		writeError(w, http.StatusInternalServerError, "failed to get workload: "+err.Error())
 		return
 	}
@@ -315,18 +316,18 @@ func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
 	updated.AssignmentEpoch++
 	payload, err := json.Marshal(updated)
 	if err != nil {
-		s.logger.Error("failed to marshal updated spec", zap.Error(err))
+		s.logger.Error("failed to marshal updated spec", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to marshal updated spec")
 		return
 	}
 
 	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEventAndLog(r.Context(), s.logger, s.journal, s.views, event, "workload.spec updated",
-		zap.String("workload_id", id.String()),
-		zap.String("image", updated.Image),
+		logs.String("workload_id", id.String()),
+		logs.String("image", updated.Image),
 	)
 	if err != nil {
-		s.logger.Error("failed to commit update event to journal", zap.Error(err))
+		s.logger.Error("failed to commit update event to journal", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to commit update: "+err.Error())
 		return
 	}
@@ -349,7 +350,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 
 	spec, err := s.workloads.Get(r.Context(), id)
 	if err != nil {
-		s.logger.Error("failed to get workload for deletion", zap.Error(err), zap.String("id", idStr))
+		s.logger.Error("failed to get workload for deletion", logs.Error(err), logs.String("id", idStr))
 		writeError(w, http.StatusInternalServerError, "failed to get workload: "+err.Error())
 		return
 	}
@@ -364,7 +365,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := json.Marshal(tombstone)
 	if err != nil {
-		s.logger.Error("failed to marshal tombstone spec", zap.Error(err))
+		s.logger.Error("failed to marshal tombstone spec", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to marshal tombstone")
 		return
 	}
@@ -372,7 +373,7 @@ func (s *Server) handleDeleteWorkload(w http.ResponseWriter, r *http.Request) {
 	event := journal.NewEvent(s.nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEvent(r.Context(), s.journal, s.views, event)
 	if err != nil {
-		s.logger.Error("failed to commit tombstone event to journal", zap.Error(err))
+		s.logger.Error("failed to commit tombstone event to journal", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to commit tombstone: "+err.Error())
 		return
 	}
@@ -421,7 +422,7 @@ func (s *Server) handleSetPosition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := node.PersistPosition(pos.Lat, pos.Lon); err != nil {
-		s.logger.Error("persist position", zap.Error(err))
+		s.logger.Error("persist position", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "persist position: "+err.Error())
 		return
 	}
@@ -429,7 +430,7 @@ func (s *Server) handleSetPosition(w http.ResponseWriter, r *http.Request) {
 	s.peerService.SetPosition(pos.Lat, pos.Lon)
 	s.sampler.RecordPosition(pos)
 	if err := s.peerService.Publish(); err != nil {
-		s.logger.Debug("publish position", zap.Error(err))
+		s.logger.Debug("publish position", logs.Error(err))
 	}
 
 	writeJSON(w, http.StatusOK, input)
@@ -444,7 +445,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 
 	members, err := s.peerService.Members()
 	if err != nil {
-		s.logger.Error("failed to query peer members", zap.Error(err))
+		s.logger.Error("failed to query peer members", logs.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to list nodes: "+err.Error())
 		return
 	}

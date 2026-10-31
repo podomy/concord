@@ -10,7 +10,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/certs"
 	"github.com/podomy/concord/internal/journal"
@@ -33,7 +34,7 @@ type KeyPinner struct {
 	views   []journalview.View
 	pins    *journalview.PinnedKeys
 	verify  transport.Verifier
-	logger  *zap.Logger
+	logger  *logs.Logger
 }
 
 // newKeyPinner builds the transport verifier for this node: CA signature
@@ -42,7 +43,7 @@ type KeyPinner struct {
 // both handshake directions.
 func newKeyPinner(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	selfID uuid.UUID,
 	j journal.Journal,
 	views []journalview.View,
@@ -98,10 +99,10 @@ func (p *KeyPinner) Verify(ctx context.Context, id uuid.UUID, generation uint64,
 
 	if !bytes.Equal(pinned.PublicKey, pub) {
 		p.logger.Warn("peer key pin mismatch: pinned key sticks",
-			zap.String("peer_id", id.String()),
-			zap.Uint64("generation", generation),
-			zap.String("pinned_key", hex.EncodeToString(pinned.PublicKey)),
-			zap.String("presented_key", hex.EncodeToString(pub)),
+			logs.String("peer_id", id.String()),
+			logs.Uint64("generation", generation),
+			logs.String("pinned_key", hex.EncodeToString(pinned.PublicKey)),
+			logs.String("presented_key", hex.EncodeToString(pub)),
 		)
 		return fmt.Errorf("peer %s presents an unpinned key at generation %d", id, generation)
 	}
@@ -117,9 +118,9 @@ func (p *KeyPinner) pin(ctx context.Context, id uuid.UUID, generation uint64, pu
 	}
 
 	p.logger.Info(message,
-		zap.String("peer_id", id.String()),
-		zap.Uint64("generation", generation),
-		zap.String("key", hex.EncodeToString(pub)),
+		logs.String("peer_id", id.String()),
+		logs.Uint64("generation", generation),
+		logs.String("key", hex.EncodeToString(pub)),
 	)
 
 	return nil

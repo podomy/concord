@@ -12,13 +12,13 @@ import (
 	"strings"
 	"testing"
 
-	"go.uber.org/zap/zaptest"
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/workload"
 )
 
 func TestCheckHealthContextCancelled(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -29,7 +29,7 @@ func TestCheckHealthContextCancelled(t *testing.T) {
 }
 
 func TestCheckHealthSpecRemoved(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{Removed: true, HostPort: 8080, ContainerPort: 80}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false when spec is marked as removed")
@@ -37,7 +37,7 @@ func TestCheckHealthSpecRemoved(t *testing.T) {
 }
 
 func TestCheckHealthNoPortSpecified(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HostPort: 0, ContainerPort: 0}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); !healthy {
 		t.Error("expected true when no port is specified in spec")
@@ -45,7 +45,7 @@ func TestCheckHealthNoPortSpecified(t *testing.T) {
 }
 
 func TestCheckHealthPartialPortSpecified(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	specHostOnly := workload.Spec{HostPort: 8080, ContainerPort: 0}
 	if healthy := CheckHealth(t.Context(), logger, specHostOnly, nil); !healthy {
 		t.Error("expected true when only HostPort is specified without ContainerPort")
@@ -58,7 +58,7 @@ func TestCheckHealthPartialPortSpecified(t *testing.T) {
 }
 
 func TestCheckHealthHostPortSuccess(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	port := startProbeHTTPServer(t, "/health")
 
 	spec := workload.Spec{HostPort: port, ContainerPort: 80}
@@ -68,7 +68,7 @@ func TestCheckHealthHostPortSuccess(t *testing.T) {
 }
 
 func TestCheckHealthCustomHealthPath(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	port := startProbeHTTPServer(t, "/custom/ping")
 
 	spec := workload.Spec{HostPort: port, ContainerPort: 80, HealthPath: "custom/ping"}
@@ -78,7 +78,7 @@ func TestCheckHealthCustomHealthPath(t *testing.T) {
 }
 
 func TestCheckHealthNon2xxStatus(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -100,7 +100,7 @@ func TestCheckHealthNon2xxStatus(t *testing.T) {
 }
 
 func TestCheckHealthConnectionRefused(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HostPort: 59999, ContainerPort: 80}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false when connection is refused")
@@ -108,7 +108,7 @@ func TestCheckHealthConnectionRefused(t *testing.T) {
 }
 
 func TestCheckHealthTCPOpen(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	// Any open TCP socket answers the dial; the HTTP server is just a
 	// convenient listener.
 	port := startProbeHTTPServer(t, "/health")
@@ -120,7 +120,7 @@ func TestCheckHealthTCPOpen(t *testing.T) {
 }
 
 func TestCheckHealthTCPClosed(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HealthProbe: workload.HealthProbeTCP, HostPort: 59999, ContainerPort: 80}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false for closed TCP port")
@@ -128,7 +128,7 @@ func TestCheckHealthTCPClosed(t *testing.T) {
 }
 
 func TestCheckHealthTCPWithoutPort(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HealthProbe: workload.HealthProbeTCP}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false for TCP probe without host port")
@@ -136,7 +136,7 @@ func TestCheckHealthTCPWithoutPort(t *testing.T) {
 }
 
 func TestCheckHealthExecWithoutCommand(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HealthProbe: workload.HealthProbeExec, HostPort: 8080, ContainerPort: 80}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false for exec probe without command")
@@ -144,7 +144,7 @@ func TestCheckHealthExecWithoutCommand(t *testing.T) {
 }
 
 func TestCheckHealthExecWithoutContainer(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HealthProbe: workload.HealthProbeExec, HealthCommand: []string{"/bin/true"}}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false for exec probe without container")
@@ -152,7 +152,7 @@ func TestCheckHealthExecWithoutContainer(t *testing.T) {
 }
 
 func TestCheckHealthUnknownProbe(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	spec := workload.Spec{HealthProbe: workload.HealthProbe("smoke-signals"), HostPort: 8080, ContainerPort: 80}
 	if healthy := CheckHealth(t.Context(), logger, spec, nil); healthy {
 		t.Error("expected false for unknown probe")
@@ -160,7 +160,7 @@ func TestCheckHealthUnknownProbe(t *testing.T) {
 }
 
 func TestCheckHealthEmptyProbeStaysHTTP(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := logs.NewTest(t)
 	port := startProbeHTTPServer(t, "/health")
 
 	spec := workload.Spec{HostPort: port, ContainerPort: 80}

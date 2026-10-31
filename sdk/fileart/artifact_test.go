@@ -19,7 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/registry"
@@ -280,7 +281,7 @@ func setupRealRegistryKeys(t *testing.T) {
 func startRealRegistry(t *testing.T) (context.Context, *Client) {
 	t.Helper()
 
-	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+	peerService, err := peerdiscovery.Start(logs.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
 		Address: netip.MustParseAddrPort("127.0.0.1:0"),
 	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})
@@ -303,7 +304,7 @@ func startRealRegistry(t *testing.T) (context.Context, *Client) {
 		t.Fatalf("new registry: %v", err)
 	}
 	ctx := t.Context()
-	err = reg.Start(ctx, peerService, zap.NewNop())
+	err = reg.Start(ctx, peerService, logs.NewNop())
 	if err != nil {
 		t.Fatalf("start registry: %v", err)
 	}

@@ -12,7 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/certs"
 	"github.com/podomy/concord/internal/journal"
@@ -57,7 +58,7 @@ func newPinFixture(t *testing.T) pinFixture {
 	views := []journalview.View{pins}
 	selfID := uuid.New()
 
-	verifier, err := newKeyPinner(context.Background(), zap.NewNop(), selfID, j, views, pins)
+	verifier, err := newKeyPinner(context.Background(), logs.NewNop(), selfID, j, views, pins)
 	if err != nil {
 		t.Fatalf("new pinner: %v", err)
 	}

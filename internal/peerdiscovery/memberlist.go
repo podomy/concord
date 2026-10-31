@@ -21,7 +21,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/memberlist"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/geo"
 	nodepackage "github.com/podomy/concord/internal/node"
@@ -42,7 +43,7 @@ type MemberService struct {
 // Adapter for the message levels coming from the memberlist
 // library
 type MemberlistLogWriter struct {
-	logger *zap.Logger
+	logger *logs.Logger
 }
 
 // stripMemberlistToken cuts one [TAG] prefix plus the
@@ -117,7 +118,7 @@ func (w *MemberlistLogWriter) Write(p []byte) (int, error) {
 // Pub) advertises no Noise key; peers then cannot open Noise sessions to this
 // node until it restarts with an identity.
 func Start(
-	logger *zap.Logger,
+	logger *logs.Logger,
 	node Node,
 	join []netip.AddrPort,
 	advertise netip.Addr,
@@ -151,7 +152,7 @@ func Start(
 	config.GossipVerifyOutgoing = true
 	if logger != nil {
 		sum := sha256.Sum256(gossipKey)
-		logger.Info("gossip key loaded", zap.String("sha256", hex.EncodeToString(sum[:])))
+		logger.Info("gossip key loaded", logs.String("sha256", hex.EncodeToString(sum[:])))
 	}
 
 	resolved := ResolveAdvertise(node.Address, advertise)
@@ -161,7 +162,7 @@ func Start(
 			config.AdvertisePort = int(resolved.Port())
 		}
 	}
-	// Route memberlist's stdlib logger through zap (JSON
+	// Route memberlist's stdlib logger through logs (JSON
 	// with the rest of the app).
 	if logger != nil {
 		config.Logger = log.New(
@@ -228,8 +229,8 @@ func Start(
 			if logger != nil {
 				logger.Warn(
 					"memberlist join failed; continuing alone",
-					zap.Error(err),
-					zap.Int("candidates", len(join)),
+					logs.Error(err),
+					logs.Int("candidates", len(join)),
 				)
 			}
 		}

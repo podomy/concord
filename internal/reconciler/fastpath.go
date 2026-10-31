@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/clock"
 	"github.com/podomy/concord/internal/cr"
@@ -36,12 +37,12 @@ const historyInterval = 5 * time.Second
 // events solely on transitions (see runHealthChecks), so the fast cadence
 // never floods the log: raw observations stay in memory, only their edges
 // converge.
-func runFastTick(ctx context.Context, logger *zap.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) {
+func runFastTick(ctx context.Context, logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) {
 	runHealthChecks(ctx, logger, running, j, views, nodeID)
 	samplePressure(logger, sampler, running, peerService)
 }
 
-func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
 	for _, entry := range running {
 		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
 			continue
@@ -67,22 +68,22 @@ func runHealthChecks(ctx context.Context, logger *zap.Logger, running map[uuid.U
 // signalUnhealthy appends one workload.unhealthy edge for a sick workload.
 // The unhealthyReported flag keeps it edge-triggered: without it the 500ms
 // beat would append one event per beat for the whole sickness.
-func signalUnhealthy(ctx context.Context, logger *zap.Logger, entry *ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+func signalUnhealthy(ctx context.Context, logger *logs.Logger, entry *ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
 	if entry.unhealthyReported {
 		return
 	}
 	logger.Warn("signaling unhealthy workload")
 	payload, err := json.Marshal(workload.Unhealthy{WorkloadID: entry.Spec.ID})
 	if err != nil {
-		logger.Error("marshal unhealthy event", zap.Error(err))
+		logger.Error("marshal unhealthy event", logs.Error(err))
 		return
 	}
 	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadUnhealthy, payload)
 	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, "workload.unhealthy",
-		zap.String("workload_id", entry.Spec.ID.String()),
+		logs.String("workload_id", entry.Spec.ID.String()),
 	)
 	if err != nil {
-		logger.Error("record event failed", zap.Error(err))
+		logger.Error("record event failed", logs.Error(err))
 		return
 	}
 	entry.unhealthyReported = true
@@ -92,14 +93,14 @@ func signalUnhealthy(ctx context.Context, logger *zap.Logger, entry *ContainerAn
 // host trio for placement. Sampling failures keep previous readings and log
 // at debug: /proc and cgroupfs either work or are permanently broken, never
 // flaky.
-func samplePressure(logger *zap.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) {
+func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) {
 	pressure, err := sampler.SampleHost()
 	if err != nil {
-		logger.Debug("sample host pressure", zap.Error(err))
+		logger.Debug("sample host pressure", logs.Error(err))
 	} else {
 		peerService.SetPressure(pressure.CPU, pressure.Mem, pressure.Disk)
 		if err := peerService.Publish(); err != nil {
-			logger.Debug("publish metadata", zap.Error(err))
+			logger.Debug("publish metadata", logs.Error(err))
 		}
 	}
 
@@ -119,10 +120,10 @@ func samplePressure(logger *zap.Logger, sampler *node.Sampler, running map[uuid.
 
 // sampleWorkloadEntry reads one container's cgroup counters into the sampler.
 // A container that vanished mid-beat keeps its previous sample.
-func sampleWorkloadEntry(logger *zap.Logger, sampler *node.Sampler, entry *ContainerAndProcess) {
+func sampleWorkloadEntry(logger *logs.Logger, sampler *node.Sampler, entry *ContainerAndProcess) {
 	stats, err := entry.Stats()
 	if err != nil {
-		logger.Debug("sample workload stats", zap.String("id", entry.Spec.ID.String()), zap.Error(err))
+		logger.Debug("sample workload stats", logs.String("id", entry.Spec.ID.String()), logs.Error(err))
 		return
 	}
 	if stats == nil || stats.CgroupStats == nil {

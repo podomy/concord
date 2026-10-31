@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -42,7 +43,7 @@ type Server struct {
 	workloads   *journalview.Workloads
 	peerService *peerdiscovery.MemberService
 	sampler     *node.Sampler
-	logger      *zap.Logger
+	logger      *logs.Logger
 
 	mu         sync.Mutex
 	httpServer *http.Server
@@ -58,11 +59,11 @@ func NewServer(
 	views []journalview.View,
 	workloads *journalview.Workloads,
 	peerService *peerdiscovery.MemberService,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	sampler *node.Sampler,
 ) *Server {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = logs.NewNop()
 	}
 
 	return &Server{
@@ -106,7 +107,7 @@ func (s *Server) Start(ctx context.Context, socketPath string) error {
 
 	// Clean up any stale socket file left from previous process termination.
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		s.logger.Debug("cleaning up old socket file", zap.Error(err))
+		s.logger.Debug("cleaning up old socket file", logs.Error(err))
 	}
 
 	var lc net.ListenConfig
@@ -133,12 +134,12 @@ func (s *Server) Start(ctx context.Context, socketPath string) error {
 	s.socketPath = socketPath
 	s.closed = false
 
-	s.logger.Info("local ipc server listening", zap.String("socket", socketPath))
+	s.logger.Info("local ipc server listening", logs.String("socket", socketPath))
 
 	// Background serve loop.
 	go func() {
 		if err := s.httpServer.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			s.logger.Error("ipc http serve failed", zap.Error(err))
+			s.logger.Error("ipc http serve failed", logs.Error(err))
 		}
 	}()
 

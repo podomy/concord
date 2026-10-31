@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap/zaptest"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -75,7 +76,7 @@ func seedSchedulerSpec(t *testing.T, view *journalview.Workloads, spec workload.
 // runScheduler runs scheduleWorkloads once and returns the recorded events.
 func runScheduler(t *testing.T, view *journalview.Workloads, rec *recordingJournal, members []peerdiscovery.Node) {
 	t.Helper()
-	scheduleWorkloads(t.Context(), zaptest.NewLogger(t), rec, view, fakeMemberSource{members: members}, uuid.New(), []journalview.View{view})
+	scheduleWorkloads(t.Context(), logs.NewTest(t), rec, view, fakeMemberSource{members: members}, uuid.New(), []journalview.View{view})
 }
 
 // aliveSchedulerNode builds one alive member with the given workload count.

@@ -12,7 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/kvstore"
@@ -169,7 +170,7 @@ func TestSyncOnePersistsCursor(t *testing.T) {
 		cursorStore: cursorStore,
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+	if !syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected success")
 	}
 	got, err := cursorStore.load()
@@ -198,7 +199,7 @@ func TestSyncOneFailedApplyPersistsNothing(t *testing.T) {
 		cursorStore: cursorStore,
 	}
 
-	if syncOne(context.Background(), zap.NewNop(), state, member) {
+	if syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected failure")
 	}
 	got, err := cursorStore.load()

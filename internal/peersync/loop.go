@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -59,7 +60,7 @@ type MemberSource interface {
 // blocks until ctx is cancelled.
 func RunPullLoop(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	selfID uuid.UUID,
 	members MemberSource,
 	syncer PeerSync,
@@ -73,7 +74,7 @@ func RunPullLoop(
 	if cursorStore != nil {
 		loaded, err := cursorStore.load()
 		if err != nil {
-			logger.Warn("load persisted cursors, starting empty", zap.Error(err))
+			logger.Warn("load persisted cursors, starting empty", logs.Error(err))
 		} else {
 			cursors = loaded
 		}
@@ -118,7 +119,7 @@ type pullState struct {
 // On Members() error, returns previous unchanged and does not Sync.
 func pullTick(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	selfID uuid.UUID,
 	members MemberSource,
 	state pullState,
@@ -126,7 +127,7 @@ func pullTick(
 ) map[uuid.UUID]peerdiscovery.Node {
 	list, err := members.Members()
 	if err != nil {
-		logger.Error("list members", zap.Error(err))
+		logger.Error("list members", logs.Error(err))
 		return previous
 	}
 
@@ -152,7 +153,7 @@ func membersExceptSelf(selfID uuid.UUID, members []peerdiscovery.Node) map[uuid.
 // Returns the set of peer IDs successfully synced so periodic can skip them.
 func pullMeet(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	state pullState,
 	previous, current map[uuid.UUID]peerdiscovery.Node,
 ) map[uuid.UUID]struct{} {
@@ -182,7 +183,7 @@ func becameAlive(previous map[uuid.UUID]peerdiscovery.Node, id uuid.UUID, member
 // this tick (avoids double Sync on the meet tick).
 func pullPeriodic(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	state pullState,
 	current map[uuid.UUID]peerdiscovery.Node,
 	syncedThisTick map[uuid.UUID]struct{},
@@ -205,7 +206,7 @@ func pullPeriodic(
 // counts as synced this tick, since the progress so far is stored.
 func syncOne(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	state pullState,
 	member peerdiscovery.Node,
 ) bool {
@@ -214,8 +215,8 @@ func syncOne(
 	peer, ok := noisePeer(member)
 	if !ok {
 		logger.Warn("peer sync skipped: no advertised noise key",
-			zap.String("peer_id", member.ID.String()),
-			zap.String("addr", addr.String()),
+			logs.String("peer_id", member.ID.String()),
+			logs.String("addr", addr.String()),
 		)
 		return false
 	}
@@ -230,9 +231,9 @@ func syncOne(
 		res, err := state.syncer.Sync(ctx, addr, peer, req)
 		if err != nil {
 			logger.Warn("peer sync failed",
-				zap.String("peer_id", member.ID.String()),
-				zap.String("addr", addr.String()),
-				zap.Error(err),
+				logs.String("peer_id", member.ID.String()),
+				logs.String("addr", addr.String()),
+				logs.Error(err),
 			)
 			return page > 0
 		}
@@ -240,9 +241,9 @@ func syncOne(
 		newEvents, err := ApplyEvents(ctx, state.journal, state.views, state.byID, res.Events)
 		if err != nil {
 			logger.Warn("peer sync apply failed",
-				zap.String("peer_id", member.ID.String()),
-				zap.String("addr", addr.String()),
-				zap.Error(err),
+				logs.String("peer_id", member.ID.String()),
+				logs.String("addr", addr.String()),
+				logs.Error(err),
 			)
 			return page > 0
 		}
@@ -252,8 +253,8 @@ func syncOne(
 			serr := state.cursorStore.save(member.ID, res.NextCursor)
 			if serr != nil {
 				logger.Warn("persist cursor failed",
-					zap.String("peer_id", member.ID.String()),
-					zap.Error(serr),
+					logs.String("peer_id", member.ID.String()),
+					logs.Error(serr),
 				)
 			}
 		}
@@ -266,11 +267,11 @@ func syncOne(
 	}
 
 	logger.Info("peer sync ok",
-		zap.String("peer_id", member.ID.String()),
-		zap.String("addr", addr.String()),
-		zap.Int("events", events),
-		zap.Int("applied", applied),
-		zap.String("next_cursor", state.cursors.lookup(member.ID)),
+		logs.String("peer_id", member.ID.String()),
+		logs.String("addr", addr.String()),
+		logs.Int("events", events),
+		logs.Int("applied", applied),
+		logs.String("next_cursor", state.cursors.lookup(member.ID)),
 	)
 	return true
 }

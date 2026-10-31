@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/certs"
 	"github.com/podomy/concord/internal/cn"
@@ -31,7 +32,7 @@ import (
 
 // Run performs application startup, blocks for the process
 // lifetime, and handles graceful shutdown.
-func Run(ctx context.Context, logger *zap.Logger) error {
+func Run(ctx context.Context, logger *logs.Logger) error {
 	// Load persistent identity for this node, creating one
 	// if none exists.
 	nodeConfig, err := initNodeConfig()
@@ -197,7 +198,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	<-ctx.Done()
 	logger.Info(
 		"shutting down",
-		zap.String("node_id", nodeConfig.ID.String()),
+		logs.String("node_id", nodeConfig.ID.String()),
 	)
 
 	// Clean up wireguard tunnels and network masquerade.
@@ -223,10 +224,10 @@ func initNodeConfig() (*node.NodeConfig, error) {
 // openTrackSink opens the durable trail file, or nil for memory-only
 // trail when it cannot open. The node runs either way; the caller passes
 // the result straight to SetTrackLog and closeTrackLog, both nil-tolerant.
-func openTrackSink(logger *zap.Logger) *node.TrackLog {
+func openTrackSink(logger *logs.Logger) *node.TrackLog {
 	track, err := node.OpenTrackLog()
 	if err != nil {
-		logger.Warn("open track log; continuing memory-only", zap.Error(err))
+		logger.Warn("open track log; continuing memory-only", logs.Error(err))
 		return nil
 	}
 	return track
@@ -247,22 +248,22 @@ func publishPosition(nodeConfig *node.NodeConfig, peerService *peerdiscovery.Mem
 // closeTrackLog releases the durable trail file, tolerating nil for the
 // memory-only degraded path. Failures log and nothing else: the ring
 // already holds the recent points in memory.
-func closeTrackLog(logger *zap.Logger, track *node.TrackLog) {
+func closeTrackLog(logger *logs.Logger, track *node.TrackLog) {
 	if track == nil {
 		return
 	}
 	if err := track.Close(); err != nil {
-		logger.Warn("close track log", zap.Error(err))
+		logger.Warn("close track log", logs.Error(err))
 	}
 }
 
-func teardownNetworking(logger *zap.Logger) {
+func teardownNetworking(logger *logs.Logger) {
 	// Clean up wireguard tunnels.
 	err := cn.TeardownAllTunnels(logger)
 	if err != nil {
 		logger.Warn(
 			"teardown wireguard tunnels failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 	}
 	// Clean up the masquerade.
@@ -270,7 +271,7 @@ func teardownNetworking(logger *zap.Logger) {
 	if err != nil {
 		logger.Warn(
 			"teardown masquerade failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 	}
 }
@@ -297,7 +298,7 @@ func startWorkloadInfrastructure(
 	ctx context.Context,
 	nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	st *stores,
 	workloads *journalview.Workloads,
 	views []journalview.View,
@@ -315,7 +316,7 @@ func startWorkloadInfrastructure(
 	}
 	logger.Info(
 		"oci registry started",
-		zap.Int("port", registry.Port),
+		logs.Int("port", registry.Port),
 	)
 
 	// Start blob sync after the registry store exists. A nil member
@@ -360,7 +361,7 @@ func startWorkloadAndNetwork(
 	ctx context.Context,
 	nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	st *stores,
 	workloads *journalview.Workloads,
 	views []journalview.View,
@@ -439,7 +440,7 @@ func nodeIndex(
 
 func startTransport(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeConfig node.NodeConfig,
 	static transport.StaticKey,
 	identity peerdiscovery.NoiseIdentity,
@@ -473,7 +474,7 @@ func startTransport(
 
 	logger.Info(
 		"noise transport started",
-		zap.String("addr", ":"+transport.Port),
+		logs.String("addr", ":"+transport.Port),
 	)
 
 	return client, nil
@@ -484,7 +485,7 @@ func startTransport(
 // through an index on the shared kv store.
 func setupSyncTransport(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeConfig node.NodeConfig,
 	static transport.StaticKey,
 	identity peerdiscovery.NoiseIdentity,
@@ -553,33 +554,33 @@ func prepareNoiseIdentity(nodeConfig node.NodeConfig) (transport.StaticKey, peer
 	return static, identity, nil
 }
 
-func closeStores(logger *zap.Logger, st *stores) {
+func closeStores(logger *logs.Logger, st *stores) {
 	err := st.kv.Close()
 	if err != nil {
-		logger.Error("close kv store", zap.Error(err))
+		logger.Error("close kv store", logs.Error(err))
 	}
 	err = st.journal.Close()
 	if err != nil {
-		logger.Error("close journal", zap.Error(err))
+		logger.Error("close journal", logs.Error(err))
 	}
 }
 
 func shutdownPeerService(
-	logger *zap.Logger,
+	logger *logs.Logger,
 	ps *peerdiscovery.MemberService,
 ) {
 	err := ps.Shutdown()
 	if err != nil {
 		logger.Error(
 			"shutdown peer service",
-			zap.Error(err),
+			logs.Error(err),
 		)
 	}
 }
 
 func shutdownIPCServer(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	s *ipc.Server,
 ) {
 	shutdownCtx, cancel := context.WithTimeout(
@@ -589,7 +590,7 @@ func shutdownIPCServer(
 	defer cancel()
 	err := s.Shutdown(shutdownCtx)
 	if err != nil {
-		logger.Warn("shutdown ipc server", zap.Error(err))
+		logger.Warn("shutdown ipc server", logs.Error(err))
 	}
 }
 
@@ -629,7 +630,7 @@ func setupViews(
 // members.
 func runDiscoveryLoop(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	peerService *peerdiscovery.MemberService,
 	anchors []node.AnchorEntry,
 	sampler *node.Sampler,
@@ -652,10 +653,10 @@ func runDiscoveryLoop(
 // restart. Load failures fall back to the boot list. Position no longer
 // reloads here: live fixes arrive over IPC (SetPosition), persist to
 // config for the next boot, and the file is never polled.
-func refreshAnchors(logger *zap.Logger, fallbackAnchors []node.AnchorEntry) []node.AnchorEntry {
+func refreshAnchors(logger *logs.Logger, fallbackAnchors []node.AnchorEntry) []node.AnchorEntry {
 	config, err := node.LoadOrCreateNodeConfig()
 	if err != nil {
-		logger.Warn("reload node config for anchors", zap.Error(err))
+		logger.Warn("reload node config for anchors", logs.Error(err))
 		return fallbackAnchors
 	}
 	return config.Anchors
@@ -667,7 +668,7 @@ func refreshAnchors(logger *zap.Logger, fallbackAnchors []node.AnchorEntry) []no
 // the file is never polled for it. See docs/trail.
 func discoverAndJoin(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	peerService *peerdiscovery.MemberService,
 	anchors []node.AnchorEntry,
 	sampler *node.Sampler,
@@ -677,13 +678,13 @@ func discoverAndJoin(
 	liveAnchors := refreshAnchors(logger, anchors)
 	pos := sampler.LastPosition()
 	if err := peerService.Publish(); err != nil {
-		logger.Debug("publish metadata", zap.Error(err))
+		logger.Debug("publish metadata", logs.Error(err))
 	}
 
 	localAddress, err := peerService.LocalAddr()
 	if err != nil {
 		logger.Warn("peer service local addr failed",
-			zap.Error(err))
+			logs.Error(err))
 		return
 	}
 
@@ -691,7 +692,7 @@ func discoverAndJoin(
 	if err != nil {
 		logger.Warn(
 			"peer service members failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 		return
 	}
@@ -708,7 +709,7 @@ func discoverAndJoin(
 		// and a warning that fires forever warns about nothing.
 		logger.Debug(
 			"mdns resolve failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 	} else {
 		addrs = append(addrs, mdnsAddrs...)
@@ -717,7 +718,7 @@ func discoverAndJoin(
 	if err != nil {
 		logger.Warn(
 			"anchor resolve failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 		return
 	}
@@ -748,14 +749,14 @@ func discoverAndJoin(
 	// info here would repeat forever. The success line below stays info.
 	logger.Debug(
 		"peer discovery candidates",
-		zap.Strings("candidates", strs),
+		logs.Strings("candidates", strs),
 	)
 	n, err := peerService.Join(addrs)
 	if err != nil {
 		logger.Warn(
 			"peer join failed",
-			zap.Error(err),
-			zap.Strings("candidates", strs),
+			logs.Error(err),
+			logs.Strings("candidates", strs),
 		)
 		logMemberlist(logger, peerService)
 		return
@@ -763,8 +764,8 @@ func discoverAndJoin(
 	if n > 0 {
 		logger.Info(
 			"peer join succeeded",
-			zap.Int("joined", n),
-			zap.Strings("candidates", strs),
+			logs.Int("joined", n),
+			logs.Strings("candidates", strs),
 		)
 	}
 	logMemberlist(logger, peerService)
@@ -772,14 +773,14 @@ func discoverAndJoin(
 
 // logMemberlist writes the current memberlist view: id, address, state.
 func logMemberlist(
-	logger *zap.Logger,
+	logger *logs.Logger,
 	peerService *peerdiscovery.MemberService,
 ) {
 	nodes, err := peerService.Members()
 	if err != nil {
 		logger.Warn(
 			"peer service members failed",
-			zap.Error(err),
+			logs.Error(err),
 		)
 		return
 	}
@@ -794,7 +795,7 @@ func logMemberlist(
 	}
 	logger.Info(
 		"memberlist content",
-		zap.Strings("members", strs),
+		logs.Strings("members", strs),
 	)
 }
 
@@ -849,7 +850,7 @@ func filterJoinCandidates(
 
 func startMDNSAdvertise(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeConfig *node.NodeConfig,
 ) (func(), error) {
 	mdnsServer, err := peerdiscovery.MDNSAdvertise(
@@ -865,7 +866,7 @@ func startMDNSAdvertise(
 		if err != nil {
 			logger.Error(
 				"mdns advertise shutdown",
-				zap.Error(err),
+				logs.Error(err),
 			)
 		}
 	}, nil
@@ -875,7 +876,7 @@ func startOCIRegistry(
 	ctx context.Context,
 	nodeID uuid.UUID,
 	peerService *peerdiscovery.MemberService,
-	logger *zap.Logger,
+	logger *logs.Logger,
 ) (*registry.Registry, error) {
 	ocireg, err := registry.New(nodeID)
 	if err != nil {
@@ -892,7 +893,7 @@ func startOCIRegistry(
 }
 
 func startPeerService(
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeConfig *node.NodeConfig,
 	join []netip.AddrPort,
 	wgPublicKey string,
@@ -928,11 +929,11 @@ func startPeerService(
 	}
 	logger.Info(
 		"peer discovery started",
-		zap.String(
+		logs.String(
 			"bind",
 			nodeConfig.MemberlistAddress.String(),
 		),
-		zap.String("advertise", localAddr.String()),
+		logs.String("advertise", localAddr.String()),
 	)
 
 	return peerService, nil

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/podomy/concord/internal/logs"
 )
 
 // Port is the node-to-node transport listen port.
@@ -25,7 +25,7 @@ var Port = "8443"
 // seeks by cursor offset and builds in the background until caught up.
 func Start(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	static StaticKey,
 	parcel []byte,
 	verify Verifier,
@@ -79,14 +79,14 @@ func Start(
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("transport shutdown", zap.Error(err))
+			logger.Error("transport shutdown", logs.Error(err))
 		}
 	}()
 
 	// Serve in background. Serve blocks until shutdown closes the listener.
 	go func() {
 		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			logger.Error("serve noise", zap.Error(err))
+			logger.Error("serve noise", logs.Error(err))
 		}
 	}()
 
@@ -95,10 +95,10 @@ func Start(
 
 // buildSyncIndex runs the one-time offset backfill and logs the outcome.
 // A failed build only costs full scans; every request still serves.
-func buildSyncIndex(ctx context.Context, logger *zap.Logger, index *offsetIndex) {
+func buildSyncIndex(ctx context.Context, logger *logs.Logger, index *offsetIndex) {
 	err := index.build(ctx)
 	if err != nil {
-		logger.Warn("sync index build failed", zap.Error(err))
+		logger.Warn("sync index build failed", logs.Error(err))
 	}
 }
 
@@ -132,7 +132,7 @@ type noiseListener struct {
 	static StaticKey
 	parcel []byte
 	verify Verifier
-	logger *zap.Logger
+	logger *logs.Logger
 }
 
 // Accept accepts one TCP connection and runs the Noise responder handshake.
@@ -153,7 +153,7 @@ func (l *noiseListener) Accept() (net.Conn, error) {
 	conn, err := serveHandshake(raw, l.static, l.parcel, l.verify)
 	if err != nil {
 		_ = raw.Close() //nolint:errcheck // best-effort close on failed handshake
-		l.logger.Warn("noise handshake failed", zap.Error(err))
+		l.logger.Warn("noise handshake failed", logs.Error(err))
 		return nil, &handshakeError{err: err}
 	}
 

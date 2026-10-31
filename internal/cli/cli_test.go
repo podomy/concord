@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/cli"
 	"github.com/podomy/concord/internal/geo"
@@ -72,7 +73,7 @@ func setupCLIServer(t *testing.T, withPeers bool) (*node.Sampler, *peerdiscovery
 
 	nodeID := uuid.New()
 	sampler := node.NewSampler()
-	server := ipc.NewServer(nodeID, j, views, workloads, peerService, zap.NewNop(), sampler)
+	server := ipc.NewServer(nodeID, j, views, workloads, peerService, logs.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -130,7 +131,7 @@ func startCLIPeers(t *testing.T, socketDir string) *peerdiscovery.MemberService 
 		t.Fatalf("write gossip key: %v", err)
 	}
 
-	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+	peerService, err := peerdiscovery.Start(logs.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
 		Address: netip.MustParseAddrPort("127.0.0.1:0"),
 	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})

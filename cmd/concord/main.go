@@ -11,22 +11,19 @@ import (
 	"strings"
 	"syscall"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/podomy/concord/internal/cli"
 	"github.com/podomy/concord/internal/logs"
 	concordruntime "github.com/podomy/concord/internal/runtime"
 )
 
-func startDaemon(ctx context.Context, level zapcore.Level) error {
+func startDaemon(ctx context.Context, level logs.Level) error {
 	logger, syncLogs, err := logs.Init(level)
 	if err != nil {
 		return fmt.Errorf("init logger: %w", err)
 	}
 	defer func() {
 		if err := syncLogs(); err != nil {
-			logger.Warn("log sync failed", zap.Error(err))
+			logger.Warn("log sync failed", logs.Error(err))
 		}
 	}()
 

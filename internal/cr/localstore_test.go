@@ -19,7 +19,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/registry"
@@ -246,7 +247,7 @@ func startTestRegistry(t *testing.T, port int) (*registry.Registry, *fileart.Cli
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.Start(t.Context(), nil, zap.NewNop()); err != nil {
+	if err := reg.Start(t.Context(), nil, logs.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 	return reg, fileart.NewClient("127.0.0.1:" + strconv.Itoa(port))

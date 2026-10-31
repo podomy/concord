@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
@@ -65,7 +66,7 @@ func setupTestServer(t *testing.T, peerService ...*peerdiscovery.MemberService) 
 	if len(peerService) > 0 {
 		peers = peerService[0]
 	}
-	server := ipc.NewServer(nodeID, j, views, workloads, peers, zap.NewNop(), sampler)
+	server := ipc.NewServer(nodeID, j, views, workloads, peers, logs.NewNop(), sampler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -382,7 +383,7 @@ func setupPositionedServer(t *testing.T) (*testHarness, *peerdiscovery.MemberSer
 		t.Fatal(err)
 	}
 
-	peerService, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+	peerService, err := peerdiscovery.Start(logs.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
 		Address: netip.MustParseAddrPort("127.0.0.1:0"),
 	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})
@@ -538,7 +539,7 @@ func TestIPCServerGracefulShutdown(t *testing.T) {
 	workloads := journalview.NewWorkloads(kv)
 	views := []journalview.View{workloads}
 
-	server := ipc.NewServer(uuid.New(), j, views, workloads, nil, zap.NewNop(), nil)
+	server := ipc.NewServer(uuid.New(), j, views, workloads, nil, logs.NewNop(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := server.Start(ctx, socketPath); err != nil {

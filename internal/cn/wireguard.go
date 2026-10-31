@@ -16,9 +16,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/vishvananda/netlink"
-	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
@@ -89,7 +90,7 @@ func EnsureWGKeys() (Key, error) {
 // RunTunnelManager continuously reconciles WireGuard overlay tunnels with cluster membership.
 func RunTunnelManager(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	peerService *peerdiscovery.MemberService,
 	nodeID uuid.UUID,
 	myKey Key,
@@ -101,7 +102,7 @@ func RunTunnelManager(
 	// Initial sync upon startup.
 	err := SyncTunnels(ctx, logger, peerService, nodeID, myKey, listenPort)
 	if err != nil {
-		logger.Warn("initial wireguard tunnel sync failed", zap.Error(err))
+		logger.Warn("initial wireguard tunnel sync failed", logs.Error(err))
 	}
 
 	for {
@@ -110,14 +111,14 @@ func RunTunnelManager(
 			// Clean up all tunnel interfaces on context cancellation / shutdown.
 			err := TeardownAllTunnels(logger)
 			if err != nil {
-				logger.Warn("teardown tunnels failed", zap.Error(err))
+				logger.Warn("teardown tunnels failed", logs.Error(err))
 			}
 			return
 		case <-ticker.C:
 			// Periodically synchronize local tunnels with current cluster membership.
 			err := SyncTunnels(ctx, logger, peerService, nodeID, myKey, listenPort)
 			if err != nil {
-				logger.Warn("wireguard tunnel sync failed", zap.Error(err))
+				logger.Warn("wireguard tunnel sync failed", logs.Error(err))
 			}
 		}
 	}
@@ -128,7 +129,7 @@ func RunTunnelManager(
 // and removes tunnels for departed peers.
 func SyncTunnels(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	peerService *peerdiscovery.MemberService,
 	nodeID uuid.UUID,
 	myKey Key,
@@ -193,7 +194,7 @@ func findDesiredPeers(members []peerdiscovery.Node, nodeID uuid.UUID) (map[strin
 
 // cleanupStaleLinks enumerates all host network interfaces with the "wg-" prefix and deletes
 // any links that do not correspond to an active desired cluster peer.
-func cleanupStaleLinks(desired map[string]peerdiscovery.Node, logger *zap.Logger) error {
+func cleanupStaleLinks(desired map[string]peerdiscovery.Node, logger *logs.Logger) error {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return fmt.Errorf("list network links: %w", err)
@@ -208,9 +209,9 @@ func cleanupStaleLinks(desired map[string]peerdiscovery.Node, logger *zap.Logger
 		if _, ok := desired[name]; !ok {
 			delErr := netlink.LinkDel(link)
 			if delErr != nil {
-				logger.Warn("failed to delete stale wireguard link", zap.String("link", name), zap.Error(delErr))
+				logger.Warn("failed to delete stale wireguard link", logs.String("link", name), logs.Error(delErr))
 			} else {
-				logger.Info("removed wireguard link", zap.String("link", name))
+				logger.Info("removed wireguard link", logs.String("link", name))
 			}
 		}
 	}
@@ -221,7 +222,7 @@ func cleanupStaleLinks(desired map[string]peerdiscovery.Node, logger *zap.Logger
 // for all desired cluster peers.
 func syncDesiredTunnels(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	desired map[string]peerdiscovery.Node,
 	desiredSubnets map[string]int,
 	myKey Key,
@@ -247,7 +248,7 @@ func syncDesiredTunnels(
 		peerIdx := desiredSubnets[ifName]
 		tunnelErr := syncSingleTunnel(ctx, logger, wgClient, ifName, peer, peerIdx, privKey, listenPort)
 		if tunnelErr != nil {
-			logger.Error("failed to sync wireguard tunnel", zap.String("link", ifName), zap.String("peer_id", peer.ID.String()), zap.Error(tunnelErr))
+			logger.Error("failed to sync wireguard tunnel", logs.String("link", ifName), logs.String("peer_id", peer.ID.String()), logs.Error(tunnelErr))
 		}
 	}
 	return nil
@@ -256,7 +257,7 @@ func syncDesiredTunnels(
 // syncSingleTunnel provisions and configures a single WireGuard point-to-point interface.
 func syncSingleTunnel(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	wgClient *wgctrl.Client,
 	ifName string,
 	peer peerdiscovery.Node,
@@ -310,7 +311,7 @@ func getOrCreateWGLink(ifName string) (netlink.Link, error) {
 // configureWGTunnelDevice configures cryptographic keys, peer endpoint, allowed IPs,
 // and installs the destination subnet route into the host routing table.
 func configureWGTunnelDevice(
-	logger *zap.Logger,
+	logger *logs.Logger,
 	wgClient *wgctrl.Client,
 	ifName string,
 	link netlink.Link,
@@ -361,14 +362,14 @@ func configureWGTunnelDevice(
 	}
 	err = netlink.RouteAdd(route)
 	if err != nil && !os.IsExist(err) {
-		logger.Debug("wireguard route add notice", zap.String("link", ifName), zap.Error(err))
+		logger.Debug("wireguard route add notice", logs.String("link", ifName), logs.Error(err))
 	}
 
 	return nil
 }
 
 // TeardownAllTunnels removes all active WireGuard interfaces starting with the "wg-" prefix.
-func TeardownAllTunnels(logger *zap.Logger) error {
+func TeardownAllTunnels(logger *logs.Logger) error {
 	links, err := netlink.LinkList()
 	if err != nil {
 		return fmt.Errorf("list network links: %w", err)
@@ -380,7 +381,7 @@ func TeardownAllTunnels(logger *zap.Logger) error {
 			delErr := netlink.LinkDel(link)
 			if delErr != nil {
 				if logger != nil {
-					logger.Warn("failed to delete wireguard link during teardown", zap.String("link", name), zap.Error(delErr))
+					logger.Warn("failed to delete wireguard link during teardown", logs.String("link", name), logs.Error(delErr))
 				}
 			}
 		}

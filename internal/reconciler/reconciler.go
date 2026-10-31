@@ -27,7 +27,8 @@ import (
 	cdevices "github.com/opencontainers/cgroups/devices/config"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/clock"
 	"github.com/podomy/concord/internal/cn"
@@ -98,7 +99,7 @@ func SetBlobEnsurer(e BlobEnsurer) {
 // fetches now; the start still fails and the next tick retries. A nil
 // ensurer or empty digest list is a no-op. Errors stay debug: a miss is
 // routine until the background tick converges.
-func ensureWantedFiles(ctx context.Context, logger *zap.Logger, spec workload.Spec) {
+func ensureWantedFiles(ctx context.Context, logger *logs.Logger, spec workload.Spec) {
 	if blobEnsurer == nil {
 		return
 	}
@@ -108,7 +109,7 @@ func ensureWantedFiles(ctx context.Context, logger *zap.Logger, spec workload.Sp
 	}
 	err := blobEnsurer.Ensure(ctx, digests)
 	if err != nil {
-		logger.Debug("blob sync requested, retrying next tick", zap.String("id", spec.ID.String()), zap.Error(err))
+		logger.Debug("blob sync requested, retrying next tick", logs.String("id", spec.ID.String()), logs.Error(err))
 	}
 }
 
@@ -138,7 +139,7 @@ func wantedFileDigests(spec workload.Spec) []string {
 // It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeID uuid.UUID,
 	puller cr.Puller,
 	runtime cr.Runner,
@@ -168,7 +169,7 @@ func RunLoop(
 	// On restart or full shutdown of concord we pickup the containers that were running.
 	stateDir, err := cr.StateDirPath()
 	if err != nil {
-		logger.Error("State dir path", zap.Error(err))
+		logger.Error("State dir path", logs.Error(err))
 	}
 	adoptContainers(ctx, logger, nodeID, running, workloads, stateDir, exitEvents)
 
@@ -199,7 +200,7 @@ func RunLoop(
 // reconcileTick reconciles all workload specs for this node against running containers.
 func reconcileTick(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeID uuid.UUID,
 	puller cr.Puller,
 	runtime cr.Runner,
@@ -214,7 +215,7 @@ func reconcileTick(
 ) {
 	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
-		logger.Error("list workloads", zap.Error(err))
+		logger.Error("list workloads", logs.Error(err))
 		return
 	}
 
@@ -232,7 +233,7 @@ func reconcileTick(
 // leave entries alone: uncertainty never kills.
 func reapDisplaced(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeID uuid.UUID,
 	workloadsView *journalview.Workloads,
 	running map[uuid.UUID]*ContainerAndProcess,
@@ -244,7 +245,7 @@ func reapDisplaced(
 		}
 		spec, err := workloadsView.Get(ctx, id)
 		if err != nil {
-			logger.Debug("reap lookup failed, leaving entry", zap.String("id", id.String()), zap.Error(err))
+			logger.Debug("reap lookup failed, leaving entry", logs.String("id", id.String()), logs.Error(err))
 			continue
 		}
 		if spec == nil || spec.Removed || spec.AssignedNodeID == nodeID {
@@ -296,7 +297,7 @@ func depsReady(running map[uuid.UUID]*ContainerAndProcess, specs map[uuid.UUID]w
 // reconcileRemovedSpec handles cleanup for specs that have been marked as removed.
 func reconcileRemovedSpec(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	spec workload.Spec,
 	running map[uuid.UUID]*ContainerAndProcess,
 	entry *ContainerAndProcess,
@@ -317,7 +318,7 @@ func reconcileRemovedSpec(
 // reconcileWorkloadSpec checks a single workload spec and drives container creation, restart, or removal.
 func reconcileWorkloadSpec(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	nodeID uuid.UUID,
 	puller cr.Puller,
 	runtime cr.Runner,
@@ -365,7 +366,7 @@ func reconcileWorkloadSpec(
 
 	// 5. Start new container instance, gated on same-node dependencies.
 	if !depsReady(running, specs, nodeID, spec) {
-		logger.Debug("waiting on dependencies", zap.String("id", spec.ID.String()))
+		logger.Debug("waiting on dependencies", logs.String("id", spec.ID.String()))
 		return
 	}
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
@@ -377,7 +378,7 @@ func reconcileWorkloadSpec(
 // port mappings free through exit cleanup.
 func stopOnDrift(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	spec workload.Spec,
 	entry *ContainerAndProcess,
 	exists bool,
@@ -387,8 +388,8 @@ func stopOnDrift(
 		return false
 	}
 	logger.Info("image update, stopping old container",
-		zap.String("id", spec.ID.String()),
-		zap.String("image", spec.Image))
+		logs.String("id", spec.ID.String()),
+		logs.String("image", spec.Image))
 	destroyContainer(ctx, logger, entry.Spec, running)
 	return true
 }
@@ -428,7 +429,7 @@ func evaluateRestart(entry *ContainerAndProcess, spec workload.Spec, running map
 // and dies inside one Start call, unobservable from outside, so this
 // line pins our exact input in every run's logs: same input through the
 // deterministic compiler means the same program.
-func logDeviceSummary(logger *zap.Logger, id uuid.UUID, cfg *configs.Config) {
+func logDeviceSummary(logger *logs.Logger, id uuid.UUID, cfg *configs.Config) {
 	rules := 0
 	null := false
 	if cfg.Cgroups != nil && cfg.Cgroups.Resources != nil {
@@ -439,14 +440,14 @@ func logDeviceSummary(logger *zap.Logger, id uuid.UUID, cfg *configs.Config) {
 			}
 		}
 	}
-	logger.Debug("device rules for container", zap.String("id", id.String()), zap.Int("rules", rules), zap.Bool("null_allowed", null))
+	logger.Debug("device rules for container", logs.String("id", id.String()), logs.Int("rules", rules), logs.Bool("null_allowed", null))
 }
 
 // setupContainerNetwork configures veth pairs and host port mappings for a started container process.
 // If network setup fails, it performs anti-leak cleanup by killing the process and destroying container resources.
 func setupContainerNetwork(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	ctr *libcontainer.Container,
 	processHandle cr.ProcessHandle,
 	spec workload.Spec,
@@ -454,7 +455,7 @@ func setupContainerNetwork(
 ) error {
 	ipAndCIDRstring, err := cn.CreateVethPair(ctx, spec.ID.String(), processHandle.NamespacePID())
 	if err != nil {
-		logger.Error("create veth pair", zap.Error(err))
+		logger.Error("create veth pair", logs.Error(err))
 		cleanupContainerStartFailure(logger, ctr, processHandle)
 		return fmt.Errorf("create veth pair: %w", err)
 	}
@@ -467,9 +468,9 @@ func setupContainerNetwork(
 
 	err = cn.AddPortMapping(ctx, spec.HostPort, ipAndCIDRstring, spec.ContainerPort)
 	if err != nil {
-		logger.Error("add port mapping", zap.Error(err))
+		logger.Error("add port mapping", logs.Error(err))
 		if linkErr := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA)); linkErr != nil {
-			logger.Error("delete veth link on port mapping failure", zap.Error(linkErr))
+			logger.Error("delete veth link on port mapping failure", logs.Error(linkErr))
 		}
 		delete(ipAndCIDRs, spec.ID)
 		cleanupContainerStartFailure(logger, ctr, processHandle)
@@ -479,13 +480,13 @@ func setupContainerNetwork(
 	return nil
 }
 
-func cleanupContainerStartFailure(logger *zap.Logger, ctr *libcontainer.Container, processHandle cr.ProcessHandle) {
+func cleanupContainerStartFailure(logger *logs.Logger, ctr *libcontainer.Container, processHandle cr.ProcessHandle) {
 	logger.Warn("destroying container after failed start")
 	if sigErr := processHandle.Signal(syscall.SIGKILL); sigErr != nil {
-		logger.Error("kill process on network setup failure", zap.Error(sigErr))
+		logger.Error("kill process on network setup failure", logs.Error(sigErr))
 	}
 	if destroyErr := ctr.Destroy(); destroyErr != nil {
-		logger.Error("destroy container on network setup failure", zap.Error(destroyErr))
+		logger.Error("destroy container on network setup failure", logs.Error(destroyErr))
 	}
 }
 
@@ -500,7 +501,7 @@ func registryAddr() string {
 // and starts the init process.
 func startContainer(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	puller cr.Puller,
 	runtime cr.Runner,
 	j journal.Journal,
@@ -515,13 +516,13 @@ func startContainer(
 ) {
 	bundleDir, err := bundleDirPath(spec.ID)
 	if err != nil {
-		logger.Error("bundle dir", zap.Error(err))
+		logger.Error("bundle dir", logs.Error(err))
 		return
 	}
 
 	pullResult, err := puller.Pull(ctx, spec.Image, bundleDir)
 	if err != nil {
-		logger.Error("pull image", zap.String("image", spec.Image), zap.Error(err))
+		logger.Error("pull image", logs.String("image", spec.Image), logs.Error(err))
 		ensureWantedFiles(ctx, logger, spec)
 		return
 	}
@@ -541,7 +542,7 @@ func startContainer(
 			return artifacts.PullTo(fetchCtx, digest, dest)
 		}
 		if err := fileart.Materialize(ctx, pullResult.RootFS, refs, fetch); err != nil {
-			logger.Debug("materialize files, retrying next tick", zap.String("id", spec.ID.String()), zap.Error(err))
+			logger.Debug("materialize files, retrying next tick", logs.String("id", spec.ID.String()), logs.Error(err))
 			ensureWantedFiles(ctx, logger, spec)
 			return
 		}
@@ -549,28 +550,28 @@ func startContainer(
 
 	cfg, err := cr.BundleBuilder(ctx, *pullResult, spec)
 	if err != nil {
-		logger.Error("build bundle", zap.Error(err))
+		logger.Error("build bundle", logs.Error(err))
 		return
 	}
 	logDeviceSummary(logger, spec.ID, cfg)
 
 	ctr, err := runtime.Create(spec.ID.String(), cfg)
 	if err != nil {
-		logger.Error("create container", zap.Error(err))
+		logger.Error("create container", logs.Error(err))
 		return
 	}
 
 	proc, err := buildProcess(spec, pullResult, sampler)
 	if err != nil {
-		logger.Error("build process", zap.Error(err))
+		logger.Error("build process", logs.Error(err))
 		return
 	}
 	processHandle, err := runtime.Start(ctr, proc)
 	if err != nil {
-		logger.Error("start container", zap.Error(err))
+		logger.Error("start container", logs.Error(err))
 		destroyErr := ctr.Destroy()
 		if destroyErr != nil {
-			logger.Error("destroy container on start failure", zap.Error(destroyErr))
+			logger.Error("destroy container on start failure", logs.Error(destroyErr))
 		}
 		return
 	}
@@ -626,7 +627,7 @@ func stopTimeout(spec workload.Spec) time.Duration {
 // If SIGTERM times out after stopTimeout(spec), a SIGKILL fallback is sent.
 func destroyContainer(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	spec workload.Spec,
 	running map[uuid.UUID]*ContainerAndProcess,
 ) {
@@ -636,9 +637,9 @@ func destroyContainer(
 	}
 
 	entry.Stopping = true
-	logger.Debug("stopping container", zap.String("id", spec.ID.String()))
+	logger.Debug("stopping container", logs.String("id", spec.ID.String()))
 	if err := entry.ProcessHandle.Signal(syscall.SIGTERM); err != nil {
-		logger.Error("SIGTERM failed", zap.String("id", spec.ID.String()), zap.Error(err))
+		logger.Error("SIGTERM failed", logs.String("id", spec.ID.String()), logs.Error(err))
 	}
 
 	proc := entry.ProcessHandle
@@ -652,9 +653,9 @@ func destroyContainer(
 
 		select {
 		case <-timer.C:
-			logger.Warn("process SIGTERM timed out, sending SIGKILL", zap.String("id", id.String()))
+			logger.Warn("process SIGTERM timed out, sending SIGKILL", logs.String("id", id.String()))
 			if err := proc.Signal(syscall.SIGKILL); err != nil {
-				logger.Error("SIGKILL failed", zap.String("id", id.String()), zap.Error(err))
+				logger.Error("SIGKILL failed", logs.String("id", id.String()), logs.Error(err))
 			}
 		case <-ctx.Done():
 		}
@@ -676,39 +677,39 @@ func shouldRestartWorkload(policy workload.RestartPolicy, status cr.ExitStatus) 
 }
 
 // logProcessExit logs process exit status at appropriate log levels.
-func logProcessExit(logger *zap.Logger, id uuid.UUID, status cr.ExitStatus) {
+func logProcessExit(logger *logs.Logger, id uuid.UUID, status cr.ExitStatus) {
 	if status.Err != nil {
-		logger.Error("process exit error", zap.String("id", id.String()), zap.Int("code", status.Code), zap.Error(status.Err))
+		logger.Error("process exit error", logs.String("id", id.String()), logs.Int("code", status.Code), logs.Error(status.Err))
 	} else {
-		logger.Info("process exited cleanly", zap.String("id", id.String()), zap.Int("code", status.Code))
+		logger.Info("process exited cleanly", logs.String("id", id.String()), logs.Int("code", status.Code))
 	}
 }
 
 // cleanupContainerResources tears down network veth links, port mappings, and container resources.
 func cleanupContainerResources(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	entry *ContainerAndProcess,
 	ipAndCIDRs map[uuid.UUID]string,
 ) {
 	id := entry.Spec.ID
 	if err := cn.DeleteLink(cn.VethHostName(id.String(), cn.VethA)); err != nil {
-		logger.Error("delete veth A end", zap.Error(err))
+		logger.Error("delete veth A end", logs.Error(err))
 	}
 
 	if entry.Spec.HostPort > 0 {
 		if cidr, ok := ipAndCIDRs[id]; ok {
 			if err := cn.RemovePortMapping(ctx, entry.Spec.HostPort, cidr, entry.Spec.ContainerPort); err != nil {
-				logger.Error("remove port mapping", zap.Error(err))
+				logger.Error("remove port mapping", logs.Error(err))
 			}
 		}
 	}
 	delete(ipAndCIDRs, id)
 
 	if entry.Container != nil {
-		logger.Debug("destroying container", zap.String("id", id.String()))
+		logger.Debug("destroying container", logs.String("id", id.String()))
 		if err := entry.Destroy(); err != nil {
-			logger.Error("destroy container", zap.Error(err))
+			logger.Error("destroy container", logs.Error(err))
 		}
 	}
 }
@@ -717,7 +718,7 @@ func cleanupContainerResources(
 // performing network and container cleanup and recording the stopped instance state.
 func handleExitEvent(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	nodeID uuid.UUID,
 	id uuid.UUID,
@@ -812,7 +813,7 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 // live generic indexes missed them until the next rebuild.
 func recordInstanceEvent(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	spec workload.Spec,
@@ -830,13 +831,13 @@ func recordInstanceEvent(
 
 	payload, err := json.Marshal(inst)
 	if err != nil {
-		logger.Error("marshal instance", zap.Error(err))
+		logger.Error("marshal instance", logs.Error(err))
 		return
 	}
 
 	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadInstancePrefix+string(state), payload)
 	if err := journalview.RecordEvent(ctx, j, views, event); err != nil {
-		logger.Error("record instance event", zap.Error(err))
+		logger.Error("record instance event", logs.Error(err))
 	}
 }
 
@@ -864,13 +865,13 @@ func backOff(restartCount int) time.Duration {
 }
 
 // adoptContainers inspects the state directory on startup and re-attaches running containers.
-func adoptContainers(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID,
+func adoptContainers(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 	running map[uuid.UUID]*ContainerAndProcess, workloadsView *journalview.Workloads,
 	stateDir string, exitEvents chan<- ExitEvent,
 ) {
 	specs, err := workloadsView.List(ctx)
 	if err != nil {
-		logger.Error("workloads view list", zap.Error(err))
+		logger.Error("workloads view list", logs.Error(err))
 		return
 	}
 
@@ -881,7 +882,7 @@ func adoptContainers(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID,
 
 		ctr, err := libcontainer.Load(stateDir, spec.ID.String())
 		if err != nil {
-			logger.Error("libcontainer load", zap.Error(err))
+			logger.Error("libcontainer load", logs.Error(err))
 			continue
 		}
 
@@ -892,7 +893,7 @@ func adoptContainers(ctx context.Context, logger *zap.Logger, nodeID uuid.UUID,
 
 		state, err := ctr.State()
 		if err != nil {
-			logger.Error("container state", zap.Error(err))
+			logger.Error("container state", logs.Error(err))
 			continue
 		}
 

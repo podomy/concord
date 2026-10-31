@@ -10,7 +10,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/node"
 )
@@ -39,7 +40,7 @@ func (s *Server) selfPosition() (float64, float64) {
 	}
 	members, err := s.peerService.Members()
 	if err != nil {
-		s.logger.Error("self position members", zap.Error(err))
+		s.logger.Error("self position members", logs.Error(err))
 		return 0, 0
 	}
 	for _, m := range members {

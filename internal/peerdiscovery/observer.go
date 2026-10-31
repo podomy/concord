@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/google/uuid"
 
@@ -24,7 +24,7 @@ import (
 // by runDiscoveryLoop in runtime. It blocks until context is cancelled.
 func ObserveMemberlistPeers(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	localNodeID uuid.UUID,
 	memberService *MemberService,
 	j journal.Journal,
@@ -37,12 +37,12 @@ func ObserveMemberlistPeers(
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Error("context cancelation", zap.Error(ctx.Err()))
+			logger.Error("context cancelation", logs.Error(ctx.Err()))
 			return
 		case <-ticker.C:
 			current, err := pollPeerChanges(ctx, logger, localNodeID, memberService, j, views, previous)
 			if err != nil {
-				logger.Error("poll peer changes", zap.Error(err))
+				logger.Error("poll peer changes", logs.Error(err))
 				continue
 			}
 
@@ -53,7 +53,7 @@ func ObserveMemberlistPeers(
 
 func pollPeerChanges(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	localNodeID uuid.UUID,
 	memberService *MemberService,
 	j journal.Journal,
@@ -87,7 +87,7 @@ func currentPeerMap(localNodeID uuid.UUID, members []Node) map[uuid.UUID]Node {
 
 func recordSeenOrUpdatedPeers(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	localNodeID uuid.UUID,
@@ -98,14 +98,14 @@ func recordSeenOrUpdatedPeers(
 		old, exists := previous[id]
 		if !exists {
 			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerSeen, member); err != nil {
-				logger.Error("record peer.seen", zap.Error(err))
+				logger.Error("record peer.seen", logs.Error(err))
 			}
 			continue
 		}
 
 		if old.Address != member.Address || old.State != member.State {
 			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerUpdated, member); err != nil {
-				logger.Error("record peer.updated", zap.Error(err))
+				logger.Error("record peer.updated", logs.Error(err))
 			}
 		}
 	}
@@ -113,7 +113,7 @@ func recordSeenOrUpdatedPeers(
 
 func recordLostPeers(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	localNodeID uuid.UUID,
@@ -123,13 +123,13 @@ func recordLostPeers(
 	for id, old := range previous {
 		if _, exists := current[id]; !exists {
 			if err := recordPeerEvent(ctx, logger, j, views, localNodeID, journalview.EventTypePeerLost, old); err != nil {
-				logger.Error("record peer.lost", zap.Error(err))
+				logger.Error("record peer.lost", logs.Error(err))
 			}
 		}
 	}
 }
 
-func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, localNodeID uuid.UUID, eventType string, peer Node) error {
+func recordPeerEvent(ctx context.Context, logger *logs.Logger, j journal.Journal, views []journalview.View, localNodeID uuid.UUID, eventType string, peer Node) error {
 	payload, err := json.Marshal(journalview.PeerEvent{
 		PeerID:  peer.ID,
 		Address: peer.Address.String(),
@@ -141,9 +141,9 @@ func recordPeerEvent(ctx context.Context, logger *zap.Logger, j journal.Journal,
 
 	event := journal.NewEvent(localNodeID, eventType, payload)
 	if err := journalview.RecordEventAndLog(ctx, logger, j, views, event, eventType,
-		zap.String("peer_id", peer.ID.String()),
-		zap.String("peer_address", peer.Address.String()),
-		zap.String("peer_state", string(peer.State)),
+		logs.String("peer_id", peer.ID.String()),
+		logs.String("peer_address", peer.Address.String()),
+		logs.String("peer_state", string(peer.State)),
 	); err != nil {
 		return fmt.Errorf("record peer event: %w", err)
 	}

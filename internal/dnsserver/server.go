@@ -13,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
@@ -105,7 +106,7 @@ func (h *handler) populateA(msg *dns.Msg, nodes []peerdiscovery.Node, name strin
 // Start launches an embedded DNS server that serves Concord peer membership.
 // Empty addr binds to ":"+DNSPort. Bind is checked before return so a second
 // instance fails fast if the port is taken. The server runs until ctx is done.
-func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger, addr string) error {
+func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *logs.Logger, addr string) error {
 	if addr == "" {
 		addr = ":" + peerdiscovery.DNSPort
 	}
@@ -125,13 +126,13 @@ func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logg
 	go func() {
 		<-ctx.Done()
 		if err := srv.Shutdown(); err != nil {
-			logger.Error("dns server shutdown", zap.Error(err))
+			logger.Error("dns server shutdown", logs.Error(err))
 		}
 	}()
 
 	go func() {
 		if err := srv.ActivateAndServe(); err != nil {
-			logger.Error("dns server", zap.Error(err))
+			logger.Error("dns server", logs.Error(err))
 		}
 	}()
 

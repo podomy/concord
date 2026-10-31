@@ -11,7 +11,6 @@ require (
 	github.com/opencontainers/runc v1.3.3
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
-	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.53.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )
@@ -53,7 +52,6 @@ require (
 	github.com/seccomp/libseccomp-golang v0.10.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect

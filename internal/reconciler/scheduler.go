@@ -11,7 +11,8 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -71,7 +72,7 @@ func isLeader(myID uuid.UUID, peerService MemberSource) bool {
 // and reassigns orphaned specs whose owner is no longer alive to an alive node.
 func scheduleWorkloads(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	workloads *journalview.Workloads,
 	peerService MemberSource,
@@ -83,7 +84,7 @@ func scheduleWorkloads(
 	}
 	members, err := peerService.Members()
 	if err != nil {
-		logger.Error("peerservice members", zap.Error(err))
+		logger.Error("peerservice members", logs.Error(err))
 		return
 	}
 	if len(members) == 0 {
@@ -92,7 +93,7 @@ func scheduleWorkloads(
 
 	specs, err := workloads.List(ctx)
 	if err != nil {
-		logger.Error("workloads list", zap.Error(err))
+		logger.Error("workloads list", logs.Error(err))
 		return
 	}
 
@@ -143,7 +144,7 @@ func pendingIndexes(specs []workload.Spec, alive map[uuid.UUID]struct{}) []int {
 // earlier placements.
 func schedulePending(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	nodeID uuid.UUID,
@@ -161,7 +162,7 @@ func schedulePending(
 			return
 		}
 		logger.Debug("no node fits workload, leaving for next tick",
-			zap.String("workload_id", spec.ID.String()))
+			logs.String("workload_id", spec.ID.String()))
 		return
 	}
 	if !initial && chosenMember.State != peerdiscovery.NodeStateAlive {
@@ -190,7 +191,7 @@ func schedulePending(
 // victim stops. It reports whether it evicted.
 func tryPreempt(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []journalview.View,
 	nodeID uuid.UUID,
@@ -289,20 +290,20 @@ func aliveNodeIDs(members []peerdiscovery.Node) map[uuid.UUID]struct{} {
 // recordAssignment writes one workload.spec copy carrying its current
 // assignment. The message names the action so initial assignments and
 // orphan reassignments read apart in logs.
-func recordAssignment(ctx context.Context, logger *zap.Logger, j journal.Journal, views []journalview.View, nodeID uuid.UUID, spec workload.Spec, message string) {
+func recordAssignment(ctx context.Context, logger *logs.Logger, j journal.Journal, views []journalview.View, nodeID uuid.UUID, spec workload.Spec, message string) {
 	payload, err := json.Marshal(spec)
 	if err != nil {
-		logger.Error("json marshal", zap.Error(err))
+		logger.Error("json marshal", logs.Error(err))
 		return
 	}
 
 	event := journal.NewEvent(nodeID, journalview.EventTypeWorkloadSpec, payload)
 	err = journalview.RecordEventAndLog(ctx, logger, j, views, event, message,
-		zap.String("workload_id", spec.ID.String()),
-		zap.String("assigned_node", spec.AssignedNodeID.String()),
+		logs.String("workload_id", spec.ID.String()),
+		logs.String("assigned_node", spec.AssignedNodeID.String()),
 	)
 	if err != nil {
-		logger.Error("record workload.spec event", zap.Error(err))
+		logger.Error("record workload.spec event", logs.Error(err))
 	}
 }
 

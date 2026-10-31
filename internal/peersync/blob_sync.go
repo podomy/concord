@@ -25,7 +25,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/kvstore"
@@ -86,7 +87,7 @@ var _ blobIface = (*blob.Store)(nil)
 type BlobSyncer struct {
 	store   blobIface
 	members *peerdiscovery.MemberService
-	logger  *zap.Logger
+	logger  *logs.Logger
 	client  *transport.BlobClient
 	mu      sync.Mutex
 	wanted  map[string]struct{}
@@ -143,9 +144,9 @@ const maxManifestStored = 1 << 20
 // New creates a blob syncer. Cursors start memory only; call
 // AttachCursorStore before Run for bbolt persistence across restarts.
 // A nil logger becomes a no-op logger.
-func New(store blobIface, members *peerdiscovery.MemberService, logger *zap.Logger) *BlobSyncer {
+func New(store blobIface, members *peerdiscovery.MemberService, logger *logs.Logger) *BlobSyncer {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = logs.NewNop()
 	}
 	return &BlobSyncer{
 		store:   store,
@@ -334,9 +335,9 @@ func (b *BlobSyncer) peerRepoTags(ctx context.Context, peer blobPeer, repo strin
 	listed, err := b.client.FetchTags(ctx, peer.base, repo)
 	if err != nil {
 		b.logger.Debug("blob tag discovery failed",
-			zap.String("peer_id", peer.id.String()),
-			zap.String("repo", repo),
-			zap.Error(err),
+			logs.String("peer_id", peer.id.String()),
+			logs.String("repo", repo),
+			logs.Error(err),
 		)
 		return nil
 	}
@@ -414,7 +415,7 @@ func (b *BlobSyncer) tickBlobs(ctx context.Context) {
 	wanted := b.snapshotWanted()
 	peers, err := b.collectBlobPeers()
 	if err != nil {
-		b.logger.Warn("blob peers unavailable", zap.Error(err))
+		b.logger.Warn("blob peers unavailable", logs.Error(err))
 		return
 	}
 	discovered := b.discoverRoots(ctx, peers)
@@ -426,13 +427,13 @@ func (b *BlobSyncer) tickBlobs(ctx context.Context) {
 	failed := b.fetchWantedRoots(ctx, work, peers)
 	if len(failed) > 0 {
 		b.logger.Warn("blob tick incomplete",
-			zap.Int("missing", len(failed)),
-			zap.Int("wanted", len(work)),
-			zap.String("sample", missingSummary(failed)),
+			logs.Int("missing", len(failed)),
+			logs.Int("wanted", len(work)),
+			logs.String("sample", missingSummary(failed)),
 		)
 		return
 	}
-	b.logger.Info("blob tick ok", zap.Int("roots", len(work)))
+	b.logger.Info("blob tick ok", logs.Int("roots", len(work)))
 }
 
 // tickOffset returns the rotating start offset for this tick.
@@ -514,9 +515,9 @@ func (b *BlobSyncer) discoverRoots(ctx context.Context, peers []blobPeer) []stri
 			tags, ferr := b.client.FetchTags(ctx, peer.base, repo)
 			if ferr != nil {
 				b.logger.Debug("blob tag discovery failed",
-					zap.String("peer_id", peer.id.String()),
-					zap.String("repo", repo),
-					zap.Error(ferr),
+					logs.String("peer_id", peer.id.String()),
+					logs.String("repo", repo),
+					logs.Error(ferr),
 				)
 				continue
 			}
@@ -619,7 +620,7 @@ func (b *BlobSyncer) missingWithoutPeers(ctx context.Context, wanted []string) m
 	for _, root := range wanted {
 		complete, err := b.isComplete(ctx, root)
 		if err != nil {
-			b.logger.Warn("blob completeness check failed", zap.String("digest", root), zap.Error(err))
+			b.logger.Warn("blob completeness check failed", logs.String("digest", root), logs.Error(err))
 		}
 		if !complete {
 			failed[root] = fmt.Errorf("no peers available for %s", root)
@@ -684,7 +685,7 @@ func recordWorkerFailure(mu *sync.Mutex, failed map[string]error, root string, e
 func (b *BlobSyncer) markRootIncomplete(ctx context.Context, root string, ordered []blobPeer, mu *sync.Mutex, failed map[string]error) {
 	complete, err := b.isComplete(ctx, root)
 	if err != nil {
-		b.logger.Warn("blob completeness check failed", zap.String("digest", root), zap.Error(err))
+		b.logger.Warn("blob completeness check failed", logs.String("digest", root), logs.Error(err))
 	}
 	if complete {
 		return
@@ -719,7 +720,7 @@ func rotateBlobPeers(peers []blobPeer, n int) []blobPeer {
 func (b *BlobSyncer) fetchOneRoot(ctx context.Context, root string, peers []blobPeer) bool {
 	complete, err := b.isComplete(ctx, root)
 	if err != nil {
-		b.logger.Warn("blob completeness check failed", zap.String("digest", root), zap.Error(err))
+		b.logger.Warn("blob completeness check failed", logs.String("digest", root), logs.Error(err))
 	}
 	if complete {
 		b.clearRootCursors(peers, root)
@@ -735,14 +736,14 @@ func (b *BlobSyncer) fetchOneRoot(ctx context.Context, root string, peers []blob
 			return true
 		}
 		b.logger.Debug("blob fetch failed, trying next peer",
-			zap.String("digest", root),
-			zap.String("peer_id", peer.id.String()),
-			zap.Error(fetchErr),
+			logs.String("digest", root),
+			logs.String("peer_id", peer.id.String()),
+			logs.Error(fetchErr),
 		)
 	}
 	complete, err = b.isComplete(ctx, root)
 	if err != nil {
-		b.logger.Warn("blob completeness check failed", zap.String("digest", root), zap.Error(err))
+		b.logger.Warn("blob completeness check failed", logs.String("digest", root), logs.Error(err))
 		return false
 	}
 	if complete {
@@ -762,9 +763,9 @@ func (b *BlobSyncer) clearRootCursors(peers []blobPeer, root string) {
 		err := store.Delete(key)
 		if err != nil {
 			b.logger.Debug("blob cursor clear failed",
-				zap.String("digest", root),
-				zap.String("peer_id", peer.id.String()),
-				zap.Error(err),
+				logs.String("digest", root),
+				logs.String("peer_id", peer.id.String()),
+				logs.Error(err),
 			)
 		}
 	}
@@ -804,9 +805,9 @@ func (b *BlobSyncer) fetchManifestRoot(ctx context.Context, peer blobPeer, root 
 	start, serr := store.load(peer.id, root)
 	if serr != nil {
 		b.logger.Warn("blob cursor load failed, restarting blob",
-			zap.String("digest", root),
-			zap.String("peer_id", peer.id.String()),
-			zap.Error(serr),
+			logs.String("digest", root),
+			logs.String("peer_id", peer.id.String()),
+			logs.Error(serr),
 		)
 		start = 0
 	}

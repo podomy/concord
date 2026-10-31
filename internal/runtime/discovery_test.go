@@ -12,7 +12,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/node"
@@ -52,7 +53,7 @@ func TestRefreshAnchorsFollowsRewrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	live := refreshAnchors(zap.NewNop(), nil)
+	live := refreshAnchors(logs.NewNop(), nil)
 	if len(live) != 1 || live[0].Name != "rim" {
 		t.Fatalf("anchors = %+v", live)
 	}
@@ -85,7 +86,7 @@ func startPositionedService(t *testing.T, lat, lon float64) (*peerdiscovery.Memb
 		t.Fatal(err)
 	}
 
-	svc, err := peerdiscovery.Start(zap.NewNop(), peerdiscovery.Node{
+	svc, err := peerdiscovery.Start(logs.NewNop(), peerdiscovery.Node{
 		ID:      uuid.New(),
 		Address: netip.MustParseAddrPort("127.0.0.1:0"),
 	}, nil, netip.Addr{}, peerdiscovery.NoiseIdentity{})

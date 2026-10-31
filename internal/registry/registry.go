@@ -38,7 +38,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/peerdiscovery"
@@ -61,7 +62,7 @@ const maxBlobBytes = 32 << 30
 type Registry struct {
 	srv      *http.Server
 	store    *blob.Store
-	logger   *zap.Logger
+	logger   *logs.Logger
 	nodeID   uuid.UUID
 	storeDir string
 	stopOnce sync.Once
@@ -108,9 +109,9 @@ func (r *Registry) Store() *blob.Store {
 // clients use 127.0.0.1 and peer sync dials this same port from other
 // nodes, so the 0.0.0.0 bind is intentional. When ctx is cancelled the
 // server shuts down.
-func (r *Registry) Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger) error {
+func (r *Registry) Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *logs.Logger) error {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = logs.NewNop()
 	}
 	r.logger = logger
 	mux := http.NewServeMux()
@@ -137,7 +138,7 @@ func (r *Registry) Start(ctx context.Context, memberService *peerdiscovery.Membe
 	go func() {
 		err := r.srv.Serve(ln)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("registry serve", zap.Error(err))
+			logger.Error("registry serve", logs.Error(err))
 		}
 	}()
 	go r.monitorPeers(ctx, memberService, logger)
@@ -187,16 +188,16 @@ func (r *Registry) reloadSyncConfig(nodes []peerdiscovery.Node) {
 	if r.logger == nil {
 		return
 	}
-	r.logger.Debug("registry peers", zap.Int("peers", peers))
+	r.logger.Debug("registry peers", logs.Int("peers", peers))
 }
 
 // monitorPeers polls the member service and notes membership changes.
-func (r *Registry) monitorPeers(ctx context.Context, memberService *peerdiscovery.MemberService, logger *zap.Logger) {
+func (r *Registry) monitorPeers(ctx context.Context, memberService *peerdiscovery.MemberService, logger *logs.Logger) {
 	if memberService == nil {
 		return
 	}
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = logs.NewNop()
 	}
 	var previous []peerdiscovery.Node
 	ticker := time.NewTicker(5 * time.Second)
@@ -209,11 +210,11 @@ func (r *Registry) monitorPeers(ctx context.Context, memberService *peerdiscover
 		}
 		current, err := memberService.Members()
 		if err != nil {
-			logger.Error("member service", zap.Error(err))
+			logger.Error("member service", logs.Error(err))
 			continue
 		}
 		if !nodesEqual(previous, current) {
-			logger.Info("peer list changed", zap.Int("peers", len(current)))
+			logger.Info("peer list changed", logs.Int("peers", len(current)))
 			r.reloadSyncConfig(current)
 			previous = current
 		}

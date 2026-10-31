@@ -10,7 +10,8 @@ import (
 	"net/netip"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 )
@@ -18,7 +19,7 @@ import (
 // RecordNodeStarted creates a node.started event and persists it.
 func RecordNodeStarted(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []View,
 	nodeID uuid.UUID,
@@ -31,7 +32,7 @@ func RecordNodeStarted(
 
 	event := journal.NewEvent(nodeID, EventTypeNodeStarted, payload)
 	if err := RecordEventAndLog(ctx, logger, j, views, event, "node runtime started",
-		zap.String("memberlist_address", memberlistAddress.String()),
+		logs.String("memberlist_address", memberlistAddress.String()),
 	); err != nil {
 		return fmt.Errorf("append startup event: %w", err)
 	}
@@ -64,21 +65,21 @@ func RecordEvent(ctx context.Context, j journal.Journal, views []View, event jou
 // RecordEventAndLog appends an event, applies it to views, and logs the persisted event.
 func RecordEventAndLog(
 	ctx context.Context,
-	logger *zap.Logger,
+	logger *logs.Logger,
 	j journal.Journal,
 	views []View,
 	event journal.Event,
 	message string,
-	fields ...zap.Field,
+	fields ...logs.Attr,
 ) error {
 	if err := RecordEvent(ctx, j, views, event); err != nil {
 		return err
 	}
 
 	fields = append(fields,
-		zap.String("node_id", event.NodeID.String()),
-		zap.String("event_id", event.ID.String()),
-		zap.String("event_type", event.Type),
+		logs.String("node_id", event.NodeID.String()),
+		logs.String("event_id", event.ID.String()),
+		logs.String("event_type", event.Type),
 	)
 	logger.Info(message, fields...)
 

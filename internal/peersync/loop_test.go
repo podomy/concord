@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+
+	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/peerdiscovery"
@@ -140,7 +141,7 @@ func TestSyncOneUsesTransportPortAndCursor(t *testing.T) {
 		resp: transport.SyncResponse{NextCursor: "mark-2", Events: nil},
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member) {
+	if !syncOne(context.Background(), logs.NewNop(), testPullState(fake, cursors), member) {
 		t.Fatal("expected success")
 	}
 	if len(fake.calls) != 1 {
@@ -170,7 +171,7 @@ func TestSyncOneEmptyNextCursorDoesNotClear(t *testing.T) {
 	cursors := map[uuid.UUID]string{peerID: "keep-me"}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: ""}}
 
-	if !syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member) {
+	if !syncOne(context.Background(), logs.NewNop(), testPullState(fake, cursors), member) {
 		t.Fatal("expected success")
 	}
 	if cursors[peerID] != "keep-me" {
@@ -190,7 +191,7 @@ func TestSyncOneSkipsPeerWithoutNoiseKey(t *testing.T) {
 	}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w"}}
 
-	if syncOne(context.Background(), zap.NewNop(), testPullState(fake, map[uuid.UUID]string{}), member) {
+	if syncOne(context.Background(), logs.NewNop(), testPullState(fake, map[uuid.UUID]string{}), member) {
 		t.Fatal("expected skip, got success")
 	}
 	if len(fake.calls) != 0 {
@@ -207,7 +208,7 @@ func TestSyncOneFailureDoesNotAdvanceCursor(t *testing.T) {
 	cursors := map[uuid.UUID]string{peerID: "old"}
 	fake := &fakeSyncer{err: errors.New("dial failed")}
 
-	if syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member) {
+	if syncOne(context.Background(), logs.NewNop(), testPullState(fake, cursors), member) {
 		t.Fatal("expected failure")
 	}
 	if cursors[peerID] != "old" {
@@ -224,7 +225,7 @@ func TestSyncOneMissingCursorSendsEmpty(t *testing.T) {
 	cursors := map[uuid.UUID]string{}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "first"}}
 
-	syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member)
+	syncOne(context.Background(), logs.NewNop(), testPullState(fake, cursors), member)
 	if fake.calls[0].req.Cursor != "" {
 		t.Fatalf("first pull cursor = %q, want empty", fake.calls[0].req.Cursor)
 	}
@@ -259,7 +260,7 @@ func TestSyncOnePullsFullPagesUntilShort(t *testing.T) {
 		cursors: cursors,
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+	if !syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected success")
 	}
 	if len(fake.calls) != 2 {
@@ -292,7 +293,7 @@ func TestSyncOneStopsAtPageCap(t *testing.T) {
 	}
 	cursors := map[uuid.UUID]string{}
 
-	syncOne(context.Background(), zap.NewNop(), testPullState(fake, cursors), member)
+	syncOne(context.Background(), logs.NewNop(), testPullState(fake, cursors), member)
 	if len(fake.calls) != maxPagesPerTick {
 		t.Fatalf("calls = %d, want %d", len(fake.calls), maxPagesPerTick)
 	}
@@ -327,7 +328,7 @@ func TestSyncOneLaterPageFailureKeepsProgress(t *testing.T) {
 		cursors: cursors,
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+	if !syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected success with stored progress")
 	}
 	if len(fake.calls) != 2 {
@@ -355,14 +356,14 @@ func TestPullTickMeetThenPeriodicNoDoubleSync(t *testing.T) {
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "w1"}}
 	cursors := map[uuid.UUID]string{}
 
-	previous := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), nil)
+	previous := pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), nil)
 	if len(fake.calls) != 1 {
 		t.Fatalf("meet tick calls = %d, want 1 (no double sync)", len(fake.calls))
 	}
 
 	// Still alive: periodic only.
 	fake.calls = nil
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), previous)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), previous)
 	if len(fake.calls) != 1 {
 		t.Fatalf("periodic tick calls = %d, want 1", len(fake.calls))
 	}
@@ -382,7 +383,7 @@ func TestPullTickSkipsDeadAndSelf(t *testing.T) {
 	}}
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "x"}}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), nil)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), nil)
 	if len(fake.calls) != 0 {
 		t.Fatalf("calls = %d, want 0", len(fake.calls))
 	}
@@ -404,7 +405,7 @@ func TestPullTickDeadToAliveIsMeet(t *testing.T) {
 	fake := &fakeSyncer{resp: transport.SyncResponse{NextCursor: "back"}}
 	cursors := map[uuid.UUID]string{peerID: "before-death"}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), previous)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), previous)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d, want 1 meet pull", len(fake.calls))
 	}
@@ -424,7 +425,7 @@ func TestPullTickMembersErrorKeepsPrevious(t *testing.T) {
 	src := &fakeMembers{err: errors.New("memberlist down")}
 	fake := &fakeSyncer{}
 
-	got := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), previous)
+	got := pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, map[uuid.UUID]string{}), previous)
 	if len(fake.calls) != 0 {
 		t.Fatal("should not sync on members error")
 	}
@@ -449,18 +450,18 @@ func TestPullTickPagingCursorsAcrossTicks(t *testing.T) {
 	}}
 	cursors := map[uuid.UUID]string{}
 
-	prev := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), nil)
+	prev := pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), nil)
 	if cursors[peerID] != "page1" {
 		t.Fatalf("after tick1: %q", cursors[peerID])
 	}
-	prev = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
+	prev = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), prev)
 	if fake.calls[1].req.Cursor != "page1" {
 		t.Fatalf("tick2 sent cursor %q, want page1", fake.calls[1].req.Cursor)
 	}
 	if cursors[peerID] != "page2" {
 		t.Fatalf("after tick2: %q", cursors[peerID])
 	}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), prev)
 	if fake.calls[2].req.Cursor != "page2" {
 		t.Fatalf("tick3 sent cursor %q, want page2", fake.calls[2].req.Cursor)
 	}
@@ -488,7 +489,7 @@ func TestPullTickPerPeerCursorsIndependent(t *testing.T) {
 	}
 	cursors := map[uuid.UUID]string{}
 
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), nil)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), nil)
 	if cursors[a] != "wa" || cursors[b] != "wb" {
 		t.Fatalf("cursors = %v", cursors)
 	}
@@ -510,7 +511,7 @@ func TestPullTickPeerDownThenUpResumesCursor(t *testing.T) {
 	cursors := map[uuid.UUID]string{}
 
 	// Successful page while peer is up.
-	prev := pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), nil)
+	prev := pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), nil)
 	if cursors[peerID] != "got-to-here" {
 		t.Fatalf("cursor after success: %q", cursors[peerID])
 	}
@@ -518,7 +519,7 @@ func TestPullTickPeerDownThenUpResumesCursor(t *testing.T) {
 	// Peer/server down: Sync fails, cursor must not move.
 	fake.err = errors.New("connection refused")
 	fake.calls = nil
-	prev = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
+	prev = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), prev)
 	if len(fake.calls) != 1 {
 		t.Fatalf("expected a failed sync attempt, calls=%d", len(fake.calls))
 	}
@@ -530,7 +531,7 @@ func TestPullTickPeerDownThenUpResumesCursor(t *testing.T) {
 	fake.err = nil
 	fake.resp = transport.SyncResponse{NextCursor: "after-recovery"}
 	fake.calls = nil
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, cursors), prev)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, cursors), prev)
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls after recovery = %d", len(fake.calls))
 	}
@@ -558,7 +559,7 @@ func TestPullTickProcessRestartResyncsFromEmptyCursor(t *testing.T) {
 
 	// "Old process" had advanced the cursor.
 	oldCursors := map[uuid.UUID]string{}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, oldCursors), nil)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, oldCursors), nil)
 	if oldCursors[peerID] != "progress" {
 		t.Fatalf("old process cursor: %q", oldCursors[peerID])
 	}
@@ -567,7 +568,7 @@ func TestPullTickProcessRestartResyncsFromEmptyCursor(t *testing.T) {
 	fake.calls = nil
 	fake.resp = transport.SyncResponse{NextCursor: "progress-again"}
 	newCursors := map[uuid.UUID]string{}
-	_ = pullTick(context.Background(), zap.NewNop(), self, src, testPullState(fake, newCursors), nil)
+	_ = pullTick(context.Background(), logs.NewNop(), self, src, testPullState(fake, newCursors), nil)
 
 	if len(fake.calls) != 1 {
 		t.Fatalf("calls = %d", len(fake.calls))
@@ -603,7 +604,7 @@ func TestSyncOneAppliesEventsBeforeCursor(t *testing.T) {
 		cursors: cursors,
 	}
 
-	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+	if !syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected success")
 	}
 	if len(j.events) != 1 || j.events[0].ID != ev.ID {
@@ -614,7 +615,7 @@ func TestSyncOneAppliesEventsBeforeCursor(t *testing.T) {
 	}
 
 	// Replay same page: idempotent, still one row.
-	if !syncOne(context.Background(), zap.NewNop(), state, member) {
+	if !syncOne(context.Background(), logs.NewNop(), state, member) {
 		t.Fatal("expected success on replay")
 	}
 	if len(j.events) != 1 {
@@ -632,7 +633,7 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		j := &memJournal{}
-		RunPullLoop(ctx, zap.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j}, nil)
+		RunPullLoop(ctx, logs.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j}, nil)
 		close(done)
 	}()
 
