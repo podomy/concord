@@ -201,7 +201,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	)
 
 	// Clean up wireguard tunnels and network masquerade.
-	teardownNetworking(logger)
+	teardownNetworking(logger) //nolint:contextcheck // shutdown runs after ctx is done; teardown stays detached on purpose
 	return nil
 }
 

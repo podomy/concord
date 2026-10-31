@@ -3,7 +3,6 @@ module github.com/podomy/concord
 go 1.26.3
 
 require (
-	github.com/coreos/go-iptables v0.8.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
