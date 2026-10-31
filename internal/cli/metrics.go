@@ -7,19 +7,28 @@ import (
 	"context"
 	"fmt"
 	"io"
-
-	"github.com/spf13/cobra"
 )
 
-// newMetricsCommand creates the 'concord metrics' command.
-func newMetricsCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "metrics",
-		Short: "Print sampler state in Prometheus exposition format",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return handleMetrics(cmd.Context(), cmd.OutOrStdout())
-		},
+// printMetricsHelp writes metrics usage to w.
+func printMetricsHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Print sampler state in Prometheus exposition format") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                    //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord metrics")                                   //nolint:errcheck // CLI output
+}
+
+// runMetricsCommand prints exposition text after handling metrics flags.
+func runMetricsCommand(ctx context.Context, stdout, _ io.Writer, args []string) error {
+	for _, a := range args {
+		if isHelpRequest(a) {
+			printMetricsHelp(stdout)
+			return nil
+		}
+		if isFlagToken(a) {
+			return fmt.Errorf("unknown flag: %s", a)
+		}
 	}
+	return handleMetrics(ctx, stdout)
 }
 
 // handleMetrics fetches Prometheus exposition text from the daemon and

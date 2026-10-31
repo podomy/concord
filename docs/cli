@@ -212,13 +212,4 @@ Output:
 
 ---
 
-Autocompletion
-
-  # Bash
-  source <(concord completion bash)
-
-  # Zsh
-  source <(concord completion zsh)
-
-  # Fish
-  concord completion fish | source
+Shell completion is not provided; the CLI has no completion command.

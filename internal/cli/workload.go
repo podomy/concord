@@ -6,6 +6,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -15,31 +16,102 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/spf13/cobra"
 
 	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/sdk"
 	"github.com/podomy/concord/sdk/fileart"
 )
 
-// newWorkloadCommand creates the 'concord workload' command group.
-func newWorkloadCommand() *cobra.Command {
-	workloadCmd := &cobra.Command{
-		Use:   "workload",
-		Short: "Manage container workloads (run, list, inspect, stop)",
+// dispatchWorkload routes concord workload subcommands.
+func dispatchWorkload(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+	if len(args) == 0 {
+		printWorkloadHelp(stderr)
+		return fmt.Errorf("requires a subcommand: concord workload [run|list|inspect|stats|logs|update|stop]") //nolint:perfsprint // plain error, no wrap target
 	}
+	name := args[0]
+	rest := args[1:]
+	if isHelpRequest(name) || name == "help" {
+		return printWorkloadSubHelp(rest, stdout, stderr)
+	}
+	return runWorkloadLeaf(ctx, stdout, stderr, name, rest)
+}
 
-	workloadCmd.AddCommand(
-		newWorkloadRunCommand(),
-		newWorkloadListCommand(),
-		newWorkloadInspectCommand(),
-		newWorkloadStatsCommand(),
-		newWorkloadLogsCommand(),
-		newWorkloadUpdateCommand(),
-		newWorkloadStopCommand(),
-	)
+// runWorkloadLeaf dispatches one workload leaf after help handling.
+func runWorkloadLeaf(ctx context.Context, stdout, stderr io.Writer, name string, rest []string) error {
+	switch name {
+	case "run":
+		return runWorkloadRun(ctx, stdout, stderr, rest)
+	case "list", "ls":
+		return runWorkloadList(ctx, stdout, stderr, rest)
+	case "inspect":
+		return runWorkloadInspect(ctx, stdout, stderr, rest)
+	case "stats":
+		return runWorkloadStats(ctx, stdout, stderr, rest)
+	case "logs":
+		return runWorkloadLogs(ctx, stdout, stderr, rest)
+	case "update":
+		return runWorkloadUpdate(ctx, stdout, stderr, rest)
+	case "stop":
+		return runWorkloadStop(ctx, stdout, stderr, rest)
+	default:
+		_, _ = fmt.Fprintf(stderr, "Error: unknown command %q for \"concord workload\"\n", name) //nolint:errcheck // CLI output
+		printWorkloadHelp(stderr)
+		return fmt.Errorf("unknown command %q for \"concord workload\"", name)
+	}
+}
 
-	return workloadCmd
+// printWorkloadHelp writes workload group usage to w.
+func printWorkloadHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Manage container workloads (run, list, inspect, stop)")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload [command]")                                                  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Available Commands:")                                                           //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  inspect     Display detailed specification for a workload")                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  list        List all active workloads (alias ls)")                            //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  logs        Show captured container output for a workload")                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  run         Deploy and run a new container workload")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  stats       Display live utilization for a workload")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  stop        Stop and remove a workload from the cluster")                     //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  update      Move a live workload to a new image keeping its identity")        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, `Use "concord workload [command] --help" for more information about a command.`) //nolint:errcheck // CLI output
+}
+
+// printWorkloadSubHelp prints help for one workload leaf command.
+func printWorkloadSubHelp(path []string, stdout, stderr io.Writer) error {
+	if len(path) == 0 {
+		printWorkloadHelp(stdout)
+		return nil
+	}
+	switch path[0] {
+	case "run":
+		printWorkloadRunHelp(stdout)
+		return nil
+	case "list", "ls":
+		printWorkloadListHelp(stdout)
+		return nil
+	case "inspect":
+		printWorkloadInspectHelp(stdout)
+		return nil
+	case "stats":
+		printWorkloadStatsHelp(stdout)
+		return nil
+	case "logs":
+		printWorkloadLogsHelp(stdout)
+		return nil
+	case "update":
+		printWorkloadUpdateHelp(stdout)
+		return nil
+	case "stop":
+		printWorkloadStopHelp(stdout)
+		return nil
+	default:
+		_, _ = fmt.Fprintf(stderr, "Error: unknown command %q for \"concord workload\"\n", path[0]) //nolint:errcheck // CLI output
+		printWorkloadHelp(stderr)
+		return fmt.Errorf("unknown command %q for \"concord workload\"", path[0])
+	}
 }
 
 type runFlags struct {
@@ -57,33 +129,87 @@ type runFlags struct {
 	fileFlags    []string
 }
 
-func newWorkloadRunCommand() *cobra.Command {
-	var rf runFlags
+// workloadRunTakesValue marks workload run flags that consume a value.
+var workloadRunTakesValue = map[string]bool{
+	"port": true, "p": true,
+	"env": true, "e": true,
+	"restart": true, "cpu": true, "memory": true,
+	"health-path": true, "health-action": true, "health-probe": true, "health-cmd": true,
+	"depends-on": true, "qos": true, "file": true,
+}
 
-	cmd := &cobra.Command{
-		Use:   "run [flags] <image> [command...]",
-		Short: "Deploy and run a new container workload",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleWorkloadRun(cmd.Context(), cmd.OutOrStdout(), &rf, args[0], args[1:])
-		},
+// newWorkloadRunFlagSet binds run flags to rf and documents them for help.
+func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*flag.FlagSet, []flagDoc) {
+	fs := flag.NewFlagSet("concord workload run", flag.ContinueOnError)
+	fs.StringVar(&rf.port, "port", "", "Port mapping (host:container, e.g. 8080:80)")
+	fs.StringVar(&rf.port, "p", "", "Port mapping (host:container, e.g. 8080:80)")
+	fs.Var(env, "env", "Environment variable in KEY=VALUE format (repeatable)")
+	fs.Var(env, "e", "Environment variable in KEY=VALUE format (repeatable)")
+	fs.StringVar(&rf.restart, "restart", "always", "Restart policy: 'always', 'never', or 'on_failure'")
+	fs.Uint64Var(&rf.cpu, "cpu", 1024, "CFS CPU shares (1024 = 1 core)")
+	fs.Int64Var(&rf.memory, "memory", 0, "Memory limit in MB (0 = unlimited)")
+	fs.StringVar(&rf.healthPath, "health-path", "/health", "HTTP health check endpoint")
+	fs.StringVar(&rf.healthAction, "health-action", "restart", "Action on health check failure: 'restart' or 'signal'")
+	fs.StringVar(&rf.healthProbe, "health-probe", "http", "Health check type: 'http', 'tcp', or 'exec'")
+	fs.StringVar(&rf.healthCmd, "health-cmd", "", "Exec probe command, split on whitespace")
+	fs.Var(depends, "depends-on", "Wait for this workload ID or prefix on the same node (repeatable)")
+	fs.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
+	fs.Var(files, "file", "Stage a file: --file /container/path=/local/path[:mode] (repeatable)")
+	docs := []flagDoc{
+		{long: "port", short: "p", kind: "string", def: `""`, usage: "Port mapping (host:container, e.g. 8080:80)"},
+		{long: "env", short: "e", kind: "stringArray", def: "[]", usage: "Environment variable in KEY=VALUE format (repeatable)"},
+		{long: "restart", kind: "string", def: `"always"`, usage: "Restart policy: 'always', 'never', or 'on_failure'"},
+		{long: "cpu", kind: "uint", def: "1024", usage: "CFS CPU shares (1024 = 1 core)"},
+		{long: "memory", kind: "int", def: "0", usage: "Memory limit in MB (0 = unlimited)"},
+		{long: "health-path", kind: "string", def: `"/health"`, usage: "HTTP health check endpoint"},
+		{long: "health-action", kind: "string", def: `"restart"`, usage: "Action on health check failure: 'restart' or 'signal'"},
+		{long: "health-probe", kind: "string", def: `"http"`, usage: "Health check type: 'http', 'tcp', or 'exec'"},
+		{long: "health-cmd", kind: "string", def: `""`, usage: "Exec probe command, split on whitespace"},
+		{long: "depends-on", kind: "stringArray", def: "[]", usage: "Wait for this workload ID or prefix on the same node (repeatable)"},
+		{long: "qos", kind: "string", def: `"besteffort"`, usage: "Compute class: 'besteffort', 'burstable', or 'guaranteed'"},
+		{long: "file", kind: "stringArray", def: "[]", usage: "Stage a file: --file /container/path=/local/path[:mode] (repeatable)"},
 	}
+	return fs, docs
+}
 
-	flags := cmd.Flags()
-	flags.StringVarP(&rf.port, "port", "p", "", "Port mapping (host:container, e.g. 8080:80)")
-	flags.StringArrayVarP(&rf.envFlags, "env", "e", nil, "Environment variable in KEY=VALUE format (repeatable)")
-	flags.StringVar(&rf.restart, "restart", "always", "Restart policy: 'always', 'never', or 'on_failure'")
-	flags.Uint64Var(&rf.cpu, "cpu", 1024, "CFS CPU shares (1024 = 1 core)")
-	flags.Int64Var(&rf.memory, "memory", 0, "Memory limit in MB (0 = unlimited)")
-	flags.StringVar(&rf.healthPath, "health-path", "/health", "HTTP health check endpoint")
-	flags.StringVar(&rf.healthAction, "health-action", "restart", "Action on health check failure: 'restart' or 'signal'")
-	flags.StringVar(&rf.healthProbe, "health-probe", "http", "Health check type: 'http', 'tcp', or 'exec'")
-	flags.StringVar(&rf.healthCmd, "health-cmd", "", `Exec probe command, split on whitespace: --health-cmd "/bin/check --ready" runs /bin/check --ready`)
-	flags.StringArrayVar(&rf.dependsOn, "depends-on", nil, "Wait for this workload ID or prefix on the same node (repeatable)")
-	flags.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
-	flags.StringArrayVar(&rf.fileFlags, "file", nil, "Stage a file: --file /container/path=/local/path[:mode] (repeatable)")
+// printWorkloadRunHelp writes run usage and flags to w.
+// Command after -- is passed verbatim and not parsed as flags.
+func printWorkloadRunHelp(w io.Writer) {
+	var rf runFlags
+	var env, depends, files stringArray
+	_, docs := newWorkloadRunFlagSet(&rf, &env, &depends, &files)
+	_, _ = fmt.Fprintln(w, "Deploy and run a new container workload")                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                       //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload run [flags] <image> [command...]")          //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Command after -- is passed verbatim and not parsed as flags.") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
+	printFlagDocs(w, docs)
+}
 
-	return cmd
+// runWorkloadRun parses run flags and submits a new workload.
+func runWorkloadRun(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+	var rf runFlags
+	var env, depends, files stringArray
+	fs, _ := newWorkloadRunFlagSet(&rf, &env, &depends, &files)
+	flagArgs, positional, wantHelp := splitArgs(args, workloadRunTakesValue)
+	if wantHelp {
+		printWorkloadRunHelp(stdout)
+		return nil
+	}
+	fs.SetOutput(stderr)
+	err := fs.Parse(flagArgs)
+	if err != nil {
+		return fmt.Errorf("parse workload run flags: %w", err)
+	}
+	rf.envFlags = []string(env)
+	rf.dependsOn = []string(depends)
+	rf.fileFlags = []string(files)
+	if len(positional) < 1 {
+		return fmt.Errorf("requires at least 1 arg(s), only %d received", len(positional))
+	}
+	return handleWorkloadRun(ctx, stdout, &rf, positional[0], positional[1:])
 }
 
 // parseHealthFlags validates the health flag trio into a probe, an action,
@@ -254,15 +380,29 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 	return nil
 }
 
-func newWorkloadListCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:     "list",
-		Aliases: []string{"ls"},
-		Short:   "List all active workloads",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return handleWorkloadList(cmd.Context(), cmd.OutOrStdout())
-		},
+// printWorkloadListHelp writes list usage to w.
+func printWorkloadListHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "List all active workloads") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                          //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                    //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload list")   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                          //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Aliases:")                  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  ls")                      //nolint:errcheck // CLI output
+}
+
+// runWorkloadList prints active workloads after handling list flags.
+func runWorkloadList(ctx context.Context, stdout, _ io.Writer, args []string) error {
+	for _, a := range args {
+		if isHelpRequest(a) {
+			printWorkloadListHelp(stdout)
+			return nil
+		}
+		if isFlagToken(a) {
+			return fmt.Errorf("unknown flag: %s", a)
+		}
 	}
+	return handleWorkloadList(ctx, stdout)
 }
 
 func handleWorkloadList(ctx context.Context, stdout io.Writer) error {
@@ -302,15 +442,28 @@ func handleWorkloadList(ctx context.Context, stdout io.Writer) error {
 	return nil
 }
 
-func newWorkloadInspectCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "inspect <id>",
-		Short: "Display detailed specification for a workload",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleWorkloadInspect(cmd.Context(), cmd.OutOrStdout(), args[0])
-		},
+// printWorkloadInspectHelp writes inspect usage to w.
+func printWorkloadInspectHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Display detailed specification for a workload") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload inspect <id>")               //nolint:errcheck // CLI output
+}
+
+// runWorkloadInspect validates the id argument and prints the workload spec.
+func runWorkloadInspect(ctx context.Context, stdout, _ io.Writer, args []string) error {
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printWorkloadInspectHelp(stdout)
+		return nil
 	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
+	}
+	return handleWorkloadInspect(ctx, stdout, positional[0])
 }
 
 func handleWorkloadInspect(ctx context.Context, stdout io.Writer, idArg string) error {
@@ -339,57 +492,127 @@ func handleWorkloadInspect(ctx context.Context, stdout io.Writer, idArg string) 
 	return nil
 }
 
-func newWorkloadStatsCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stats <id>",
-		Short: "Display live utilization for a workload",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleWorkloadStats(cmd.Context(), cmd.OutOrStdout(), args[0])
-		},
-	}
+// printWorkloadStatsHelp writes stats usage to w.
+func printWorkloadStatsHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Display live utilization for a workload") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload stats <id>")           //nolint:errcheck // CLI output
 }
 
-// newWorkloadLogsCommand creates the 'concord workload logs' subcommand.
-func newWorkloadLogsCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "logs <id>",
-		Short: "Show captured container output for a workload",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			tail, err := cmd.Flags().GetInt("tail")
-			if err != nil {
-				return fmt.Errorf("read --tail flag: %w", err)
-			}
-			follow, err := cmd.Flags().GetBool("follow")
-			if err != nil {
-				return fmt.Errorf("read --follow flag: %w", err)
-			}
-			return handleWorkloadLogs(cmd.Context(), cmd.OutOrStdout(), args[0], tail, follow)
-		},
+// runWorkloadStats validates the id argument and prints live utilization.
+func runWorkloadStats(ctx context.Context, stdout, _ io.Writer, args []string) error {
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printWorkloadStatsHelp(stdout)
+		return nil
 	}
-	cmd.Flags().Int("tail", 0, "show only the last N lines (0 means all)")
-	cmd.Flags().BoolP("follow", "f", false, "keep printing new lines until interrupted")
-	return cmd
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
+	}
+	return handleWorkloadStats(ctx, stdout, positional[0])
 }
 
-// newWorkloadUpdateCommand creates the 'concord workload update' subcommand.
-func newWorkloadUpdateCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "update <id>",
-		Short: "Move a live workload to a new image keeping its identity",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			image, err := cmd.Flags().GetString("image")
-			if err != nil {
-				return fmt.Errorf("read --image flag: %w", err)
-			}
-			return handleWorkloadUpdate(cmd.Context(), cmd.OutOrStdout(), args[0], image)
-		},
+// workloadLogsTakesValue marks workload logs flags that consume a value.
+var workloadLogsTakesValue = map[string]bool{"tail": true}
+
+// newWorkloadLogsFlagSet binds logs flags and documents them for help.
+func newWorkloadLogsFlagSet(tail *int, follow *bool) (*flag.FlagSet, []flagDoc) {
+	fs := flag.NewFlagSet("concord workload logs", flag.ContinueOnError)
+	fs.IntVar(tail, "tail", 0, "show only the last N lines (0 means all)")
+	fs.BoolVar(follow, "follow", false, "keep printing new lines until interrupted")
+	fs.BoolVar(follow, "f", false, "keep printing new lines until interrupted")
+	docs := []flagDoc{
+		{long: "tail", kind: "int", def: "0", usage: "show only the last N lines (0 means all)"},
+		{long: "follow", short: "f", kind: "bool", def: "false", usage: "keep printing new lines until interrupted"},
 	}
-	cmd.Flags().String("image", "", "new image reference (required)")
-	_ = cmd.MarkFlagRequired("image") //nolint:errcheck // required-flag setup cannot fail usefully here
-	return cmd
+	return fs, docs
+}
+
+// printWorkloadLogsHelp writes logs usage and flags to w.
+func printWorkloadLogsHelp(w io.Writer) {
+	var tail int
+	var follow bool
+	_, docs := newWorkloadLogsFlagSet(&tail, &follow)
+	_, _ = fmt.Fprintln(w, "Show captured container output for a workload") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload logs <id>")                  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
+	printFlagDocs(w, docs)
+}
+
+// runWorkloadLogs parses logs flags and prints captured container output.
+func runWorkloadLogs(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+	var tail int
+	var follow bool
+	fs, _ := newWorkloadLogsFlagSet(&tail, &follow)
+	flagArgs, positional, wantHelp := splitArgs(args, workloadLogsTakesValue)
+	if wantHelp {
+		printWorkloadLogsHelp(stdout)
+		return nil
+	}
+	fs.SetOutput(stderr)
+	err := fs.Parse(flagArgs)
+	if err != nil {
+		return fmt.Errorf("parse workload logs flags: %w", err)
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
+	}
+	return handleWorkloadLogs(ctx, stdout, positional[0], tail, follow)
+}
+
+// workloadUpdateTakesValue marks workload update flags that consume a value.
+var workloadUpdateTakesValue = map[string]bool{"image": true}
+
+// newWorkloadUpdateFlagSet binds the update image flag for parsing and help.
+func newWorkloadUpdateFlagSet(image *string) (*flag.FlagSet, []flagDoc) {
+	fs := flag.NewFlagSet("concord workload update", flag.ContinueOnError)
+	fs.StringVar(image, "image", "", "new image reference (required)")
+	docs := []flagDoc{
+		{long: "image", kind: "string", def: `""`, usage: "new image reference (required)"},
+	}
+	return fs, docs
+}
+
+// printWorkloadUpdateHelp writes update usage and flags to w.
+func printWorkloadUpdateHelp(w io.Writer) {
+	var image string
+	_, docs := newWorkloadUpdateFlagSet(&image)
+	_, _ = fmt.Fprintln(w, "Move a live workload to a new image keeping its identity") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload update <id>")                           //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                         //nolint:errcheck // CLI output
+	printFlagDocs(w, docs)
+}
+
+// runWorkloadUpdate parses the image flag and moves a live workload.
+func runWorkloadUpdate(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+	var image string
+	fs, _ := newWorkloadUpdateFlagSet(&image)
+	flagArgs, positional, wantHelp := splitArgs(args, workloadUpdateTakesValue)
+	if wantHelp {
+		printWorkloadUpdateHelp(stdout)
+		return nil
+	}
+	fs.SetOutput(stderr)
+	err := fs.Parse(flagArgs)
+	if err != nil {
+		return fmt.Errorf("parse workload update flags: %w", err)
+	}
+	visited := visitedFlags(fs)
+	if !visited["image"] {
+		return fmt.Errorf("required flag(s) \"image\" not set") //nolint:perfsprint // plain error, no wrap target
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
+	}
+	return handleWorkloadUpdate(ctx, stdout, positional[0], image)
 }
 
 // handleWorkloadUpdate bumps a live workload to a new image. Identity,
@@ -503,15 +726,28 @@ func handleWorkloadStats(ctx context.Context, stdout io.Writer, idArg string) er
 	return nil
 }
 
-func newWorkloadStopCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop <id>",
-		Short: "Stop and remove a workload from the cluster",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return handleWorkloadStop(cmd.Context(), cmd.OutOrStdout(), args[0])
-		},
+// printWorkloadStopHelp writes stop usage to w.
+func printWorkloadStopHelp(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Stop and remove a workload from the cluster") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                            //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload stop <id>")                //nolint:errcheck // CLI output
+}
+
+// runWorkloadStop validates the id argument and stops the workload.
+func runWorkloadStop(ctx context.Context, stdout, _ io.Writer, args []string) error {
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printWorkloadStopHelp(stdout)
+		return nil
 	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
+	}
+	return handleWorkloadStop(ctx, stdout, positional[0])
 }
 
 func handleWorkloadStop(ctx context.Context, stdout io.Writer, idArg string) error {
