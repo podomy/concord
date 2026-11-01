@@ -1,6 +1,7 @@
 Go SDK Reference
 
-  go get github.com/podomy/concord/sdk
+  The SDK ships in this module, so there is no separate install step.
+  Import it as "github.com/podomy/concord/sdk".
 
 sdk.Dial() connects to ~/.config/concord/concord.sock.
 
