@@ -14,6 +14,8 @@ import (
 	"net/netip"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // SyncPath is the node-to-node unary sync endpoint.
@@ -136,7 +138,39 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 	if err := json.NewDecoder(limited).Decode(&resp); err != nil {
 		return SyncResponse{}, fmt.Errorf("decode sync response: %w", err)
 	}
+	if err := validateSyncResponse(peer, resp); err != nil {
+		return SyncResponse{}, err
+	}
 	return resp, nil
+}
+
+// validateSyncResponse fails closed on an oversized or malformed page.
+// The event cap is twice maxSyncLimit so a buggy or hostile peer cannot
+// push an unbounded decode into the caller. NextCursor must be empty or a
+// UUID, and every event must carry a usable identity: nil IDs, empty types,
+// or nil node IDs are rejected rather than passed to the caller.
+func validateSyncResponse(peer netip.AddrPort, resp SyncResponse) error {
+	if len(resp.Events) > 2*maxSyncLimit {
+		return fmt.Errorf("sync %s: too many events %d", peer, len(resp.Events))
+	}
+	if resp.NextCursor != "" {
+		if _, err := uuid.Parse(resp.NextCursor); err != nil {
+			return fmt.Errorf("sync %s: bad next cursor: %w", peer, err)
+		}
+	}
+	for i := range resp.Events {
+		ev := &resp.Events[i]
+		if ev.ID == uuid.Nil {
+			return fmt.Errorf("sync %s: event %d has nil id", peer, i)
+		}
+		if ev.Type == "" {
+			return fmt.Errorf("sync %s: event %s has empty type", peer, ev.ID)
+		}
+		if ev.NodeID == uuid.Nil {
+			return fmt.Errorf("sync %s: event %s has nil node", peer, ev.ID)
+		}
+	}
+	return nil
 }
 
 // verifyResponder checks the responder's in-session parcel: it must claim the
@@ -159,18 +193,15 @@ func (c *Client) verifyResponder(expect Peer, raw []byte) error {
 	return nil
 }
 
-// dial opens the TCP connection and runs the IK initiator handshake.
+// dial opens the TCP connection with the caller's context and runs the IK
+// initiator handshake. DialContext carries cancellation; Timeout stays as the
+// fallback when the caller sets no deadline. Handshake deadlines and
+// cancel-abort live in dialHandshake.
 func (c *Client) dial(ctx context.Context, peer netip.AddrPort, expect Peer) (*noiseConn, []byte, error) {
 	dialer := &net.Dialer{Timeout: c.timeout}
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < dialer.Timeout {
-			dialer.Timeout = remaining
-		}
-	}
 
 	addr := net.JoinHostPort(peer.Addr().String(), strconv.FormatUint(uint64(peer.Port()), 10))
-	conn, parcel, err := dialHandshake(dialer, addr, c.static, c.parcel, expect.Pub)
+	conn, parcel, err := dialHandshake(ctx, dialer, addr, c.static, c.parcel, expect.Pub)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync %s: %w", peer, err)
 	}

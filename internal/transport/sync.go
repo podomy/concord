@@ -43,11 +43,29 @@ type SyncResponse struct {
 func postSync(w http.ResponseWriter, r *http.Request, index *offsetIndex) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB cap.
 
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var req SyncRequest
-	derr := json.NewDecoder(r.Body).Decode(&req)
-	if derr != nil {
+	if derr := dec.Decode(&req); derr != nil {
 		http.Error(w, "sync failed", http.StatusBadRequest)
 		return
+	}
+	// Reject trailing garbage after the first JSON value: one value per
+	// body, no concatenation. A clean body decodes to EOF here; any extra
+	// value or syntax error fails closed.
+	var extra json.RawMessage
+	if terr := dec.Decode(&extra); terr != io.EOF {
+		http.Error(w, "sync failed", http.StatusBadRequest)
+		return
+	}
+
+	// Cursor shape is checked early: a non-UUID cursor can never name an
+	// event, so normalize to from-start now for a single-pass serve in
+	// loadSyncPage instead of a miss-discovery scan plus a second scan.
+	if req.Cursor != "" {
+		if _, cerr := uuid.Parse(req.Cursor); cerr != nil {
+			req.Cursor = ""
+		}
 	}
 
 	limit := req.Limit
@@ -78,20 +96,54 @@ func postSync(w http.ResponseWriter, r *http.Request, index *offsetIndex) {
 	}
 }
 
+// normalizeCursor maps a non-UUID cursor to from-start. A cursor that is
+// not a UUID can never match an event id, so serving from the start in one
+// pass avoids a miss-discovery scan plus a second scan.
+func normalizeCursor(cursor string) string {
+	if cursor == "" {
+		return ""
+	}
+	if _, cerr := uuid.Parse(cursor); cerr != nil {
+		return ""
+	}
+	return cursor
+}
+
+// tryIndexedPage serves one page through the offset index. It reports
+// ok=false when the index is nil, the cursor is empty, or the index has no
+// usable entry, so the caller falls back to a full scan.
+func tryIndexedPage(ctx context.Context, index *offsetIndex, cursor string, limit int) ([]journal.Event, string, bool, error) {
+	if index == nil || cursor == "" {
+		return nil, "", false, nil
+	}
+	events, next, ok, err := loadIndexedPage(ctx, index, cursor, limit)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if !ok {
+		return nil, "", false, nil
+	}
+	return events, next, true, nil
+}
+
 // loadSyncPage opens the journal and returns one page after cursor.
 // A usable index entry seeks straight to the cursor; any miss or mismatch
 // falls back to a full scan, as does a nil index. An unknown cursor
 // falls back to a from-start page so clients cannot stick on a bogus or
 // obsolete cursor.
+//
+// Cursor shape is validated first: a non-UUID cursor can never match an
+// event id, so it serves from the start in a single pass with no
+// miss-discovery scan. A valid-but-unknown UUID still costs one scan to
+// discover the miss, then serves from the start by seeking the same reader
+// to zero instead of re-opening the journal: one open, no second file
+// handle, with both passes' offsets recorded.
 func loadSyncPage(ctx context.Context, index *offsetIndex, cursor string, limit int) ([]journal.Event, string, error) {
-	if index != nil && cursor != "" {
-		events, next, ok, err := loadIndexedPage(ctx, index, cursor, limit)
-		if err != nil {
-			return nil, "", err
-		}
-		if ok {
-			return events, next, nil
-		}
+	cursor = normalizeCursor(cursor)
+	if events, next, ok, err := tryIndexedPage(ctx, index, cursor, limit); err != nil {
+		return nil, "", err
+	} else if ok {
+		return events, next, nil
 	}
 
 	reader, err := journalreader.OpenJSONLReader()
@@ -109,14 +161,14 @@ func loadSyncPage(ctx context.Context, index *offsetIndex, cursor string, limit 
 		return events, next, nil
 	}
 
-	// Unknown cursor: re-open and page from the beginning.
-	reader2, err := journalreader.OpenJSONLReader()
-	if err != nil {
-		return nil, "", fmt.Errorf("open journal: %w", err)
+	// Valid-but-unknown cursor: the first scan proved the miss. Seek the
+	// same reader to the start instead of opening a second handle, then
+	// page from the beginning.
+	if serr := reader.SeekTo(0); serr != nil {
+		return nil, "", fmt.Errorf("seek journal: %w", serr)
 	}
-	defer func() { _ = reader2.Close() }() //nolint:errcheck // best-effort
 
-	events, next, _, observed, err = readJournalPage(ctx, reader2, "", limit)
+	events, next, _, observed, err = readJournalPage(ctx, reader, "", limit)
 	if err != nil {
 		return nil, "", err
 	}

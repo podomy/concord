@@ -4,6 +4,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
@@ -157,31 +158,58 @@ func readFrame(r io.Reader, maxLen uint32) ([]byte, error) {
 	return payload, nil
 }
 
-// dialHandshake opens a TCP connection to addr and runs the IK initiator
-// handshake for self against the peer's known static key. It returns the
-// encrypted channel plus the responder's parcel, which the caller must verify
-// before sending application bytes.
+// dialHandshake opens a TCP connection to addr with the caller's context and
+// runs the IK initiator handshake for self against the peer's known static
+// key. Dialing uses DialContext so caller cancellation aborts the TCP setup;
+// the handshake deadline is the sooner of handshakeTimeout and the caller's
+// deadline. A watcher closes raw if ctx cancels mid-handshake so a stuck peer
+// cannot wedge dial. It returns the encrypted channel plus the responder's
+// parcel, which the caller must verify before sending application bytes.
 func dialHandshake(
+	ctx context.Context,
 	dialer *net.Dialer,
 	addr string,
 	self StaticKey,
 	selfParcel []byte,
 	expectPub []byte,
 ) (*noiseConn, []byte, error) {
-	raw, err := dialer.Dial("tcp", addr)
+	raw, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 
-	err = raw.SetDeadline(time.Now().Add(handshakeTimeout))
+	deadline := time.Now().Add(handshakeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	err = raw.SetDeadline(deadline)
 	if err != nil {
 		_ = raw.Close() //nolint:errcheck // best-effort close on failed handshake
 		return nil, nil, fmt.Errorf("set handshake deadline: %w", err)
 	}
 
+	// Abort a stuck handshake when the caller cancels. The watcher only
+	// lives for this handshake; done closes it on every exit path so a
+	// later caller cancel cannot close the established session.
+	var done chan struct{}
+	if ctx.Done() != nil {
+		done = make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = raw.Close() //nolint:errcheck // abort stuck handshake
+			case <-done:
+			}
+		}()
+	}
+
 	conn, parcel, err := initiatorHandshake(raw, self, selfParcel, expectPub)
 	if err != nil {
 		_ = raw.Close() //nolint:errcheck // best-effort close on failed handshake
+		if ctx.Err() != nil {
+			return nil, nil, fmt.Errorf("handshake %s: %w", addr, ctx.Err())
+		}
 		return nil, nil, err
 	}
 
@@ -335,13 +363,19 @@ type noiseConn struct {
 	pending []byte
 }
 
-// Read returns decrypted stream bytes, reading and decrypting one frame when
-// the buffer is empty.
+// Read returns decrypted stream bytes, reading and decrypting frames until
+// plaintext is available. Empty plaintext frames (only possible from a
+// non-cooperative peer: a cooperative Write never sends one) are skipped by
+// looping to the next frame instead of returning (0, nil). A (0, nil) return
+// happens only when p is zero-length, per the net.Conn contract.
 func (c *noiseConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
 
-	if len(c.pending) == 0 {
+	for len(c.pending) == 0 {
 		frame, err := readFrame(c.conn, maxTransportFrame)
 		if err != nil {
 			return 0, err
@@ -350,6 +384,11 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 		plain, err := c.recv.Decrypt(nil, nil, frame)
 		if err != nil {
 			return 0, fmt.Errorf("noise decrypt: %w", err)
+		}
+		// Empty plaintext carries no stream bytes. Loop for the next
+		// frame rather than surfacing a spurious (0, nil).
+		if len(plain) == 0 {
+			continue
 		}
 		c.pending = plain
 	}
@@ -360,7 +399,10 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Write encrypts p in MaxMsgLen chunks and writes one frame per chunk.
+// Write encrypts p in MaxMsgLen chunks and writes one frame per chunk. A
+// zero-length Write returns (0, nil) without sending a frame: empty messages
+// are not delivered and never surface as empty plaintext to a cooperative
+// peer's Read.
 func (c *noiseConn) Write(p []byte) (int, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()

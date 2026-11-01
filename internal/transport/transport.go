@@ -44,8 +44,15 @@ func Start(
 	})
 
 	srv := &http.Server{
-		Addr:              ":" + Port,
-		Handler:           mux,
+		Addr:    ":" + Port,
+		Handler: mux,
+		// Header bound stays short; body and response bounds below are
+		// frozen at 10s. A large-journal fallback scan (full file walk
+		// on index miss or unknown cursor) runs inside postSync under
+		// these timeouts, so a huge journal without a warm index can
+		// hit WriteTimeout and fail the page instead of stalling the
+		// connection. The offset index exists to keep the common path
+		// a seek plus a bounded page; timeout values stay frozen.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -112,6 +119,12 @@ type handshakeError struct {
 // Error reports the handshake failure.
 func (e *handshakeError) Error() string {
 	return e.err.Error()
+}
+
+// Unwrap preserves the cause chain for errors.Is and errors.As. Error
+// stays flattened for logs while matching still reaches the wrapped cause.
+func (e *handshakeError) Unwrap() error {
+	return e.err
 }
 
 // Timeout reports no timeout: the failure is authentication, not time.
