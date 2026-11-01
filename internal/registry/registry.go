@@ -17,6 +17,11 @@
 // upload or manifest put, 400 on bad digest or tag, 404 on unknown blob
 // or manifest, 405 on resumed upload or bad method, 413 over size caps,
 // 500 on store failure.
+// Trust: any mesh member that can reach the port can push blobs and
+// move tags. Tags stay mutable so image updates and sync replication
+// can republish a tag. Every overwrite that points a tag at a
+// different digest logs at Warn with repo, tag, old digest, and new
+// digest.
 package registry
 
 import (
@@ -743,7 +748,8 @@ func (r *Registry) commitUpload(w http.ResponseWriter, req *http.Request, repo, 
 
 // serveBlobUpload stores one monolithic blob upload addressed by digest.
 // The body streams to a temp file inside the store dir with flat memory.
-// Small blobs use PutRaw. Large blobs install via rename to avoid RAM.
+// Small blobs use PutRaw. Large blobs install via rename to avoid RAM
+// then re-hash the installed file, so verification is not bypassed.
 // The store has no streaming ingest, so the large path writes the raw
 // file layout directly. Resumed uploads are not supported.
 func (r *Registry) serveBlobUpload(w http.ResponseWriter, req *http.Request, repo string) {
@@ -911,8 +917,9 @@ func (r *Registry) checkRawReady(w http.ResponseWriter, digest string) (string, 
 }
 
 // serveRawGet streams a raw blob file with flat memory. Small files use
-// the capped store read. Large files verify by streaming hash then
-// stream to the client. Only sizes over maxBlobBytes return 413.
+// the capped store read. Large files stream once while hashing, and a
+// trailing mismatch aborts the connection. Only sizes over maxBlobBytes
+// return 413.
 func (r *Registry) serveRawGet(w http.ResponseWriter, digest string) {
 	dest, size, ok := r.checkRawReady(w, digest)
 	if !ok {
@@ -922,7 +929,7 @@ func (r *Registry) serveRawGet(w http.ResponseWriter, digest string) {
 		r.serveRawSmall(w, digest)
 		return
 	}
-	r.serveRawLarge(w, digest, dest, size)
+	r.serveRawLarge(w, digest, dest)
 }
 
 // serveRawSmall serves a small raw blob from the capped store.
@@ -943,13 +950,15 @@ func (r *Registry) serveRawSmall(w http.ResponseWriter, digest string) {
 	_, _ = w.Write(data) //nolint:errcheck // best effort blob body
 }
 
-// serveRawLarge verifies then streams a large raw blob file.
-func (r *Registry) serveRawLarge(w http.ResponseWriter, digest, dest string, size int64) {
-	err := verifyRawFile(dest, digest)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "unknown blob")
-		return
-	}
+// serveRawLarge streams a large raw blob file in one pass while hashing.
+// The file is opened once and bytes flow through a tee hash to the
+// client, so no verify-then-reopen window exists. Headers commit 200
+// before the trailing hash completes, so a mismatch cannot change the
+// status. On mismatch the handler logs at Error and aborts the
+// connection, and the client sees a truncated body short of
+// Content-Length or failing its own digest check. Already-sent bytes
+// are not retracted.
+func (r *Registry) serveRawLarge(w http.ResponseWriter, digest, dest string) {
 	f, err := os.Open(dest) //nolint:gosec // dest is a validated digest path under the store dir
 	if err != nil {
 		writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "unknown blob")
@@ -958,11 +967,49 @@ func (r *Registry) serveRawLarge(w http.ResponseWriter, digest, dest string, siz
 	defer func() {
 		_ = f.Close() //nolint:errcheck // close raw file after serve
 	}()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusNotFound, "BLOB_UNKNOWN", "unknown blob")
+		return
+	}
+	if info.Size() > maxBlobBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "BLOB_UNKNOWN", "blob too large")
+		return
+	}
+	size := info.Size()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, f) //nolint:errcheck // best effort blob body
+	sum := sha256.New()
+	_, err = io.Copy(w, io.TeeReader(f, sum))
+	if err != nil {
+		r.logger.Error("registry serve raw", logs.String("digest", digest), logs.Error(err))
+		abortRawStream(w)
+		return
+	}
+	computed := "sha256:" + hex.EncodeToString(sum.Sum(nil))
+	if computed != digest {
+		r.logger.Error("registry raw hash mismatch", logs.String("digest", digest))
+		abortRawStream(w)
+		return
+	}
+}
+
+// abortRawStream closes the connection after a mid-stream failure.
+// Headers already committed 200, so the status cannot change. Closing
+// truncates the body short of Content-Length so the client detects the
+// failure on length or digest check.
+func abortRawStream(w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	_ = conn.Close() //nolint:errcheck // abort truncated response
 }
 
 // checkManifestRequest validates method, repo, and ref for manifests.
@@ -1031,6 +1078,9 @@ func checkManifestJSON(w http.ResponseWriter, raw []byte) bool {
 }
 
 // storeManifestBytes stores manifest bytes and tag, then answers 201.
+// Tags stay mutable because mesh membership implies push trust, so any
+// member may republish a tag for image updates or sync replication.
+// An overwrite that points a tag at a different digest logs at Warn.
 func (r *Registry) storeManifestBytes(w http.ResponseWriter, ctx context.Context, repo, tag, digest string, raw []byte) {
 	sum := sha256.Sum256(raw)
 	computed := "sha256:" + hex.EncodeToString(sum[:])
@@ -1044,13 +1094,23 @@ func (r *Registry) storeManifestBytes(w http.ResponseWriter, ctx context.Context
 		return
 	}
 	if tag != "" {
+		old, ok := r.store.ResolveTag(repo, tag)
 		err = r.store.PutTag(repo, tag, computed)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "MANIFEST_INVALID", "store tag")
 			return
 		}
+		if ok && old != computed {
+			r.logTagOverwrite(repo, tag, old, computed)
+		}
 	}
 	r.writeManifestPutHeaders(w, repo, tag, digest, computed)
+}
+
+// logTagOverwrite logs a tag republish at Warn for audit visibility.
+// Tags stay mutable under mesh push trust; the log records the move.
+func (r *Registry) logTagOverwrite(repo, tag, oldDigest, newDigest string) {
+	r.logger.Warn("registry tag overwrite", logs.String("repo", repo), logs.String("tag", tag), logs.String("old_digest", oldDigest), logs.String("new_digest", newDigest))
 }
 
 // writeManifestPutHeaders writes PUT success headers.
@@ -1203,9 +1263,13 @@ func syncStoreDir(dir string) error {
 // installRaw moves a verified temp file to its raw location. The temp
 // file must already hold the digest bytes and be synced and closed.
 // Rename keeps memory flat and stays on one filesystem because the
-// temp file lives inside the store dir.
+// temp file lives inside the store dir. After rename the dest file is
+// re-hashed by streaming so bytes swapped between the upload hash and
+// the rename cannot bypass verification. The dir chain up to the store
+// root is fsynced, matching blob Store durability.
 func (r *Registry) installRaw(tmpName, digest string) error {
-	dest, ok := rawBlobPath(r.storeDirFor(), digest)
+	storeDir := r.storeDirFor()
+	dest, ok := rawBlobPath(storeDir, digest)
 	if !ok {
 		return fmt.Errorf("bad digest for raw install: %s", digest)
 	}
@@ -1217,11 +1281,49 @@ func (r *Registry) installRaw(tmpName, digest string) error {
 	if err != nil {
 		return fmt.Errorf("rename raw file: %w", err)
 	}
-	err = syncStoreDir(filepath.Dir(dest))
+	err = syncRawChain(filepath.Dir(dest), storeDir)
 	if err != nil {
 		return err
 	}
+	err = verifyRawFile(dest, digest)
+	if err != nil {
+		_ = os.Remove(dest) //nolint:errcheck // best effort cleanup of bad install
+		return err
+	}
 	return nil
+}
+
+// syncRawChain fsyncs dir and each parent up to stop inclusive. It
+// bounds the window where a new dir entry could be lost, matching blob
+// Store durability for atomic writes.
+func syncRawChain(dir, stop string) error {
+	cleanDir := filepath.Clean(dir)
+	cleanStop := filepath.Clean(stop)
+	rel, err := filepath.Rel(cleanStop, cleanDir)
+	if err != nil {
+		return syncStoreDir(cleanDir)
+	}
+	if rel == "." {
+		return syncStoreDir(cleanDir)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return syncStoreDir(cleanDir)
+	}
+	cur := cleanDir
+	for {
+		err := syncStoreDir(cur)
+		if err != nil {
+			return err
+		}
+		if cur == cleanStop {
+			return nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return nil
+		}
+		cur = parent
+	}
 }
 
 // verifyRawFile hashes a raw file in 256KB pieces and compares it to
