@@ -38,6 +38,7 @@ var OverlayPrefix = netip.MustParsePrefix("10.0.0.0/16")
 type MemberService struct {
 	list     *memberlist.Memberlist
 	delegate *nodeMetadataDelegate
+	logger   *logs.Logger
 }
 
 // Adapter for the message levels coming from the memberlist
@@ -142,7 +143,9 @@ func Start(
 
 	// Gossip encryption uses a provisioned cluster-wide secret, identical
 	// on every node. Both verify flags enforce encrypted-only gossip in
-	// their direction.
+	// their direction. Key rotation has no protocol here: the key is fixed
+	// at provision time and node-key rotation rides NoiseGeneration
+	// (highest generation wins), not a gossip rekey.
 	gossipKey, err := loadGossipKey()
 	if err != nil {
 		return nil, fmt.Errorf("load gossip key: %w", err)
@@ -172,17 +175,9 @@ func Start(
 		)
 	}
 
-	cpuMHz, err := nodepackage.GetCPUFreqMHz()
+	cpuMHz, memoryMB, err := sampleCapacity()
 	if err != nil {
-		return nil, fmt.Errorf("get cpu freq: %w", err)
-	}
-
-	memoryMB, err := nodepackage.GetTotalMemoryMB()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"get total memory mb: %w",
-			err,
-		)
+		return nil, err
 	}
 
 	delegate := &nodeMetadataDelegate{}
@@ -207,7 +202,9 @@ func Start(
 	// Seed published with the initial snapshot so the first Publish is a
 	// no-op: memberlist already gossips this meta on join, an immediate
 	// UpdateNode would rebroadcast identical bytes.
-	delegate.published = delegate.meta()
+	if err := seedPublished(delegate); err != nil {
+		return nil, err
+	}
 
 	config.Delegate = delegate
 
@@ -239,14 +236,33 @@ func Start(
 	memberService := MemberService{
 		list:     list,
 		delegate: delegate,
+		logger:   logger,
 	}
 
 	return &memberService, nil
 }
 
+// sampleCapacity reads the static capacity snapshot gossiped as
+// NodeMetadata: CPU frequency and total memory.
+func sampleCapacity() (float64, uint64, error) {
+	cpuMHz, err := nodepackage.GetCPUFreqMHz()
+	if err != nil {
+		return 0, 0, fmt.Errorf("get cpu freq: %w", err)
+	}
+
+	memoryMB, err := nodepackage.GetTotalMemoryMB()
+	if err != nil {
+		return 0, 0, fmt.Errorf("get total memory mb: %w", err)
+	}
+
+	return cpuMHz, memoryMB, nil
+}
+
 // loadGossipKey reads the provisioned cluster-wide gossip encryption key.
 // The key file must hold 16, 24, or 32 raw bytes (AES-128/192/256) and be
-// identical on every node; it is never generated here.
+// identical on every node; it is never generated here. The file must be
+// mode 0600 or stricter: fail closed on group or other access, matching
+// ca.key handling in certs.
 func loadGossipKey() ([]byte, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -254,6 +270,17 @@ func loadGossipKey() ([]byte, error) {
 	}
 
 	keyPath := filepath.Join(dir, "concord", "memberservice", "secret.key")
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat gossip key %s: %w", keyPath, err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf(
+			"refusing gossip key %s with mode %04o: want 0600 (group and others must have no access)",
+			keyPath,
+			perm,
+		)
+	}
 	// #nosec G304: path is local runtime configuration, not user-controlled input.
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -261,7 +288,10 @@ func loadGossipKey() ([]byte, error) {
 	}
 
 	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, fmt.Errorf("invalid gossip key length: got %d bytes, want 16, 24, or 32", len(key))
+		return nil, fmt.Errorf(
+			"invalid gossip key length: got %d bytes, want 16, 24, or 32 raw bytes (a trailing newline from echo or an editor makes a valid key invalid; write raw bytes with no newline)",
+			len(key),
+		)
 	}
 
 	return key, nil
@@ -324,6 +354,12 @@ func (m *MemberService) Publish() error {
 	current := d.meta()
 	if current.equalVolatile(d.published) {
 		return nil
+	}
+	// Pre-flight the gossip cap: UpdateNode panics past MetaMaxSize, so
+	// oversize metadata fails here with an error instead. See
+	// nodeMetaLimit.
+	if err := checkMetaSize(current); err != nil {
+		return err
 	}
 	err := m.list.UpdateNode(publishTimeout)
 	if err != nil {
@@ -524,6 +560,13 @@ func (m *MemberService) Join(
 // memberlist, so this method parses the name back into a
 // uuid.UUID and pairs it with the member's advertised
 // address.
+//
+// One corrupt record never fails the whole view: an unparseable name, an
+// undecodable address, and bad metadata each skip that member with a
+// warning and the remaining members are still returned. Remote gossip is
+// untrusted input, so every record is re-validated here; see
+// sanitizeNodeMeta. The local write path (SetPressure, SetPosition,
+// Publish) stays authoritative for what this node sends.
 func (m *MemberService) Members() ([]Node, error) {
 	members := m.list.Members()
 
@@ -532,27 +575,22 @@ func (m *MemberService) Members() ([]Node, error) {
 	for _, member := range members {
 		id, err := uuid.Parse(member.Name)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"parse member id: %w",
-				err,
-			)
+			m.warnSkip("skip member with bad id", err, member.Name)
+			continue
 		}
 
 		addr, ok := netip.AddrFromSlice(member.Addr)
 		if !ok {
-			return nil, fmt.Errorf(
-				"invalid member address: %v",
-				member.Addr,
-			)
+			m.warnSkip("skip member with bad address", nil, member.Name)
+			continue
 		}
 
 		var meta NodeMetadata
 		if len(member.Meta) > 0 {
-			if err := json.Unmarshal(member.Meta, &meta); err != nil {
-				return nil, fmt.Errorf(
-					"unmarshal member metadata: %w",
-					err,
-				)
+			err = json.Unmarshal(member.Meta, &meta)
+			if err != nil {
+				m.warnSkip("skip member with bad metadata", err, member.Name)
+				continue
 			}
 		}
 
@@ -560,11 +598,48 @@ func (m *MemberService) Members() ([]Node, error) {
 			ID:       id,
 			Address:  netip.AddrPortFrom(addr, member.Port),
 			State:    memberState(member.State),
-			Metadata: meta,
+			Metadata: sanitizeNodeMeta(meta),
 		})
 	}
 
 	return out, nil
+}
+
+// warnSkip logs a skipped-member warning when a logger is configured.
+func (m *MemberService) warnSkip(msg string, err error, name string) {
+	if m == nil || m.logger == nil {
+		return
+	}
+	if err != nil {
+		m.logger.Warn(msg, logs.Error(err), logs.String("name", name))
+		return
+	}
+	m.logger.Warn(msg, logs.String("name", name))
+}
+
+// sanitizeNodeMeta re-validates remote gossip metadata on the Members read
+// path and returns a sanitized copy. Pressure percents clamp to 0-100,
+// negative workload counts floor at zero, and a position that fails Valid
+// resets to unknown (0, 0). The delegate snapshot is never mutated; the
+// local write path stays authoritative for what this node sends.
+func sanitizeNodeMeta(meta NodeMetadata) NodeMetadata {
+	if meta.CPUPercent > 100 {
+		meta.CPUPercent = 100
+	}
+	if meta.MemPercent > 100 {
+		meta.MemPercent = 100
+	}
+	if meta.DiskPercent > 100 {
+		meta.DiskPercent = 100
+	}
+	if meta.Workloads < 0 {
+		meta.Workloads = 0
+	}
+	if !(geo.Point{Lat: meta.Lat, Lon: meta.Lon}.Valid()) {
+		meta.Lat = 0
+		meta.Lon = 0
+	}
+	return meta
 }
 
 // Shutdown stops the memberlist service and releases its
@@ -635,9 +710,44 @@ type nodeMetadataDelegate struct {
 // the alive message, not a full gossip round.
 const publishTimeout = time.Second
 
+// nodeMetaLimit caps gossiped metadata at memberlist's MetaMaxSize. The
+// library panics past the cap, so Start and Publish pre-flight the length
+// and fail with an error instead. Wire shape unchanged: still JSON
+// NodeMetadata under the same cap.
+const nodeMetaLimit = 512
+
+// seedPublished snapshots the initial metadata so the first Publish is a
+// no-op, and fails when the snapshot already exceeds the gossip cap: Create
+// panics past MetaMaxSize, so an error here names the cause instead of
+// crashing the process. See nodeMetaLimit.
+func seedPublished(delegate *nodeMetadataDelegate) error {
+	delegate.published = delegate.meta()
+	return checkMetaSize(delegate.published)
+}
+
+// checkMetaSize fails when meta exceeds the gossip cap, before the bytes
+// reach memberlist (which panics past MetaMaxSize). Used by Start for the
+// initial snapshot and by Publish before UpdateNode.
+func checkMetaSize(meta NodeMetadata) error {
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal node metadata: %w", err)
+	}
+	if len(metaBytes) > nodeMetaLimit {
+		return fmt.Errorf(
+			"node metadata %d bytes exceeds %d byte gossip cap",
+			len(metaBytes),
+			nodeMetaLimit,
+		)
+	}
+	return nil
+}
+
 // NodeMeta produces JSON-serialized metadata for this node
 // to be included
-// in memberlist ping and gossip packets.
+// in memberlist ping and gossip packets. Over-limit output panics inside
+// the library; callers that push new metadata (Start, Publish) pre-flight
+// against nodeMetaLimit so this never fires.
 func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	bytes, err := json.Marshal(d.meta())
 	if err != nil {

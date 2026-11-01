@@ -28,6 +28,11 @@ func (p Point) Valid() bool {
 // math on degrees breaks with scale (a degree of longitude is 111km at
 // the equator and zero at the poles); the haversine costs the same ten
 // lines and works from one pit to the whole planet.
+//
+// Both points must satisfy Valid. Inputs off the planet are not positions,
+// and the result is meaningless for them; non-finite inputs yield NaN,
+// never a panic. The haversine term clamps to [0, 1] so float rounding at
+// antipodes cannot push Asin out of domain.
 func DistanceKM(a, b Point) float64 {
 	lat1 := a.Lat * math.Pi / 180
 	lat2 := b.Lat * math.Pi / 180
@@ -36,5 +41,6 @@ func DistanceKM(a, b Point) float64 {
 
 	h := math.Sin(dLat/2)*math.Sin(dLat/2) +
 		math.Cos(lat1)*math.Cos(lat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	h = min(max(h, 0), 1)
 	return 2 * earthRadiusKM * math.Asin(math.Sqrt(h))
 }

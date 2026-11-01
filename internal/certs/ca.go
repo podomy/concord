@@ -132,7 +132,10 @@ func parsePKCS8RSAKey(der []byte) (*rsa.PrivateKey, error) {
 	return caKey, nil
 }
 
-// createCA generates an RSA key and a self-signed CA certificate.
+// createCA generates an RSA key and a self-signed CA certificate with a
+// random 128-bit serial. Fixed serials (such as 1) repeat across
+// independently provisioned fleets; 128 random bits fit every X.509
+// implementation cap (20 octets).
 // Used only by WriteCA (provisioning), never by Ensure or node startup.
 func createCA() (caDER []byte, caCert *x509.Certificate, caKey *rsa.PrivateKey, err error) {
 	caKey, err = rsa.GenerateKey(rand.Reader, 2048)
@@ -140,8 +143,14 @@ func createCA() (caDER []byte, caCert *x509.Certificate, caKey *rsa.PrivateKey, 
 		return nil, nil, nil, fmt.Errorf("rsa generate ca key: %w", err)
 	}
 
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("random ca serial: %w", err)
+	}
+
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "Concord CA"},
 		NotBefore:             clock.Now().Add(-time.Minute),
 		NotAfter:              clock.Now().Add(10 * 365 * 24 * time.Hour),

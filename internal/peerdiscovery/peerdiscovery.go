@@ -173,6 +173,15 @@ func MDNSAdvertise(
 		)
 	}
 
+	// Bind server lifetime to ctx: cancel stops the server. The manual
+	// Shutdown at the call site stays valid: mdns Shutdown is idempotent
+	// (a second call returns nil), so ctx cancel plus manual stop never
+	// double-closes.
+	go func() {
+		<-ctx.Done()
+		_ = server.Shutdown() //nolint:errcheck // best-effort stop on ctx cancel
+	}()
+
 	return server, nil
 }
 

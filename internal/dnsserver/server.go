@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -24,37 +25,58 @@ import (
 // are never resolved on the public internet.
 const tldConcord = ".concord.local."
 
+// maxUDPResponse caps DNS/UDP answers at the classic 512-byte ceiling. The
+// server has no TCP listener and answers no EDNS, so anything past the cap
+// truncates with the TC bit set (see truncateToFit) instead of fragmenting.
+// Clients must treat TC as incomplete; there is no TCP fallback.
+const maxUDPResponse = 512
+
 // handler implements dns.Handler to serve Concord peer discovery records.
 type handler struct {
 	memberService *peerdiscovery.MemberService
 }
 
-// ServeDNS responds to DNS queries for Concord's peer mesh. It handles two
+// ServeDNS responds to DNS queries for Concord's peer mesh. It handles three
 // query types:
 //
 //   - SRV: returns all known members with targets of the form
-//     <UUID>.concord.local. A records for each target are included in the
-//     response's additional section so clients can resolve addresses in a
-//     single round trip.
-//   - A: returns the IP address for a specific <UUID>.concord.local. target.
+//     <UUID>.concord.local. A or AAAA records for each target are included
+//     in the response's additional section so clients can resolve addresses
+//     in a single round trip.
+//   - A: returns the IPv4 address for a specific <UUID>.concord.local.
+//     target.
+//   - AAAA: returns the IPv6 address for a specific <UUID>.concord.local.
+//     target.
 //
-// Non-Concord SRV queries receive NXDOMAIN. Other query types return an empty
+// Unknown names return NXDOMAIN for every type this server answers: a name
+// under our suffix with no member, and any other name, are both outside the
+// served zone. A known name with no record of the asked type returns empty
+// NOERROR (NODATA), per DNS convention. Other query types return an empty
 // response.
+//
+// Names compare case-insensitively after Fqdn normalization. Oversized
+// answers truncate with TC set; see maxUDPResponse.
 func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := dns.Msg{}
 	msg.SetReply(r)
 
-	nodes, err := h.memberService.Members()
-	if err != nil {
+	if len(r.Question) != 1 {
+		// Construct the error response.
+		msg.SetRcodeFormatError(r)
+
+		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
+		return
+	}
+
+	if h == nil || h.memberService == nil {
 		msg.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 		return
 	}
 
-	if len(r.Question) == 0 {
-		// Construct the error response.
-		msg.SetRcodeFormatError(r)
-
+	nodes, err := h.memberService.Members()
+	if err != nil {
+		msg.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 		return
 	}
@@ -64,15 +86,22 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		h.populateSRV(&msg, nodes, r.Question[0].Name)
 	case dns.TypeA:
 		h.populateA(&msg, nodes, r.Question[0].Name)
+	case dns.TypeAAAA:
+		h.populateAAAA(&msg, nodes, r.Question[0].Name)
 	}
+
+	truncateToFit(&msg)
 
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
 // populateSRV fills msg with SRV records for all known members and
-// their corresponding A records in the additional section.
+// their corresponding address records in the additional section: A for
+// IPv4 members, AAAA for IPv6 members. A member address that is neither
+// (should not happen) contributes no additional record.
 func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
-	if !strings.HasPrefix(name, peerdiscovery.DNSService) {
+	service := dns.Fqdn(peerdiscovery.DNSService)
+	if !strings.HasPrefix(strings.ToLower(dns.Fqdn(name)), strings.ToLower(service)) {
 		msg.Rcode = dns.RcodeNameError
 		return
 	}
@@ -83,29 +112,85 @@ func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name str
 			Target: node.ID.String() + tldConcord,
 			Port:   node.Address.Port(),
 		})
-		msg.Extra = append(msg.Extra, &dns.A{
-			Hdr: dns.RR_Header{Name: dns.Fqdn(node.ID.String() + tldConcord), Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-			A:   node.Address.Addr().AsSlice(),
-		})
+		addr := node.Address.Addr().Unmap()
+		if addr.IsValid() && (addr.Is4() || addr.Is6()) {
+			msg.Extra = append(
+				msg.Extra,
+				addrRecord(dns.Fqdn(node.ID.String()+tldConcord), addr, addr.Is6()),
+			)
+		}
 	}
 }
 
-// populateA fills msg with A records for members matching the queried hostname.
+// populateA fills msg with A records for members matching the queried
+// hostname. Comparison is case-insensitive after Fqdn normalization. A
+// known name on an IPv6-only member returns empty NOERROR (NODATA); an
+// unknown name returns NXDOMAIN, matching populateSRV.
 func (h *handler) populateA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+	h.populateAddr(msg, nodes, name, false)
+}
+
+// populateAAAA fills msg with AAAA records for members matching the queried
+// hostname. Comparison is case-insensitive after Fqdn normalization. A
+// known name on an IPv4-only member returns empty NOERROR (NODATA); an
+// unknown name returns NXDOMAIN, matching populateSRV.
+func (h *handler) populateAAAA(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
+	h.populateAddr(msg, nodes, name, true)
+}
+
+// populateAddr fills msg with A (wantV6 false) or AAAA (wantV6 true) records
+// for the member matching name. A known name without a record of the asked
+// type returns empty NOERROR (NODATA); an unknown name returns NXDOMAIN.
+func (h *handler) populateAddr(msg *dns.Msg, nodes []peerdiscovery.Node, name string, wantV6 bool) {
 	for _, node := range nodes {
 		target := node.ID.String() + tldConcord
-		if dns.Fqdn(name) == target {
-			msg.Answer = append(msg.Answer, &dns.A{
-				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-				A:   node.Address.Addr().AsSlice(),
-			})
+		if !strings.EqualFold(dns.Fqdn(name), target) {
+			continue
 		}
+		if addr := node.Address.Addr().Unmap(); addr.IsValid() && addr.Is6() == wantV6 {
+			msg.Answer = append(msg.Answer, addrRecord(name, addr, wantV6))
+		}
+		return
+	}
+	msg.Rcode = dns.RcodeNameError
+}
+
+// addrRecord builds the A or AAAA answer for a normalized member address.
+// Wire shape per type unchanged: same owner name, class, and TTL as before;
+// only the type follows the address family now.
+func addrRecord(name string, addr netip.Addr, wantV6 bool) dns.RR {
+	if wantV6 {
+		return &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+			AAAA: addr.AsSlice(),
+		}
+	}
+	return &dns.A{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		A:   addr.AsSlice(),
+	}
+}
+
+// truncateToFit drops additional then answer records until msg fits
+// maxUDPResponse, setting the TC bit when anything was dropped. Clients
+// must treat TC as incomplete; there is no TCP fallback and no EDNS.
+func truncateToFit(msg *dns.Msg) {
+	for msg.Len() > maxUDPResponse && (len(msg.Answer) > 0 || len(msg.Extra) > 0) {
+		if len(msg.Extra) > 0 {
+			msg.Extra = msg.Extra[:len(msg.Extra)-1]
+		} else {
+			msg.Answer = msg.Answer[:len(msg.Answer)-1]
+		}
+		msg.Truncated = true
 	}
 }
 
 // Start launches an embedded DNS server that serves Concord peer membership.
 // Empty addr binds to ":"+DNSPort. Bind is checked before return so a second
 // instance fails fast if the port is taken. The server runs until ctx is done.
+//
+// Serves UDP only: no TCP listener and no EDNS. Oversized answers truncate
+// with TC set; see maxUDPResponse.
 func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logger *logs.Logger, addr string) error {
 	if addr == "" {
 		addr = ":" + peerdiscovery.DNSPort

@@ -181,9 +181,9 @@ has to stop pretending WLAN does 50 km.
   sessions per node per tick. Size cells so a tick's burst fits the
   airtime with margin; the handshake budget table is in
   docs/scaling.
-* mDNS speaks only at first contact. No steady-state multicast storm
-  exists to plan around, unlike protocols with periodic multicast
-  discovery.
+* mDNS browses every 5s on every node for first-contact discovery.
+  That steady-state multicast is part of the airtime budget; the 5s
+  pull bursts above stay the heaviest periodic traffic.
 * Journal deltas are small when calm (a few events per tick fleet-wide)
   and images/models move over the wired backhaul between anchors, never
   over the field WLAN if operations stages them at the depot first.
