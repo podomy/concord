@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 )
@@ -512,16 +513,14 @@ func verifyDigest(body []byte, digest string) error {
 	return nil
 }
 
-// extractLayerBlob downloads one layer blob, verifies its digest while
-// streaming, gunzips gzip layers, and extracts the tar into rootfs.
-// Non-gzip layers pass through as plain tar. Zstd layers are not
-// decompressed because the standard library has no zstd reader.
+// extractLayerBlob downloads one layer blob, verifies its digest, then extracts it.
+// The blob is spooled to a temp file with a streaming hash so memory stays flat,
+// the digest is checked before any tar bytes reach disk, and the temp file is
+// removed. Gunzip applies to gzip layers, other layers pass through as plain tar.
+// Zstd layers are not decompressed because the standard library has no zstd reader.
 // A blob already on local disk streams from the registry data dir instead;
 // a local miss or corrupt file falls through to HTTP by design with no
-// log, keeping cr logger-free. Either way memory stays flat: bytes flow
-// from the source through the hasher into the extractor, and both paths
-// re-hash the stream so corruption fails the pull instead of poisoning
-// the rootfs. The wire protocol is unchanged.
+// log, keeping cr logger-free. The wire protocol is unchanged.
 func extractLayerBlob(ctx context.Context, client *http.Client, ref imageReference, digest, rootfs string) error {
 	if store, ok := tryLocalStore(); ok {
 		// Intentional miss-plus-HTTP fallback: any local error,
@@ -548,32 +547,52 @@ func extractLayerBlob(ctx context.Context, client *http.Client, ref imageReferen
 		return err
 	}
 
-	if err := extractBlobStream(ctx, resp.Body, digest, rootfs); err != nil {
+	err = extractBlobStream(ctx, resp.Body, digest, rootfs)
+	if err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// extractBlobStream verifies body against digest while streaming it
-// through gunzip (when gzip) into the tar extractor at rootfs. The
-// whole blob is consumed so the digest check covers every byte, and
-// nothing larger than the tar window is ever buffered.
+// extractBlobStream spools body to a temp file while hashing, verifies the digest,
+// then extracts the verified bytes into rootfs. No tar bytes reach disk before
+// verification, and the temp file is removed on every path. Memory stays flat
+// because bytes stream through a small copy buffer.
 func extractBlobStream(ctx context.Context, body io.Reader, digest, rootfs string) error {
-	sum := sha256.New()
-	tee := io.TeeReader(body, sum)
-	buf := bufio.NewReader(tee)
+	err := ctx.Err()
+	if err != nil {
+		return fmt.Errorf("context cancelled: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "concord-layer-*")
+	if err != nil {
+		return fmt.Errorf("create temp layer file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()        //nolint:errcheck // best-effort temp close before remove
+		_ = os.Remove(tmpName) //nolint:errcheck // temp must not leak
+	}()
 
-	if err := untarReader(ctx, buf, rootfs); err != nil {
+	sum := sha256.New()
+	_, err = io.Copy(io.MultiWriter(tmp, sum), body)
+	if err != nil {
+		return fmt.Errorf("copy layer blob: %w", err)
+	}
+
+	err = checkLayerDigest(sum.Sum(nil), digest)
+	if err != nil {
 		return err
 	}
 
-	_, err := io.Copy(io.Discard, buf)
+	_, err = tmp.Seek(0, io.SeekStart)
 	if err != nil {
-		return fmt.Errorf("drain layer body: %w", err)
+		return fmt.Errorf("rewind temp layer file: %w", err)
 	}
 
-	if err := checkLayerDigest(sum.Sum(nil), digest); err != nil {
+	buf := bufio.NewReader(tmp)
+	err = untarReader(ctx, buf, rootfs)
+	if err != nil {
 		return err
 	}
 
@@ -590,13 +609,15 @@ func untarReader(ctx context.Context, buf *bufio.Reader, rootfs string) error {
 	}
 
 	if len(peek) == 2 && peek[0] == 0x1f && peek[1] == 0x8b {
-		if err := extractGzipTar(ctx, buf, rootfs); err != nil {
+		err = extractGzipTar(ctx, buf, rootfs)
+		if err != nil {
 			return err
 		}
 		return nil
 	}
 
-	if err := extractTar(ctx, buf, rootfs); err != nil {
+	err = extractTar(ctx, buf, rootfs)
+	if err != nil {
 		return fmt.Errorf("extract layer: %w", err)
 	}
 	return nil
