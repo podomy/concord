@@ -6,6 +6,7 @@ package peersync
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -163,53 +164,69 @@ func (s *blobCursorStore) writePersisted(key string, next uint64) error {
 	return nil
 }
 
+// snapshotMem copies the cached cursor for key plus the KV handle.
+// The handle never changes after construction, so reading it here
+// keeps the fast path lock free after the snapshot.
+func (s *blobCursorStore) snapshotMem(key string) (uint64, *kvstore.KVStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mem[key], s.kv
+}
+
+// mergeMem sets the cached cursor to the larger of the cached and
+// next values, keeping memory monotonic across concurrent saves.
+func (s *blobCursorStore) mergeMem(key string, next uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if next > s.mem[key] {
+		s.mem[key] = next
+	}
+}
+
 // save persists next as the cursor for peer and root, advancing only.
-// It holds mu across the read compare write sequence so concurrent
-// saves cannot interleave a stale read between load and update.
-// A next at or behind the stored value skips the write, which keeps
-// retries idempotent and cursors monotonic across duplicate stores.
+// It snapshots memory under lock, performs bbolt reads and writes
+// outside the mutex, then compare-and-swaps memory. Concurrent saves
+// for one key stay memory monotonic; a stale database write only
+// reflows bytes because HasRaw skips stored chunks and the final
+// verify hashes content. A next at or behind the snapshot skips
+// all I/O, which keeps retries idempotent.
 func (s *blobCursorStore) save(peer uuid.UUID, root string, next uint64) error {
 	if !transport.ValidBlobDigest(root) {
 		return fmt.Errorf("invalid root digest %q", root)
 	}
 	key := blobCursorKey(peer, root)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if next <= s.mem[key] {
+	cur, kv := s.snapshotMem(key)
+	if next <= cur {
 		return nil
 	}
-	if s.kv == nil {
-		s.mem[key] = next
+	if kv == nil {
+		s.mergeMem(key, next)
 		return nil
 	}
 	stored, err := s.fetchStored(key)
 	if err != nil {
 		return fmt.Errorf("load blob cursor: %w", err)
 	}
-	if len(stored) == 0 {
-		return s.persistLocked(key, next)
-	}
-	if len(stored) != 8 {
-		if cerr := s.clearPersisted(key); cerr != nil {
+	if len(stored) != 0 && len(stored) != 8 {
+		cerr := s.clearPersisted(key)
+		if cerr != nil {
 			return fmt.Errorf("clear corrupt blob cursor: %w", cerr)
 		}
-		delete(s.mem, key)
-		return s.persistLocked(key, next)
+		s.dropCached(key)
+		stored = nil
 	}
-	if dbNext := binary.BigEndian.Uint64(stored); dbNext >= next {
-		s.mem[key] = dbNext
-		return nil
+	if len(stored) == 8 {
+		dbNext := binary.BigEndian.Uint64(stored)
+		if dbNext >= next {
+			s.mergeMem(key, dbNext)
+			return nil
+		}
 	}
-	return s.persistLocked(key, next)
-}
-
-// persistLocked writes next to the database and memory. The caller
-// holds mu across the read compare write sequence.
-func (s *blobCursorStore) persistLocked(key string, next uint64) error {
-	if err := s.writePersisted(key, next); err != nil {
+	err = s.writePersisted(key, next)
+	if err != nil {
 		return fmt.Errorf("save blob cursor: %w", err)
 	}
-	s.mem[key] = next
+	s.mergeMem(key, next)
 	return nil
 }
 
@@ -236,5 +253,144 @@ func (s *blobCursorStore) Delete(key string) error {
 		}
 	}
 	delete(s.mem, key)
+	return nil
+}
+
+// cursorPeerPart splits a cursor key into peer text and root.
+// It reports false when the delimiter is missing.
+func cursorPeerPart(key string) (string, bool) {
+	peerText, _, ok := strings.Cut(key, "|")
+	if !ok {
+		return "", false
+	}
+	return peerText, true
+}
+
+// collectMemPeers adds peers seen in memory to the set. The caller
+// holds no lock across database I/O; this snapshot stays under lock.
+func (s *blobCursorStore) collectMemPeers(set map[uuid.UUID]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.mem {
+		peerText, ok := cursorPeerPart(key)
+		if !ok {
+			continue
+		}
+		peer, err := uuid.Parse(peerText)
+		if err != nil {
+			continue
+		}
+		set[peer] = struct{}{}
+	}
+}
+
+// collectStoredPeers adds peers seen in the bucket to the set.
+// Unparsable keys are skipped; cursors never block on them.
+func (s *blobCursorStore) collectStoredPeers(set map[uuid.UUID]struct{}) error {
+	if s.kv == nil {
+		return nil
+	}
+	err := s.kv.DB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketBlobCursors))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			peerText, ok := cursorPeerPart(string(k))
+			if !ok {
+				continue
+			}
+			peer, perr := uuid.Parse(peerText)
+			if perr != nil {
+				continue
+			}
+			set[peer] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("list blob cursors: %w", err)
+	}
+	return nil
+}
+
+// listCursorPeers returns distinct peers with cursor state in memory
+// or in the database. Memory is snapshotted under lock and the bucket
+// is read outside the lock so a large bucket never holds the mutex.
+func (s *blobCursorStore) listCursorPeers() ([]uuid.UUID, error) {
+	set := make(map[uuid.UUID]struct{})
+	s.collectMemPeers(set)
+	err := s.collectStoredPeers(set)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(set))
+	for peer := range set {
+		out = append(out, peer)
+	}
+	return out, nil
+}
+
+// storedPeerKeys collects database keys for prefix inside one update.
+// Keys are copied because cursor bytes are only valid for the tx.
+func storedPeerKeys(b *bolt.Bucket, prefix string) [][]byte {
+	c := b.Cursor()
+	var doomed [][]byte
+	for k, _ := c.Seek([]byte(prefix)); k != nil; k, _ = c.Next() {
+		if !strings.HasPrefix(string(k), prefix) {
+			break
+		}
+		doomed = append(doomed, append([]byte(nil), k...))
+	}
+	return doomed
+}
+
+// deleteStoredPeer removes database cursors for prefix.
+func (s *blobCursorStore) deleteStoredPeer(prefix string) error {
+	err := s.kv.DB().Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketBlobCursors))
+		if b == nil {
+			return nil
+		}
+		for _, k := range storedPeerKeys(b, prefix) {
+			derr := b.Delete(k)
+			if derr != nil {
+				return fmt.Errorf("kv delete: %w", derr)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("delete peer cursors: %w", err)
+	}
+	return nil
+}
+
+// deleteMemPeer removes memory cursors for prefix under lock.
+func (s *blobCursorStore) deleteMemPeer(prefix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.mem {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.mem, key)
+		}
+	}
+}
+
+// DeletePeer removes every cursor for peer from memory and the
+// database. Departed peers call this after missing membership for
+// blobCursorDepartedTicks ticks so the bucket stays bounded. A missing
+// peer is not an error. Database work runs outside the mutex; memory
+// is swept under lock after.
+func (s *blobCursorStore) DeletePeer(peer uuid.UUID) error {
+	prefix := peer.String() + "|"
+	if s.kv != nil {
+		err := s.deleteStoredPeer(prefix)
+		if err != nil {
+			return err
+		}
+	}
+	s.deleteMemPeer(prefix)
 	return nil
 }

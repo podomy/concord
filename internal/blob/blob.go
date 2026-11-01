@@ -33,7 +33,10 @@ const manifestVersion = 1
 // maxManifestBytes caps stored manifest size before read and decode.
 const maxManifestBytes = 1 << 20
 
-// maxRawBytes caps GetRaw to prevent OOM on corrupt large files.
+// maxRawBytes caps PutRaw and GetRaw at 32MB to bound memory.
+// Large bytes must use PutBlob chunked plus OpenBlob streaming.
+// PutRaw fails oversize at write so no large raw can exist for
+// GetRaw to later reject; GetRaw rechecks the same cap on read.
 const maxRawBytes = 32 << 20
 
 // Manifest binds an ordered chunk list to a root digest.
@@ -950,6 +953,23 @@ func (s *Store) HasRaw(digest string) bool {
 	}
 	_, ok := statSize(cp)
 	return ok
+}
+
+// GetRawSize returns the on disk size for a raw digest.
+// It reports false when the digest is malformed, the file is absent,
+// or the file is not regular. It does no hashing; callers verify
+// bytes with GetRaw after the size gate so a malicious 32MB chunk
+// is rejected without a full load.
+func (s *Store) GetRawSize(digest string) (int64, bool) {
+	hx, err := verifyDigest(digest)
+	if err != nil {
+		return 0, false
+	}
+	cp, err := s.chunkPath(hx)
+	if err != nil {
+		return 0, false
+	}
+	return statSize(cp)
 }
 
 // rawLimit resolves the effective cap for raw reads.

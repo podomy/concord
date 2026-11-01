@@ -54,6 +54,7 @@ type blobIface interface {
 	OpenBlob(digest string) (io.ReadCloser, int64, error)
 	PutRaw(ctx context.Context, digest string, data []byte) error
 	GetRaw(digest string) ([]byte, error)
+	GetRawSize(digest string) (int64, bool)
 	PutTag(repo, tag, digest string) error
 	ResolveTag(repo, tag string) (string, bool)
 	ListTags(repo string) []string
@@ -93,6 +94,8 @@ type BlobSyncer struct {
 	wanted  map[string]struct{}
 	cursors *blobCursorStore
 	ticks   uint64
+	absent  map[uuid.UUID]int
+	live    func() []workload.Spec
 }
 
 // Blob pull cadence mirrors the journal loop defaultPullInterval so blob
@@ -141,6 +144,20 @@ const maxBlobRawBytes = 32 << 30
 // Manifests are small by construction; anything larger is corrupt.
 const maxManifestStored = 1 << 20
 
+// blobCursorDepartedTicks counts consecutive ticks a peer may stay absent
+// from membership before its cursors are deleted. Completed roots are
+// still deleted promptly on completion; this sweep only reclaims cursors
+// for peers that left and never returned. Twelve ticks is one minute at
+// the 5s cadence, long enough to ride out a flapping member.
+const blobCursorDepartedTicks = 12
+
+// blobMaxTagsPerRepo caps tracked tags per repo during discovery. A peer
+// listing beyond the cap is truncated and the excess is skipped with a
+// debug log, so a malicious or corrupt peer cannot grow memory or fetch
+// work without bound. Blob bytes are never deleted here; chunk and raw
+// garbage collection stays operator owned, matching docs/files.
+const blobMaxTagsPerRepo = 1024
+
 // New creates a blob syncer. Cursors start memory only; call
 // AttachCursorStore before Run for bbolt persistence across restarts.
 // A nil logger becomes a no-op logger.
@@ -155,6 +172,7 @@ func New(store blobIface, members *peerdiscovery.MemberService, logger *logs.Log
 		client:  transport.NewBlobClient(),
 		wanted:  make(map[string]struct{}),
 		cursors: newBlobCursorStore(nil),
+		absent:  make(map[uuid.UUID]int),
 	}
 }
 
@@ -314,16 +332,22 @@ func (b *BlobSyncer) EnsureRepoDigests(ctx context.Context, peers []blobPeer) ma
 	return b.fetchWantedRoots(ctx, clean, peers)
 }
 
-// collectRepoTags lists tags from both sync repos across peers.
+// collectRepoTags lists tags from both sync repos across peers. Each
+// repo total is capped at blobMaxTagsPerRepo; excess is skipped with a
+// debug log so tag spam cannot grow fetch work without bound.
 func (b *BlobSyncer) collectRepoTags(ctx context.Context, peers []blobPeer) []string {
 	var tags []string
 	for _, repo := range []string{blobSyncRepo, blobFileRepo} {
+		var repoTags []string
 		for _, peer := range peers {
 			if ctx.Err() != nil {
-				return tags
+				tags = append(tags, b.capRepoTotal(repoTags, repo)...)
+				slices.Sort(tags)
+				return slices.Compact(tags)
 			}
-			tags = append(tags, b.peerRepoTags(ctx, peer, repo)...)
+			repoTags = append(repoTags, b.peerRepoTags(ctx, peer, repo)...)
 		}
+		tags = append(tags, b.capRepoTotal(repoTags, repo)...)
 	}
 	slices.Sort(tags)
 	return slices.Compact(tags)
@@ -331,6 +355,7 @@ func (b *BlobSyncer) collectRepoTags(ctx context.Context, peers []blobPeer) []st
 
 // peerRepoTags fetches one peer and repo tag list as digests.
 // Failures log at debug and yield nothing; the next peer or tick retries.
+// Listings beyond blobMaxTagsPerRepo are truncated with a debug log.
 func (b *BlobSyncer) peerRepoTags(ctx context.Context, peer blobPeer, repo string) []string {
 	listed, err := b.client.FetchTags(ctx, peer.base, repo)
 	if err != nil {
@@ -341,6 +366,7 @@ func (b *BlobSyncer) peerRepoTags(ctx context.Context, peer blobPeer, repo strin
 		)
 		return nil
 	}
+	listed = b.capTagList(listed, repo, peer.id)
 	out := make([]string, 0, len(listed))
 	for _, tag := range listed {
 		out = append(out, "sha256:"+tag)
@@ -380,10 +406,12 @@ func cleanDigests(digests []string) ([]string, error) {
 }
 
 // rememberWanted adds roots to the wanted set the tick loop
-// converges. The set only grows and lives in memory: Ensure
-// re-registers on every call, so a restart resumes fetching as soon as
-// the reconciler asks again. Registry-side garbage collection is
-// operator owned, like track rotation.
+// converges. The set grows and lives in memory: Ensure re-registers
+// on every call, so a restart resumes fetching as soon as the
+// reconciler asks again. PruneWanted drops tombstoned or gone specs
+// each tick when a live view is set. Blob bytes are never deleted
+// here; chunk and raw garbage collection stays operator owned,
+// matching docs/files.
 func (b *BlobSyncer) rememberWanted(digests []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -405,19 +433,219 @@ func (b *BlobSyncer) snapshotWanted() []string {
 	return out
 }
 
+// SetLiveView installs the workload snapshot source for per-tick
+// wanted pruning. A nil argument disables auto-pruning. The function
+// must return live specs without holding syncer locks; tickBlobs calls
+// it outside b.mu and prunes tombstoned or gone entries after.
+func (b *BlobSyncer) SetLiveView(fn func() []workload.Spec) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.live = fn
+}
+
+// liveViewSnapshot returns the installed live view source under lock.
+func (b *BlobSyncer) liveViewSnapshot() func() []workload.Spec {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.live
+}
+
+// liveDigests builds the keep set from live non-removed specs. Invalid
+// digests are skipped; image digests resolved via WantedWithImages stay
+// discoverable through peer tags when the caller merges them into keep.
+func liveDigests(specs []workload.Spec) map[string]struct{} {
+	live := make(map[string]struct{})
+	for _, spec := range specs {
+		if spec.Removed {
+			continue
+		}
+		for _, file := range spec.Files {
+			if !transport.ValidBlobDigest(file.Digest) {
+				continue
+			}
+			live[file.Digest] = struct{}{}
+		}
+	}
+	return live
+}
+
+// pruneWantedLive drops wanted entries not in live. Bytes stay on
+// disk; only the memory set shrinks. Tombstoned or gone specs stop
+// fetching on the next tick after this runs.
+func (b *BlobSyncer) pruneWantedLive(live map[string]struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for digest := range b.wanted {
+		if _, ok := live[digest]; !ok {
+			delete(b.wanted, digest)
+		}
+	}
+}
+
+// PruneWanted drops wanted digests whose spec is tombstoned or gone.
+// Live means present in specs with Removed false and a file digest.
+// Call when the workload view changes; tickBlobs also calls it each
+// tick when SetLiveView is set. Blob bytes are never deleted here.
+func (b *BlobSyncer) PruneWanted(specs []workload.Spec) {
+	b.pruneWantedLive(liveDigests(specs))
+}
+
+// pruneTickWanted prunes the wanted set against the live view when one
+// is installed. The view runs outside b.mu so a slow view never blocks
+// Ensure; pruning itself holds b.mu only for the map sweep.
+func (b *BlobSyncer) pruneTickWanted() {
+	fn := b.liveViewSnapshot()
+	if fn == nil {
+		return
+	}
+	b.PruneWanted(fn())
+}
+
+// currentPeerSet builds the alive peer set for departed tracking.
+func currentPeerSet(peers []blobPeer) map[uuid.UUID]struct{} {
+	current := make(map[uuid.UUID]struct{}, len(peers))
+	for _, peer := range peers {
+		current[peer.id] = struct{}{}
+	}
+	return current
+}
+
+// noteCursorPeers starts absent tracking for cursor peers missing from
+// the current set and clears tracking for peers back in view.
+func (b *BlobSyncer) noteCursorPeers(cursorPeers []uuid.UUID, current map[uuid.UUID]struct{}) {
+	for _, peer := range cursorPeers {
+		if _, ok := current[peer]; ok {
+			delete(b.absent, peer)
+			continue
+		}
+		if _, ok := b.absent[peer]; !ok {
+			b.absent[peer] = 0
+		}
+	}
+}
+
+// advanceAbsent ages absent peers and drops ones back in view.
+func (b *BlobSyncer) advanceAbsent(current map[uuid.UUID]struct{}) {
+	for peer := range b.absent {
+		if _, ok := current[peer]; ok {
+			delete(b.absent, peer)
+			continue
+		}
+		b.absent[peer]++
+	}
+}
+
+// takeDoomed collects peers past the departed threshold and clears
+// their counts so one sweep deletes each peer once.
+func (b *BlobSyncer) takeDoomed() []uuid.UUID {
+	doomed := make([]uuid.UUID, 0)
+	for peer, count := range b.absent {
+		if count >= blobCursorDepartedTicks {
+			doomed = append(doomed, peer)
+		}
+	}
+	for _, peer := range doomed {
+		delete(b.absent, peer)
+	}
+	return doomed
+}
+
+// deleteDoomedPeers deletes cursors for departed peers outside b.mu.
+// Failures log at debug; the next tick retries the sweep.
+func (b *BlobSyncer) deleteDoomedPeers(store *blobCursorStore, doomed []uuid.UUID) {
+	for _, peer := range doomed {
+		derr := store.DeletePeer(peer)
+		if derr != nil {
+			b.logger.Debug("blob cursor peer sweep failed",
+				logs.String("peer_id", peer.String()),
+				logs.Error(derr),
+			)
+			continue
+		}
+	}
+}
+
+// sweepDepartedCursors deletes per-peer cursors after the peer misses
+// membership for blobCursorDepartedTicks consecutive ticks. Completed
+// roots keep their existing prompt deletion; this sweep only reclaims
+// departed peers. Database work runs outside b.mu; absent counts update
+// under lock.
+func (b *BlobSyncer) sweepDepartedCursors(peers []blobPeer) {
+	current := currentPeerSet(peers)
+	store := b.cursorStore()
+	cursorPeers, err := store.listCursorPeers()
+	if err != nil {
+		b.logger.Debug("blob cursor list failed", logs.Error(err))
+		cursorPeers = nil
+	}
+	b.mu.Lock()
+	b.noteCursorPeers(cursorPeers, current)
+	b.advanceAbsent(current)
+	doomed := b.takeDoomed()
+	b.mu.Unlock()
+	b.deleteDoomedPeers(store, doomed)
+}
+
+// capTagList truncates one peer and repo listing to the per-repo cap.
+// Excess is skipped with a debug log so tag spam cannot grow memory
+// or fetch work without bound.
+func (b *BlobSyncer) capTagList(tags []string, repo string, peer uuid.UUID) []string {
+	if len(tags) <= blobMaxTagsPerRepo {
+		return tags
+	}
+	b.logger.Debug("blob tag list truncated",
+		logs.String("peer_id", peer.String()),
+		logs.String("repo", repo),
+		logs.Int("listed", len(tags)),
+		logs.Int("kept", blobMaxTagsPerRepo),
+	)
+	return tags[:blobMaxTagsPerRepo]
+}
+
+// capRepoTotal truncates one repo total to the per-repo cap after
+// merging across peers. Excess is skipped with a debug log.
+func (b *BlobSyncer) capRepoTotal(tags []string, repo string) []string {
+	if len(tags) <= blobMaxTagsPerRepo {
+		return tags
+	}
+	b.logger.Debug("blob repo tags truncated",
+		logs.String("repo", repo),
+		logs.Int("listed", len(tags)),
+		logs.Int("kept", blobMaxTagsPerRepo),
+	)
+	return tags[:blobMaxTagsPerRepo]
+}
+
+// checkChunkSize stats one chunk before load and rejects an oversize
+// file without reading it. Absent or malformed entries return nil so
+// GetRaw reports the stable missing error after.
+func checkChunkSize(store blobIface, chunk string) error {
+	size, ok := store.GetRawSize(chunk)
+	if !ok {
+		return nil
+	}
+	if size > int64(blob.ChunkSize) {
+		return fmt.Errorf("oversize chunk %s: %d", chunk, size)
+	}
+	return nil
+}
+
 // tickBlobs runs one anti-entropy pass: wanted digests first, then
-// peer-published tags, capped per tick. Failures log and retry next
-// tick.
+// peer-published tags, capped per tick. It prunes tombstoned or gone
+// wanted entries when a live view is set and sweeps departed peer
+// cursors before fetching. Failures log and retry next tick.
 func (b *BlobSyncer) tickBlobs(ctx context.Context) {
 	if b.store == nil {
 		return
 	}
+	b.pruneTickWanted()
 	wanted := b.snapshotWanted()
 	peers, err := b.collectBlobPeers()
 	if err != nil {
 		b.logger.Warn("blob peers unavailable", logs.Error(err))
 		return
 	}
+	b.sweepDepartedCursors(peers)
 	discovered := b.discoverRoots(ctx, peers)
 	work := b.selectTickWork(wanted, discovered)
 	if len(work) == 0 {
@@ -502,14 +730,15 @@ func rotateStrings(in []string, n uint64) []string {
 // discoverRoots lists peer-published tags from both sync repos and
 // returns the ones shaped like digests. Each repo holds one tag per
 // replicated root, so the union across repos and alive peers is the
-// fleet publish index. Blobs stay repo-independent on fetch, so one
-// fetch path serves tags found in either repo.
+// fleet publish index. Each repo total is capped at blobMaxTagsPerRepo
+// with excess skipped at debug level. Blobs stay repo-independent on
+// fetch, so one fetch path serves tags found in either repo.
 func (b *BlobSyncer) discoverRoots(ctx context.Context, peers []blobPeer) []string {
-	var out []string
+	repoOut := make(map[string][]string, 2)
 	for _, peer := range peers {
 		cerr := ctx.Err()
 		if cerr != nil {
-			return out
+			break
 		}
 		for _, repo := range []string{blobSyncRepo, blobFileRepo} {
 			tags, ferr := b.client.FetchTags(ctx, peer.base, repo)
@@ -521,10 +750,15 @@ func (b *BlobSyncer) discoverRoots(ctx context.Context, peers []blobPeer) []stri
 				)
 				continue
 			}
+			tags = b.capTagList(tags, repo, peer.id)
 			for _, tag := range tags {
-				out = append(out, "sha256:"+tag)
+				repoOut[repo] = append(repoOut[repo], "sha256:"+tag)
 			}
 		}
+	}
+	var out []string
+	for _, repo := range []string{blobSyncRepo, blobFileRepo} {
+		out = append(out, b.capRepoTotal(repoOut[repo], repo)...)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
@@ -891,13 +1125,15 @@ func (b *BlobSyncer) storeOneChunk(ctx context.Context, peer blobPeer, chunk str
 // fetchRawDigest converts untagged raw content into the chunked shape:
 // stream the bytes once, split into fixed pieces, store each, then
 // publish the alias manifest under the content tag plus the true root
-// tag. Later ticks and peers use the resumable chunked path. Pieces
-// already stored stay stored, so a retry only re-flows bytes, and the
-// final content hash proves the whole before anything publishes. On
-// error the stored prefix pieces remain for resume and stay idempotent;
-// the manifest and tags publish last only on success, so a partial
-// prefix never looks complete. No rollback is needed: leftover pieces
-// are content addressed and resume is idempotent.
+// tag. Pieces are at most ChunkSize and the manifest at most 1MB, so
+// PutRaw caps never trigger here; large blobs flow as chunks, not raw.
+// Later ticks and peers use the resumable chunked path. Pieces already
+// stored stay stored, so a retry only re-flows bytes, and the final
+// content hash proves the whole before anything publishes. On error the
+// stored prefix pieces remain for resume and stay idempotent; the
+// manifest and tags publish last only on success, so a partial prefix
+// never looks complete. No rollback is needed: leftover pieces are
+// content addressed and resume is idempotent.
 func (b *BlobSyncer) fetchRawDigest(ctx context.Context, peer blobPeer, root string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context cancelled: %w", err)
@@ -958,12 +1194,13 @@ func (b *BlobSyncer) publishTag(root, dm string) error {
 }
 
 // verifyBlobContent proves alias tag content by hashing the stored
-// chunks in order. Total cap is enforced before the loop; per chunk cap
-// is enforced inside the loop before hashing. Each chunk loads bounded
-// (one fixed chunk at a time) with a running hash, so memory stays flat
-// and a multi gigabyte blob never sits in RAM. True roots use
-// verifyTrueChunks instead: their binding is structural, not a content
-// hash over bytes.
+// chunks in order. Total cap is enforced before the loop; per chunk
+// size is stat checked before load so a malicious 32MB chunk is
+// rejected without a full read, then rechecked after load against
+// swap. Each chunk loads bounded (one fixed chunk at a time) with a
+// running hash, so memory stays flat and a multi gigabyte blob never
+// sits in RAM. True roots use verifyTrueChunks instead: their binding
+// is structural, not a content hash over bytes.
 func verifyBlobContent(ctx context.Context, store blobIface, chunks []string, want string) error {
 	if int64(len(chunks)) > maxBlobRawBytes/int64(blob.ChunkSize)+1 {
 		return fmt.Errorf("blob verify lists %d chunks, over cap", len(chunks))
@@ -973,6 +1210,10 @@ func verifyBlobContent(ctx context.Context, store blobIface, chunks []string, wa
 		cerr := ctx.Err()
 		if cerr != nil {
 			return fmt.Errorf("context cancelled: %w", cerr)
+		}
+		err := checkChunkSize(store, chunk)
+		if err != nil {
+			return err
 		}
 		buf, gerr := store.GetRaw(chunk)
 		if gerr != nil {
@@ -994,10 +1235,11 @@ func verifyBlobContent(ctx context.Context, store blobIface, chunks []string, wa
 }
 
 // verifyTrueChunks proves a true root by verifying every chunk hash.
-// Total cap is enforced before the loop; per chunk cap is enforced
-// inside the loop. GetRaw verifies each chunk digest, so a corrupt
-// same size file fails here even though HasRaw passes. One chunk loads
-// at a time, so memory stays flat.
+// Total cap is enforced before the loop; per chunk size is stat checked
+// before load so a malicious 32MB chunk is rejected without a full
+// read, then rechecked after load against swap. GetRaw verifies each
+// chunk digest, so a corrupt same size file fails here even though
+// HasRaw passes. One chunk loads at a time, so memory stays flat.
 func (b *BlobSyncer) verifyTrueChunks(ctx context.Context, chunks []string) error {
 	if int64(len(chunks)) > maxBlobRawBytes/int64(blob.ChunkSize)+1 {
 		return fmt.Errorf("blob verify lists %d chunks, over cap", len(chunks))
@@ -1006,6 +1248,10 @@ func (b *BlobSyncer) verifyTrueChunks(ctx context.Context, chunks []string) erro
 		cerr := ctx.Err()
 		if cerr != nil {
 			return fmt.Errorf("context cancelled: %w", cerr)
+		}
+		err := checkChunkSize(b.store, chunk)
+		if err != nil {
+			return err
 		}
 		buf, gerr := b.store.GetRaw(chunk)
 		if gerr != nil {
@@ -1120,9 +1366,10 @@ func (w *splitWriter) finish(ctx context.Context) ([]string, int64, error) {
 // same size file therefore reports false plus an error instead of true.
 // A tag resolves to a manifest whose chunks must all be present; alias
 // tags hash verify content while true roots verify each chunk hash.
-// An oversize stored manifest reports an error so the caller surfaces
-// it instead of retrying as incomplete; tick callers log warn once per
-// tick and retry next tick.
+// An oversize or corrupt stored manifest reports an error so the caller
+// surfaces it instead of retrying as silent incomplete; tick callers log
+// warn once per tick and retry next tick. Error text for corrupt
+// manifests changed from silent incomplete to surfaced decode failure.
 func (b *BlobSyncer) isComplete(ctx context.Context, digest string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("context cancelled: %w", err)
@@ -1162,8 +1409,10 @@ func (b *BlobSyncer) isTagComplete(ctx context.Context, digest, dm string) (bool
 }
 
 // loadTagManifest reads and validates the stored manifest dm. It
-// reports ok false when the manifest is missing or unparsable, which
-// the caller treats as incomplete without an error.
+// reports ok false only when the manifest is missing, which the caller
+// treats as incomplete without an error. Oversize and corrupt manifests
+// return an error like oversize, so callers surface the failure instead
+// of retrying as silent incomplete.
 func (b *BlobSyncer) loadTagManifest(dm string) (BlobManifest, bool, error) {
 	raw, err := b.store.GetRaw(dm)
 	if err != nil {
@@ -1174,7 +1423,7 @@ func (b *BlobSyncer) loadTagManifest(dm string) (BlobManifest, bool, error) {
 	}
 	m, err := transport.ParseBlobManifest(raw)
 	if err != nil {
-		return BlobManifest{}, false, nil //nolint:nilerr // corrupt manifest means incomplete, not an error
+		return BlobManifest{}, false, fmt.Errorf("decode manifest %s: %w", dm, err)
 	}
 	return m, true, nil
 }
