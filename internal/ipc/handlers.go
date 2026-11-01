@@ -41,6 +41,25 @@ type submitResponse struct {
 	ID uuid.UUID `json:"id"`
 }
 
+// maxRequestBodyBytes caps JSON request bodies. Submit and update carry
+// one spec; anything past 1MB is a client bug, answered 400.
+const maxRequestBodyBytes = 1 << 20
+
+// decodeBody decodes one JSON request body with unknown fields rejected
+// and the size capped. Both ends ship from this repo, so an unknown
+// field is always a version mismatch worth failing loudly.
+func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	err := dec.Decode(target)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	return true
+}
+
 type listResponse struct {
 	Workloads []sdk.Workload `json:"workloads"`
 }
@@ -88,13 +107,12 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // 5. Returns 201 Created with the assigned workload ID.
 func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 	var input sdk.Workload
-	err := json.NewDecoder(r.Body).Decode(&input)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeBody(w, r, &input) {
 		return
 	}
 
-	if strings.TrimSpace(input.Image) == "" {
+	input.Image = strings.TrimSpace(input.Image)
+	if input.Image == "" {
 		writeError(w, http.StatusBadRequest, "workload image reference is required")
 		return
 	}
@@ -105,15 +123,10 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 
 	spec := sdkToInternalWorkload(input)
 
-	if !spec.QoS.Valid() {
-		writeError(w, http.StatusBadRequest, "invalid QoS class: "+string(spec.QoS))
+	err := spec.Validate()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workload: "+err.Error())
 		return
-	}
-	for _, file := range spec.Files {
-		if err := file.Validate(); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid file: "+err.Error())
-			return
-		}
 	}
 	live, err := s.workloads.List(r.Context())
 	if err != nil {
@@ -266,8 +279,15 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if tail, err := strconv.Atoi(r.URL.Query().Get("tail")); err == nil && tail > 0 && tail < len(lines) {
-		lines = lines[len(lines)-tail:]
+	if tailStr := r.URL.Query().Get("tail"); tailStr != "" {
+		tail, err := strconv.Atoi(tailStr)
+		if err != nil || tail < 0 {
+			writeError(w, http.StatusBadRequest, "invalid tail parameter: must be a non-negative integer")
+			return
+		}
+		if tail > 0 && tail < len(lines) {
+			lines = lines[len(lines)-tail:]
+		}
 	}
 
 	out := make([]sdk.LogLine, 0, len(lines))
@@ -291,11 +311,11 @@ func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input sdk.ImageUpdate
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeBody(w, r, &input) {
 		return
 	}
-	if strings.TrimSpace(input.Image) == "" {
+	input.Image = strings.TrimSpace(input.Image)
+	if input.Image == "" {
 		writeError(w, http.StatusBadRequest, "workload image reference is required")
 		return
 	}
@@ -411,8 +431,7 @@ func (s *Server) handleSetPosition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input sdk.Position
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "decode position: "+err.Error())
+	if !decodeBody(w, r, &input) {
 		return
 	}
 	pos := geo.Point{Lat: input.Lat, Lon: input.Lon}

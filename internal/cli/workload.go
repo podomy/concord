@@ -62,7 +62,7 @@ func runWorkloadLeaf(ctx context.Context, stdout, stderr io.Writer, name string,
 
 // printWorkloadHelp writes workload group usage to w.
 func printWorkloadHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Manage container workloads (run, list, inspect, stop)")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Manage container workloads (run, list, inspect, stats, logs, update, stop)")    //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                                              //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "Usage:")                                                                        //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  concord workload [command]")                                                  //nolint:errcheck // CLI output
@@ -167,7 +167,7 @@ func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*fla
 		{long: "health-cmd", kind: "string", def: `""`, usage: "Exec probe command, split on whitespace"},
 		{long: "depends-on", kind: "stringArray", def: "[]", usage: "Wait for this workload ID or prefix on the same node (repeatable)"},
 		{long: "qos", kind: "string", def: `"besteffort"`, usage: "Compute class: 'besteffort', 'burstable', or 'guaranteed'"},
-		{long: "file", kind: "stringArray", def: "[]", usage: "Stage a file: --file /container/path=/local/path[:mode] (repeatable)"},
+		{long: "file", kind: "stringArray", def: "[]", usage: "Stage a file: --file /container/path=/local/path[:mode] (repeatable; local path must not contain ':')"},
 	}
 	return fs, docs
 }
@@ -300,7 +300,10 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 
 // parseFileFlag splits one --file flag into container path, local path,
 // and mode without touching the network. Mode defaults to 0 (0600 at
-// materialize); anything above 0777 fails here.
+// materialize); anything above 0777 fails here. The local path is split
+// on the first colon, so local paths containing a colon are unsupported:
+// a trailing colon segment must parse as an octal mode or the whole
+// flag is rejected. Parsing stays as-is for compatibility.
 func parseFileFlag(flag string) (container, local string, mode uint32, err error) {
 	container, local, ok := strings.Cut(flag, "=")
 	if !ok || container == "" || local == "" {
@@ -359,7 +362,9 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 
 	// Files push to the local registry before submit: the spec carries
 	// digests only, and a failed push fails the run instead of
-	// submitting a workload that can never start.
+	// submitting a workload that can never start. Blobs pushed before
+	// a submit that then fails stay in the store as orphans; blob
+	// cleanup is operator-owned, see docs/files.
 	if len(rf.fileFlags) > 0 {
 		artifacts := fileart.NewClient("127.0.0.1:" + strconv.Itoa(registry.Port))
 		for _, flag := range rf.fileFlags {
@@ -393,14 +398,16 @@ func printWorkloadListHelp(w io.Writer) {
 
 // runWorkloadList prints active workloads after handling list flags.
 func runWorkloadList(ctx context.Context, stdout, _ io.Writer, args []string) error {
-	for _, a := range args {
-		if isHelpRequest(a) {
-			printWorkloadListHelp(stdout)
-			return nil
-		}
-		if isFlagToken(a) {
-			return fmt.Errorf("unknown flag: %s", a)
-		}
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printWorkloadListHelp(stdout)
+		return nil
+	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("accepts 0 arg(s), received %d", len(positional))
 	}
 	return handleWorkloadList(ctx, stdout)
 }

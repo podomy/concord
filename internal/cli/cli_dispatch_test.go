@@ -405,6 +405,31 @@ func TestDxTerminatorStopsParsing(t *testing.T) {
 	}
 }
 
+// TestDxNoArgLeavesRejectPositionals checks leaves without positionals
+// use the same terminator handling as the rest: tokens after -- are
+// positionals, and unexpected positionals are an error, not silence.
+func TestDxNoArgLeavesRejectPositionals(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"workload", "list", "extra"},
+		{"workload", "list", "--", "--help"},
+		{"node", "trail", "extra"},
+		{"metrics", "extra"},
+		{"node", "rotate-key", "extra"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+			_, _, err := dxRun(args)
+			if err == nil {
+				t.Fatalf("%v: expected error, got nil", args)
+			}
+			if strings.Contains(err.Error(), "unknown command") {
+				t.Errorf("%v: reported unknown command: %v", args, err)
+			}
+		})
+	}
+}
+
 // TestDxBooleanFollow checks --follow and -f parse as booleans.
 func TestDxBooleanFollow(t *testing.T) {
 	_, _, err := dxRun([]string{"workload", "logs", "--follow"})

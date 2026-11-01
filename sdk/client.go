@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,10 @@ const (
 var (
 	// ErrNotFound is returned when a requested workload is not found in the cluster.
 	ErrNotFound = errors.New("workload not found")
+
+	// ErrValidation is returned when the daemon rejects a request as
+	// invalid (HTTP 400). The wrapped message preserves the server text.
+	ErrValidation = errors.New("workload validation failed")
 
 	// ErrDaemonUnreachable is returned when the Unix domain socket cannot be reached.
 	ErrDaemonUnreachable = errors.New("concord daemon unreachable; ensure the daemon is running")
@@ -138,6 +143,27 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
+// validationError maps an HTTP 400 body to ErrValidation, preserving the
+// server message. Non-400 errors stay unstructured: only validation has
+// a typed sentinel, ErrNotFound keeps its own mapping where it exists.
+func validationError(body []byte) error {
+	var errResp errorResponse
+	msg := strings.TrimSpace(string(body))
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+		msg = errResp.Error
+	}
+	return fmt.Errorf("%w: %s", ErrValidation, msg)
+}
+
+// requestError maps a non-2xx status with its body to an error, routing
+// 400 through ErrValidation and leaving every other status unstructured.
+func requestError(status int, body []byte) error {
+	if status == http.StatusBadRequest {
+		return validationError(body)
+	}
+	return fmt.Errorf("server error (%d): %s", status, string(body))
+}
+
 // Submit sends a workload specification to the Concord daemon to commit to the distributed journal.
 func (c *unixClient) Submit(ctx context.Context, w Workload) (uuid.UUID, error) {
 	data, err := json.Marshal(w)
@@ -162,6 +188,9 @@ func (c *unixClient) Submit(ctx context.Context, w Workload) (uuid.UUID, error) 
 		return uuid.Nil, fmt.Errorf("read response body: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusBadRequest {
+		return uuid.Nil, validationError(body)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp errorResponse
 		jsonErr := json.Unmarshal(body, &errResp)
@@ -205,7 +234,7 @@ func (c *unixClient) Stop(ctx context.Context, id uuid.UUID) error {
 			return fmt.Errorf("server error (%d)", resp.StatusCode)
 		}
 
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return requestError(resp.StatusCode, body)
 	}
 
 	return nil
@@ -235,7 +264,7 @@ func (c *unixClient) Get(ctx context.Context, id uuid.UUID) (*Workload, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, requestError(resp.StatusCode, body)
 	}
 
 	var w Workload
@@ -272,7 +301,7 @@ func (c *unixClient) Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, requestError(resp.StatusCode, body)
 	}
 
 	var stats WorkloadStats
@@ -368,7 +397,7 @@ func (c *unixClient) Logs(ctx context.Context, id uuid.UUID, tail int) ([]LogLin
 		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, requestError(resp.StatusCode, body)
 	}
 
 	var logsResp struct {
@@ -409,6 +438,9 @@ func (c *unixClient) UpdateImage(ctx context.Context, id uuid.UUID, image string
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotFound //nolint:wrapcheck // sentinel error
 	}
+	if resp.StatusCode == http.StatusBadRequest {
+		return validationError(body)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
 	}
@@ -441,7 +473,7 @@ func (c *unixClient) SetPosition(ctx context.Context, lat, lon float64) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return requestError(resp.StatusCode, body)
 	}
 
 	return nil

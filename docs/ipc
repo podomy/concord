@@ -65,7 +65,10 @@ the SDK uses http://unix). Only the path matters.
 
 Conventions
 
-* JSON both ways; Content-Type: application/json on bodies.
+* JSON both ways; Content-Type: application/json on bodies. Request
+  bodies are capped at 1MB (larger is a 400) and unknown JSON fields
+  are rejected with a 400: both ends ship from this repo, so an
+  unknown field is a version mismatch worth failing loudly.
 * Errors are {"error":"message"} with a non-2xx status. Machine-readable
   only by status code; messages are human text and may change.
 * UUIDs are strings in URLs and bodies. POST /v1/workloads mints one
@@ -80,8 +83,9 @@ Endpoints
 
 POST /v1/workloads: submit a workload
 
-Body is a workload spec; only image is required. Returns 201 with
-the assigned id:
+Body is a workload spec; only image is required (surrounding
+whitespace is trimmed before validation, the stored spec is never
+padded). Returns 201 with the assigned id:
 
   // request
   {"image":"nginx:alpine","restart":"always","host_port":8080,"container_port":80}
@@ -94,8 +98,29 @@ on_failure), host_port, container_port, stop_timeout_seconds,
 health_action (0 restart, 1 signal), health_path, health_probe
 (http, tcp, exec), health_command[], depends_on[], qos,
 files[] (path, digest, mode).
-400 on bad JSON or missing image. The spec commits to the journal and converges; placement
+
+Validation (400, mapped to sdk.ErrValidation): unknown JSON fields are
+rejected, bodies are capped at 1MB (larger is a 400), restart must be a
+known policy, memory_mb must not be negative (0 or absent means
+unlimited: no cgroup limit is set and the scheduler always fits it),
+health_action must be 0 or 1, health_probe must be http, tcp, or exec
+(exec requires a non-empty health_command), host_port and
+container_port must be set together, qos must be a known class, file
+pointers must validate, self-dependencies and dependency cycles are
+rejected. The spec commits to the journal and converges; placement
 follows the scheduler, not this call.
+
+Orphans: pushing file blobs before submit and then failing submit
+leaves the pushed blobs in the store with no referencing spec. Blob
+garbage collection is operator-owned, same as track rotation and
+journal archival; see docs/files.
+
+Errors are {"error":"message"} with a non-2xx status. SDK mapping:
+400 validation failures arrive as sdk.ErrValidation with the server
+message preserved, 404 as sdk.ErrNotFound, everything else (503
+trail/metrics unavailable, 500) stays an unstructured server error.
+Messages are human text and may change; match on status and sentinel,
+never on strings.
 
 GET /v1/workloads: list active workloads
 
@@ -124,7 +149,8 @@ is always the local node: stats exist only where the workload runs.
 GET /v1/workloads/{id}/logs: captured container output
 
 In-memory ring (1000 lines, 4KB truncate per line), oldest-first.
-?tail=N caps to the last N lines. 404 when nothing was captured.
+?tail=N caps to the last N lines (0 or absent means all). 404 when
+nothing was captured. Non-numeric or negative tail values are a 400.
 No files involved, on either side:
 
   {"logs": [{"at": "2026-10-09T10:00:00Z", "stream": "stdout", "line": "serving on :80"}]}
@@ -133,7 +159,8 @@ PUT /v1/workloads/{id}/image: move to a new image
 
 Same ID, same assignment, epoch plus one (a plain resubmit could lose
 to byte comparison, so this endpoint exists). 404 for unknown or
-stopped workloads, 400 for empty images:
+stopped workloads, 400 for empty images, unknown fields, or bodies
+past 1MB:
 
   // request
   {"image": "nginx:1.28"}

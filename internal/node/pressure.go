@@ -211,10 +211,13 @@ func mergeLogLines(a, b []LogLine) []LogLine {
 // position always records. Invalid positions never record, and neither
 // does the exact zero point: zeros mean unknown across gossip, gauges,
 // and node list, so recording them would plant a Null Island waypoint
-// no node ever visited. Gated points land in the ring and the track log
-// together, so the file always holds everything the ring does and more.
-// The sampler lock covers the ring insert only; the track append runs
-// after unlock so one slow fsync never stalls pressure sampling or reads.
+// no node ever visited. The ring insert holds the sampler lock and the
+// track append runs after unlock, so a crash between the two can leave
+// a point in the ring but not the file. The file still holds nearly
+// everything the ring does, plus history across restarts: restarts and
+// ring overwrite lose nothing here. The sampler lock covers the ring
+// insert only; the track append runs after unlock so one slow fsync
+// never stalls pressure sampling or reads.
 func (s *Sampler) RecordPosition(pos geo.Point) {
 	if !pos.Valid() || (pos.Lat == 0 && pos.Lon == 0) {
 		return

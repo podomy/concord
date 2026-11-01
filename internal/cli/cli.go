@@ -172,29 +172,24 @@ func isHelpRequest(a string) bool {
 	return a == "-h" || a == "-help" || a == "--help"
 }
 
-// isFlagToken reports a token that looks like a flag.
-func isFlagToken(a string) bool {
-	return len(a) > 1 && strings.HasPrefix(a, "-") && a != "--"
-}
-
 // printRootHelp writes top-level usage to w.
 func printRootHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, rootShort)                                                              //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                                                     //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, rootLong)                                                               //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                                                     //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Usage:")                                                               //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  concord [command]")                                                  //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                                                     //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Available Commands:")                                                  //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  metrics     Print sampler state in Prometheus exposition format")    //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  node        Inspect cluster membership and cluster mesh")            //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  workload    Manage container workloads (run, list, inspect, stop)")  //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                                                     //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Flags:")                                                               //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  -h, --help   Show help for concord")                                 //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                                                     //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, `Use "concord [command] --help" for more information about a command.`) //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, rootShort)                                                                                  //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, rootLong)                                                                                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                                                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord [command]")                                                                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Available Commands:")                                                                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  metrics     Print sampler state in Prometheus exposition format")                        //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  node        Inspect cluster membership and cluster mesh")                                //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  workload    Manage container workloads (run, list, inspect, stats, logs, update, stop)") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Flags:")                                                                                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  -h, --help   Show help for concord")                                                     //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, `Use "concord [command] --help" for more information about a command.`)                     //nolint:errcheck // CLI output
 }
 
 // Execute runs the Concord CLI dispatcher with custom arguments and streams.

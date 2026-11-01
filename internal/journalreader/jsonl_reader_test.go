@@ -150,3 +150,58 @@ func TestJSONLReaderLargeLine(t *testing.T) {
 	}
 	mustReadEOF(t, reader, context.Background())
 }
+
+// A crash-torn tail (valid lines plus a partial line without its
+// newline) reads the committed prefix and then reports EOF: at most the
+// in-flight line is lost, the rebuild continues.
+func TestJSONLReaderTornTailReadsPrefix(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	line := `{"id":"11111111-1111-1111-1111-111111111111","type":"t","node_id":"22222222-2222-2222-2222-222222222222","timestamp":"2026-10-09T10:00:00Z","payload":{}}`
+	content := line + "\n" + `{"id":"3333`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	reader, err := OpenJSONLReaderPath(path)
+	if err != nil {
+		t.Fatalf("open journal reader: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close journal reader: %v", err)
+		}
+	})
+
+	ctx := context.Background()
+	mustReadOffset(t, reader, ctx, 0)
+	mustReadEOF(t, reader, ctx)
+}
+
+// A corrupt line in the middle of the file still errors loudly: only
+// the unterminated tail is dropped, history is never skipped silently.
+func TestJSONLReaderMidFileCorruptionErrors(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	line := `{"a":1}`
+	content := "not-json\n" + line + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	reader, err := OpenJSONLReaderPath(path)
+	if err != nil {
+		t.Fatalf("open journal reader: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close journal reader: %v", err)
+		}
+	})
+
+	if _, _, err := reader.ReadWithOffset(context.Background()); err == nil {
+		t.Fatal("expected error for mid-file corruption")
+	}
+}

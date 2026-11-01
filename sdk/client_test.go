@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +259,30 @@ func TestClient_Submit_ServerError(t *testing.T) {
 	_, err := client.Submit(context.Background(), workload)
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+// A 400 from the daemon maps to ErrValidation with the server message
+// preserved; other statuses stay unstructured.
+func TestClient_ValidationErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/workloads", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONResponse(t, w, http.StatusBadRequest, map[string]string{
+			"error": "invalid restart policy",
+		})
+	})
+
+	client := dialMockClient(t, mux)
+
+	workload := sdk.NewWorkload().Image("nginx").MustBuild()
+	_, err := client.Submit(context.Background(), workload)
+	if !errors.Is(err, sdk.ErrValidation) {
+		t.Fatalf("expected ErrValidation, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid restart policy") {
+		t.Fatalf("server message lost: %v", err)
 	}
 }
 

@@ -19,14 +19,16 @@ func printMetricsHelp(w io.Writer) {
 
 // runMetricsCommand prints exposition text after handling metrics flags.
 func runMetricsCommand(ctx context.Context, stdout, _ io.Writer, args []string) error {
-	for _, a := range args {
-		if isHelpRequest(a) {
-			printMetricsHelp(stdout)
-			return nil
-		}
-		if isFlagToken(a) {
-			return fmt.Errorf("unknown flag: %s", a)
-		}
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printMetricsHelp(stdout)
+		return nil
+	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("accepts 0 arg(s), received %d", len(positional))
 	}
 	return handleMetrics(ctx, stdout)
 }

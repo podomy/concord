@@ -97,7 +97,10 @@ func (q QoS) Valid() bool {
 // CheckNoCycle rejects a spec whose dependency chain loops back to
 // itself through live specs. Unknown IDs have no dependencies, so only
 // known specs participate; the existing graph is assumed acyclic because
-// every submit passed this same check.
+// every submit passed this same check. Self-dependencies are rejected
+// here at submit; the reconciler's depsReady also skips a self edge at
+// runtime, so both layers agree and a hand-written journal line can
+// stall nothing. Defense in depth, either layer alone suffices.
 func CheckNoCycle(live []Spec, newSpec Spec) error {
 	byID := make(map[uuid.UUID][]uuid.UUID, len(live)+1)
 	for _, spec := range live {

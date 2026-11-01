@@ -227,6 +227,38 @@ func TestWorkloadsApplyMalformedPayload(t *testing.T) {
 	}
 }
 
+// Specs that parse but fail validation are skipped, never stored and
+// never an error: a bad synced line cannot fail the apply loop or
+// displace a tombstone.
+func TestWorkloadsApplySkipsInvalidSpec(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	kv := testKVStore(t)
+	view := NewWorkloads(kv)
+
+	id := uuid.New()
+	tombstone := workload.Spec{ID: id, Image: "app:v1", Removed: true}
+	applyWorkloadSpec(t, ctx, view, tombstone)
+
+	invalid := workload.Spec{ID: id, Image: "app:v2", Restart: "sometimes"}
+	payload, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	if err := view.Apply(ctx, journal.NewEvent(uuid.New(), EventTypeWorkloadSpec, payload)); err != nil {
+		t.Fatalf("apply invalid spec: %v", err)
+	}
+
+	got, err := view.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get spec: %v", err)
+	}
+	if got == nil || !got.Removed || got.Image != "app:v1" {
+		t.Fatalf("tombstone displaced by invalid spec: %+v", got)
+	}
+}
+
 func TestWorkloadsCancelledContext(t *testing.T) {
 	t.Parallel()
 

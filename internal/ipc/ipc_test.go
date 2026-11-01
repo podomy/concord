@@ -7,7 +7,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -588,6 +591,122 @@ func TestIPCSubmitRejectsUnknownQoS(t *testing.T) {
 	w.QoS = "ultra"
 	if _, err := h.client.Submit(ctx, w); err == nil {
 		t.Fatal("expected QoS rejection")
+	}
+}
+
+// Invalid specs are rejected with a typed validation error that
+// preserves the server message: restart, memory, health, and ports are
+// all checked server-side, never trusted from the client.
+func TestIPCSubmitRejectsInvalidSpecs(t *testing.T) {
+	h := setupTestServer(t)
+	ctx := context.Background()
+
+	build := func() sdk.Workload {
+		return mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	}
+	cases := []struct {
+		name   string
+		mutate func(*sdk.Workload)
+	}{
+		{"restart", func(w *sdk.Workload) { w.Restart = "sometimes" }},
+		{"negative memory", func(w *sdk.Workload) { w.Resources.MemoryMB = -5 }},
+		{"health action", func(w *sdk.Workload) { w.HealthAction = 42 }},
+		{"health probe", func(w *sdk.Workload) { w.HealthProbe = "smoke-signals" }},
+		{"exec without command", func(w *sdk.Workload) { w.HealthProbe = sdk.HealthProbeExec }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := build()
+			tc.mutate(&w)
+			_, err := h.client.Submit(ctx, w)
+			if err == nil {
+				t.Fatal("expected validation rejection")
+			}
+			if !errors.Is(err, sdk.ErrValidation) {
+				t.Fatalf("expected ErrValidation, got %v", err)
+			}
+		})
+	}
+}
+
+// postRawJSON sends one hand-written request over the Unix socket and
+// reports the status code with its body. Raw HTTP is the contract too:
+// strict decoding applies to hand-written bodies exactly as to SDK ones.
+func postRawJSON(t *testing.T, h *testHarness, method, target, body string) (int, string) {
+	t.Helper()
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			conn, err := d.DialContext(ctx, "unix", h.socketPath)
+			if err != nil {
+				t.Fatalf("dial unix socket: %v", err)
+			}
+			return conn, nil
+		},
+		DisableKeepAlives: true,
+	}
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), method, "http://unix"+target, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort test cleanup
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, string(raw)
+}
+
+// Unknown JSON fields are rejected: both ends ship from this repo, so
+// an unknown field is a version mismatch worth failing loudly.
+func TestIPCSubmitRejectsUnknownFields(t *testing.T) {
+	h := setupTestServer(t)
+
+	status, body := postRawJSON(t, h, http.MethodPost, "/v1/workloads", `{"image":"app:latest","bogus_field":1}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body %s", status, body)
+	}
+	status, body = postRawJSON(t, h, http.MethodPut, "/v1/workloads/"+uuid.New().String()+"/image", `{"image":"app:v2","bogus_field":1}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body %s", status, body)
+	}
+}
+
+// Whitespace-only images are rejected: the stored spec is always
+// trimmed, never padded.
+func TestIPCSubmitRejectsBlankImage(t *testing.T) {
+	h := setupTestServer(t)
+
+	status, body := postRawJSON(t, h, http.MethodPost, "/v1/workloads", `{"image":"   "}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body %s", status, body)
+	}
+}
+
+// Non-numeric and negative tail values are a 400, never a silent
+// return-everything.
+func TestIPCLogsRejectsBadTail(t *testing.T) {
+	h := setupTestServer(t)
+	id := uuid.New()
+
+	out := h.sampler.LogWriter(id, node.LogStdout)
+	if _, err := out.Write([]byte("hello\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	target := "/v1/workloads/" + id.String() + "/logs"
+	for _, query := range []string{"?tail=abc", "?tail=-1", "?tail=1.5"} {
+		status, body := postRawJSON(t, h, http.MethodGet, target+query, "")
+		if status != http.StatusBadRequest {
+			t.Fatalf("tail %q: status = %d, want 400, body %s", query, status, body)
+		}
 	}
 }
 

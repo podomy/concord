@@ -399,6 +399,22 @@ func TestCLINodePositionSet(t *testing.T) {
 	}
 }
 
+// The exact zero point means unknown across gossip, so the CLI prints
+// the server truth instead of a success coordinate.
+func TestCLINodePositionSetUnknown(t *testing.T) {
+	_, _ = setupCLIPositionedTest(t)
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	err := cli.Execute(ctx, []string{"node", "position", "set", "--lat", "0", "--lon", "0"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("node position set failed: %v, stderr: %s", err, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "unknown") {
+		t.Fatalf("expected unknown in output, got:\n%s", out)
+	}
+}
+
 func TestCLIValidationErrors(t *testing.T) {
 	setupCLITest(t)
 	ctx := context.Background()

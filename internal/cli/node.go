@@ -93,14 +93,16 @@ func printNodeListHelp(w io.Writer) {
 
 // runNodeList prints cluster nodes after handling list flags.
 func runNodeList(ctx context.Context, stdout, _ io.Writer, args []string) error {
-	for _, a := range args {
-		if isHelpRequest(a) {
-			printNodeListHelp(stdout)
-			return nil
-		}
-		if isFlagToken(a) {
-			return fmt.Errorf("unknown flag: %s", a)
-		}
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printNodeListHelp(stdout)
+		return nil
+	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("accepts 0 arg(s), received %d", len(positional))
 	}
 	return handleNodeList(ctx, stdout)
 }
@@ -151,14 +153,16 @@ func printNodeTrailHelp(w io.Writer) {
 
 // runNodeTrail prints recorded positions after handling trail flags.
 func runNodeTrail(ctx context.Context, stdout, _ io.Writer, args []string) error {
-	for _, a := range args {
-		if isHelpRequest(a) {
-			printNodeTrailHelp(stdout)
-			return nil
-		}
-		if isFlagToken(a) {
-			return fmt.Errorf("unknown flag: %s", a)
-		}
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printNodeTrailHelp(stdout)
+		return nil
+	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("accepts 0 arg(s), received %d", len(positional))
 	}
 	return handleNodeTrail(ctx, stdout)
 }
@@ -286,6 +290,8 @@ func runNodePositionSet(ctx context.Context, stdout, stderr io.Writer, args []st
 // handleNodePositionSet applies one live fix through the daemon: persisted
 // for reboot, gossiped to the fleet, recorded to trail and track log.
 // This is the only position writer; the config file is never polled.
+// The exact zero point means unknown, matching gossip convention, so it
+// prints the server truth instead of a success coordinate.
 func handleNodePositionSet(ctx context.Context, stdout io.Writer, lat, lon float64) error {
 	client, closeFn, err := dialIPCClient()
 	if err != nil {
@@ -297,6 +303,10 @@ func handleNodePositionSet(ctx context.Context, stdout io.Writer, lat, lon float
 		return fmt.Errorf("set node position: %w", err)
 	}
 
+	if lat == 0 && lon == 0 {
+		_, _ = fmt.Fprintln(stdout, "Position unknown (0, 0 means unknown).") //nolint:errcheck // CLI output
+		return nil
+	}
 	_, _ = fmt.Fprintf(stdout, "Position set to %.6f %.6f.\n", lat, lon) //nolint:errcheck // CLI output
 	return nil
 }
@@ -311,14 +321,16 @@ func printNodeRotateKeyHelp(w io.Writer) {
 
 // runNodeRotateKey rotates the Noise key after handling rotate-key flags.
 func runNodeRotateKey(ctx context.Context, stdout, _ io.Writer, args []string) error {
-	for _, a := range args {
-		if isHelpRequest(a) {
-			printNodeRotateKeyHelp(stdout)
-			return nil
-		}
-		if isFlagToken(a) {
-			return fmt.Errorf("unknown flag: %s", a)
-		}
+	flagArgs, positional, wantHelp := splitArgs(args, nil)
+	if wantHelp {
+		printNodeRotateKeyHelp(stdout)
+		return nil
+	}
+	if len(flagArgs) > 0 {
+		return fmt.Errorf("unknown flag: %s", flagArgs[0])
+	}
+	if len(positional) > 0 {
+		return fmt.Errorf("accepts 0 arg(s), received %d", len(positional))
 	}
 	return handleNodeRotateKey(ctx, stdout)
 }

@@ -31,7 +31,11 @@ import (
 // to the byte-larger serialization. Arrival order never matters.
 // 5. Removed=true remains stored as a tombstone.
 // 6. Rebuild replays the journal in order and produces the same final state.
-// 7. Malformed workload.spec payloads return an error.
+// 7. Malformed workload.spec payloads (bad JSON) return an error.
+// Specs that parse but fail workload.Validate are skipped, never
+// stored and never an error: remote or hand-written lines must not
+// fail the apply loop or displace a tombstone. The write path
+// (RecordEvent from submit) already rejected them loudly.
 
 const bucketNameWorkloads = "workloads"
 
@@ -48,11 +52,19 @@ func NewWorkloads(kv *kvstore.KVStore) *Workloads {
 }
 
 // putEvent unmarshals a workload spec event payload and stores the spec in the bucket keyed by spec ID.
+// Specs that parse but fail validation are skipped without storing and
+// without error, so synced or hand-written lines never break the loop
+// and a stored tombstone always survives them.
 func (e *Workloads) putEvent(b *bolt.Bucket, event journal.Event) error {
 	var spec workload.Spec
 	err := json.Unmarshal(event.Payload, &spec)
 	if err != nil {
 		return fmt.Errorf("json unmarshal: %w", err)
+	}
+
+	err = spec.Validate()
+	if err != nil {
+		return nil //nolint:nilerr // invalid specs skip, never stored and never an error
 	}
 
 	serializedSpec, err := json.Marshal(spec)
@@ -114,6 +126,8 @@ func putSpec(b *bolt.Bucket, key, serializedSpec []byte) error {
 }
 
 // Apply updates the view if the event is a workload.spec event, storing or updating the workload spec.
+// Invalid specs are skipped, never stored and never an error, so replay
+// of remote or hand-written lines converges instead of aborting.
 func (e *Workloads) Apply(ctx context.Context, event journal.Event) error {
 	if err := checkContext(ctx, "context cancelation"); err != nil {
 		return err

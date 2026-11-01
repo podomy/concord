@@ -19,6 +19,10 @@ type JSONL struct {
 
 // Append marshals the event and appends it as a JSON line to the journal file.
 // It checks for context cancellation before acquiring the write lock.
+// Each append ends with one newline and an fsync, so a crash can leave
+// at most one torn final line without its newline. Readers drop that
+// partial tail and report EOF, so the committed prefix always rebuilds
+// and at most the in-flight line is lost.
 func (j *JSONL) Append(ctx context.Context, event Event) error {
 	select {
 	case <-ctx.Done():
