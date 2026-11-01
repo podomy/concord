@@ -55,20 +55,6 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		return fmt.Errorf("setup views: %w", err)
 	}
 
-	// Create a startup event and persist it before
-	// announcing readiness.
-	err = journalview.RecordNodeStarted(
-		ctx,
-		logger,
-		st.journal,
-		views,
-		nodeConfig.ID,
-		nodeConfig.MemberlistAddress,
-	)
-	if err != nil {
-		return fmt.Errorf("record node started: %w", err)
-	}
-
 	// Ensure all node key material: WireGuard for the overlay mesh, Noise
 	// static key plus CA-signed identity for the sync transport.
 	wgKey, staticKey, noiseIdentity, err := ensureNodeKeys(*nodeConfig)
@@ -194,6 +180,21 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	}
 	defer shutdownIPCServer(ctx, logger, ipcServer)
 
+	// Record boot only after keys, peer, transport, registry, reconciler,
+	// network, and IPC are all up, so a failed boot leaves no phantom
+	// node.started behind for the fleet to observe.
+	err = journalview.RecordNodeStarted(
+		ctx,
+		logger,
+		st.journal,
+		views,
+		nodeConfig.ID,
+		nodeConfig.MemberlistAddress,
+	)
+	if err != nil {
+		return fmt.Errorf("record node started: %w", err)
+	}
+
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
 	logger.Info(
@@ -277,15 +278,12 @@ func teardownNetworking(logger *logs.Logger) {
 }
 
 func setupNetwork(ctx context.Context, nodeIndex int) error {
-	// Create the network bridge.
+	// Create the bridge, which also sets up the masquerade rule for the
+	// 10.0.0.0/16 container subnet. The single SetupMasquerade call inside
+	// CreateBridge provably covers this path, so no second probe here.
 	err := cn.CreateBridge(ctx, nodeIndex)
 	if err != nil {
 		return fmt.Errorf("create bridge: %w", err)
-	}
-
-	err = cn.SetupMasquerade(ctx)
-	if err != nil {
-		return fmt.Errorf("setup masquerade: %w", err)
 	}
 
 	return nil
@@ -368,6 +366,25 @@ func startWorkloadAndNetwork(
 	wgKey cn.Key,
 	sampler *node.Sampler,
 ) (*registry.Registry, error) {
+	// Network before workloads: the reconciler pulls and creates
+	// containers that need cn0, veth pairs, and masquerade on their first
+	// tick. Resolving the deterministic subnet index first also fails the
+	// boot loudly when this node is absent from the memberlist, instead of
+	// silently falling back to index 0 and overlapping another node's /24.
+	// Neither bridge, masquerade, nor the tunnel manager depends on the
+	// registry or reconciler, so no inversion: this order only adds a
+	// precondition.
+	idx, err := nodeIndex(ctx, nodeID, peerService)
+	if err != nil {
+		return nil, err
+	}
+	cn.SetNodeSubnet(idx)
+
+	err = setupNetwork(ctx, idx)
+	if err != nil {
+		return nil, fmt.Errorf("setup network: %w", err)
+	}
+
 	ocireg, err := startWorkloadInfrastructure(
 		ctx,
 		nodeID,
@@ -383,17 +400,6 @@ func startWorkloadAndNetwork(
 			"start workload infrastructure: %w",
 			err,
 		)
-	}
-
-	idx, err := nodeIndex(ctx, nodeID, peerService)
-	if err != nil {
-		idx = 0
-	}
-	cn.SetNodeSubnet(idx)
-
-	err = setupNetwork(ctx, idx)
-	if err != nil {
-		return nil, fmt.Errorf("setup network: %w", err)
 	}
 
 	// Start WireGuard tunnel manager loop.
@@ -429,13 +435,15 @@ func nodeIndex(
 		return members[i].ID.String() < members[j].ID.String()
 	})
 
-	// Find ourselves in the list and then return the index.
+	// Find ourselves in the list and then return the index. Absence is an
+	// error, never a silent 0: two nodes on subnet 10.0.0.0/24 would hand
+	// out overlapping container IPs.
 	for i, m := range members {
 		if m.ID == nodeID {
 			return i, nil
 		}
 	}
-	return 0, nil
+	return 0, fmt.Errorf("node %s not in member list (%d members)", nodeID, len(members))
 }
 
 func startTransport(

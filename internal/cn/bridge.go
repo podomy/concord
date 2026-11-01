@@ -20,7 +20,12 @@ const (
 
 var (
 	nextContainerIP = netip.MustParseAddr("10.0.0.0")
-	ipMu            sync.Mutex
+	// nodeSubnet is the /24 this node may allocate from, set by
+	// SetNodeSubnet from the deterministic memberlist index. AllocateIP
+	// fails closed outside it so one node can never spill into another
+	// node's subnet and overlap container IPs.
+	nodeSubnet = netip.MustParsePrefix("10.0.0.0/24")
+	ipMu       sync.Mutex
 )
 
 // Invariants
@@ -109,19 +114,34 @@ func findOrCreateBridgeLinkDevice(ctx context.Context, bridge *netlink.Bridge) (
 	return linkDevice, nil
 }
 
+// BridgeExists reports whether the cn0 bridge device is present. The
+// reconciler probes it every tick so a missing bridge fails the tick with
+// a debug log and retries, instead of failing every container start.
+func BridgeExists() bool {
+	link, err := netlink.LinkByName(bridgeName)
+	return err == nil && link != nil
+}
+
 // SetNodeSubnet configures the base container IP allocation pool for this node
 // using its deterministic cluster-wide subnet index (10.0.<index>.2 onwards).
 func SetNodeSubnet(index int) {
 	ipMu.Lock()
+	defer ipMu.Unlock()
+	nodeSubnet = netip.MustParsePrefix(fmt.Sprintf("10.0.%d.0/24", index))
 	nextContainerIP = netip.MustParseAddr(fmt.Sprintf("10.0.%d.2", index))
-	ipMu.Unlock()
 }
 
 // AllocateIP allocates an available IP address and returns that as a string of IP + CIDR.
-func AllocateIP() string {
+// It fails closed with an exhaustion error once the node's /24 is spent,
+// instead of spilling Next() into the next node's subnet and overlapping
+// container IPs across the cluster.
+func AllocateIP() (string, error) {
 	ipMu.Lock()
+	defer ipMu.Unlock()
+	if !nodeSubnet.Contains(nextContainerIP) {
+		return "", fmt.Errorf("node subnet %s exhausted, no address left at %s", nodeSubnet, nextContainerIP)
+	}
 	ip := nextContainerIP
 	nextContainerIP = nextContainerIP.Next()
-	ipMu.Unlock()
-	return ip.String() + "/24"
+	return ip.String() + "/24", nil
 }

@@ -228,3 +228,81 @@ func buildPortRulespec(containerIPAndCIDR string, hostPort, containerPort uint16
 		"--to-destination", containerIP + ":" + containerPortStr,
 	}, nil
 }
+
+// PortMappingTarget scans the NAT PREROUTING chain for the DNAT rule
+// forwarding hostPort and returns its container IP as CIDR. The mask is
+// always /24, the only mask AllocateIP ever issues.
+//
+// It powers container IP rediscovery for adopted containers: a daemon
+// restart wipes the in-memory ipAndCIDRs map while the iptables rule
+// survives, so the adopted entry re-learns its IP instead of leaking the
+// rule on cleanup. No matching rule, or more than one sharing the host
+// port, is an error: callers log a warn and leave the mapping missing
+// rather than guess and remove the wrong rule.
+func PortMappingTarget(ctx context.Context, hostPort uint16) (string, error) {
+	err := ctx.Err()
+	if err != nil {
+		return "", fmt.Errorf("context cancellation: %w", err)
+	}
+
+	out, err := listPREROUTING(ctx)
+	if err != nil {
+		return "", err
+	}
+	return parsePortMappingTarget(out, hostPort)
+}
+
+// listPREROUTING dumps the NAT PREROUTING chain rules, one per line.
+func listPREROUTING(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, iptablesBin, "-w", "-t", "nat", "-S", "PREROUTING")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		out := strings.TrimSpace(stderr.String())
+		if out == "" {
+			return "", fmt.Errorf("iptables list prerouting: %w", err)
+		}
+		return "", fmt.Errorf("iptables list prerouting: %w: %s", err, out)
+	}
+	return stdout.String(), nil
+}
+
+// parsePortMappingTarget extracts the container IP for hostPort from an
+// iptables -S dump. Exactly one DNAT rule must reference the port.
+func parsePortMappingTarget(dump string, hostPort uint16) (string, error) {
+	want := strconv.FormatUint(uint64(hostPort), 10)
+	var found []string
+	for line := range strings.SplitSeq(dump, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		dport := ""
+		target := ""
+		for i := 0; i+1 < len(fields); i++ {
+			switch fields[i] {
+			case "--dport":
+				dport = fields[i+1]
+			case "--to-destination":
+				target = fields[i+1]
+			}
+		}
+		if dport != want || target == "" {
+			continue
+		}
+		ip, _, _ := strings.Cut(target, ":")
+		if ip == "" {
+			continue
+		}
+		found = append(found, ip)
+	}
+	if len(found) == 0 {
+		return "", fmt.Errorf("no DNAT rule for host port %d", hostPort)
+	}
+	if len(found) > 1 {
+		return "", fmt.Errorf("ambiguous DNAT rules for host port %d: %v", hostPort, found)
+	}
+	return found[0] + "/24", nil
+}

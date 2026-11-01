@@ -300,3 +300,56 @@ func TestIptablesProbeFailureSurfaced(t *testing.T) {
 		t.Fatal("expected error when iptables fails")
 	}
 }
+
+// parsePortMappingTarget recovers the container IP behind a host port from
+// an iptables -S dump: the rediscovery path for adopted containers whose
+// in-memory CIDR died with the last daemon.
+func TestParsePortMappingTarget(t *testing.T) {
+	dump := "-P PREROUTING ACCEPT\n" +
+		"-A PREROUTING -p tcp -m tcp --dport 8080 -j DNAT --to-destination 10.0.0.5:80\n" +
+		"-A PREROUTING -p tcp -m tcp --dport 8443 -j DNAT --to-destination 10.0.0.9:443\n"
+	got, err := parsePortMappingTarget(dump, 8080)
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+	if got != "10.0.0.5/24" {
+		t.Fatalf("expected 10.0.0.5/24, got %s", got)
+	}
+	got, err = parsePortMappingTarget(dump, 8443)
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+	if got != "10.0.0.9/24" {
+		t.Fatalf("expected 10.0.0.9/24, got %s", got)
+	}
+}
+
+// No rule for the port is an error, never a guess: the caller keeps the
+// mapping missing and warns on every tick instead of removing a wrong rule.
+func TestParsePortMappingTargetMissing(t *testing.T) {
+	_, err := parsePortMappingTarget("-P PREROUTING ACCEPT\n", 8080)
+	if err == nil {
+		t.Fatal("expected error for missing rule, got nil")
+	}
+}
+
+// Two rules sharing one host port are ambiguous: adopting either IP could
+// remove the wrong rule on cleanup, so both are rejected.
+func TestParsePortMappingTargetAmbiguous(t *testing.T) {
+	dump := "-A PREROUTING -p tcp -m tcp --dport 8080 -j DNAT --to-destination 10.0.0.5:80\n" +
+		"-A PREROUTING -p tcp -m tcp --dport 8080 -j DNAT --to-destination 10.0.0.6:80\n"
+	_, err := parsePortMappingTarget(dump, 8080)
+	if err == nil {
+		t.Fatal("expected error for ambiguous rules, got nil")
+	}
+}
+
+// A cancelled context fails before any exec: rediscovery never blocks shutdown.
+func TestPortMappingTargetCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := PortMappingTarget(ctx, 8080)
+	if err == nil {
+		t.Fatal("expected context error, got nil")
+	}
+}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord/internal/clock"
 	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
@@ -147,8 +148,14 @@ func setupReconcilerTest(t *testing.T) (*mockPuller, *mockRunner, *journalview.W
 
 func runTick(t *testing.T, puller cr.Puller, runner cr.Runner, workloads *journalview.Workloads, running map[uuid.UUID]*ContainerAndProcess, cidrs map[uuid.UUID]string) {
 	t.Helper()
+	// Unit tests never run as root, so cn0 never exists here: stub the
+	// bridge probe present so ticks exercise workload logic, not the
+	// missing-network early return.
+	oldReady := bridgeReady
+	bridgeReady = func() bool { return true }
+	t.Cleanup(func() { bridgeReady = oldReady })
 	exitEvents := make(chan ExitEvent, 100)
-	reconcileTick(t.Context(), logs.NewTest(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, exitEvents, nil, nil, nil)
+	reconcileTick(t.Context(), logs.NewTest(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, map[uuid.UUID]int{}, exitEvents, nil, nil, nil)
 }
 
 func writeSpecEvent(t *testing.T, workloads *journalview.Workloads, spec workload.Spec, nodeID uuid.UUID) {
@@ -208,7 +215,7 @@ func TestReconcilerDestroyContainerAsync(t *testing.T) {
 
 	go monitorProcessExit(t.Context(), spec.ID, proc, exitEvents)
 
-	destroyContainer(t.Context(), logs.NewTest(t), spec, running)
+	destroyContainer(logs.NewTest(t), spec, running)
 
 	if !entry.Stopping {
 		t.Error("expected entry.Stopping to be true")
@@ -449,7 +456,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryNever := &ContainerAndProcess{Spec: specNever, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningNever := map[uuid.UUID]*ContainerAndProcess{specNever.ID: entryNever}
 
-	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specNever, runningNever, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
 	if _, exists := runningNever[specNever.ID]; !exists {
 		t.Error("expected RestartNever workload entry to be retained in running map")
 	}
@@ -459,7 +466,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	entryOnFailClean := &ContainerAndProcess{Spec: specOnFailClean, ExitStatus: &cr.ExitStatus{Code: 0}}
 	runningOnFailClean := map[uuid.UUID]*ContainerAndProcess{specOnFailClean.ID: entryOnFailClean}
 
-	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, &mockPuller{}, &mockRunner{}, &mockJournal{}, specOnFailClean, runningOnFailClean, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
 	if _, exists := runningOnFailClean[specOnFailClean.ID]; !exists {
 		t.Error("expected RestartOnFailure with clean exit to be retained in running map")
 	}
@@ -470,10 +477,148 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 	runningAlways := map[uuid.UUID]*ContainerAndProcess{specAlways.ID: entryAlways}
 	pullerAlways := &mockPuller{pullResult: &cr.PullResult{}}
 
-	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil, nil, nil)
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerAlways, &mockRunner{}, &mockJournal{}, specAlways, runningAlways, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
 	if !pullerAlways.pullCalled {
 		t.Error("expected RestartAlways workload to trigger startContainer on tick")
 	}
+}
+
+// Restart policy pins beyond the base table: OnFailure restarts non-zero
+// codes and transport errors, unknown policies never restart, and a future
+// restartAfter cools down even RestartAlways. Semantics unchanged.
+func TestReconcilerTickRestartPoliciesExtended(t *testing.T) {
+	// OnFailure with a non-zero exit code restarts.
+	specFail := workload.Spec{ID: uuid.New(), Restart: workload.RestartOnFailure}
+	runningFail := map[uuid.UUID]*ContainerAndProcess{specFail.ID: {Spec: specFail, ExitStatus: &cr.ExitStatus{Code: 1}}}
+	pullerFail := &mockPuller{pullResult: &cr.PullResult{}}
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerFail, &mockRunner{}, &mockJournal{}, specFail, runningFail, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
+	if !pullerFail.pullCalled {
+		t.Error("expected RestartOnFailure with code 1 to restart")
+	}
+
+	// OnFailure with a clean code but a transport error restarts.
+	specErr := workload.Spec{ID: uuid.New(), Restart: workload.RestartOnFailure}
+	runningErr := map[uuid.UUID]*ContainerAndProcess{specErr.ID: {Spec: specErr, ExitStatus: &cr.ExitStatus{Code: 0, Err: errors.New("oom")}}}
+	pullerErr := &mockPuller{pullResult: &cr.PullResult{}}
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerErr, &mockRunner{}, &mockJournal{}, specErr, runningErr, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
+	if !pullerErr.pullCalled {
+		t.Error("expected RestartOnFailure with Err to restart")
+	}
+
+	// An unknown policy string never restarts, even on failure.
+	specUnknown := workload.Spec{ID: uuid.New(), Restart: workload.RestartPolicy("sometimes")}
+	runningUnknown := map[uuid.UUID]*ContainerAndProcess{specUnknown.ID: {Spec: specUnknown, ExitStatus: &cr.ExitStatus{Code: 1}}}
+	pullerUnknown := &mockPuller{pullResult: &cr.PullResult{}}
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerUnknown, &mockRunner{}, &mockJournal{}, specUnknown, runningUnknown, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
+	if pullerUnknown.pullCalled {
+		t.Error("expected unknown restart policy to stay stopped")
+	}
+	if _, exists := runningUnknown[specUnknown.ID]; !exists {
+		t.Error("expected unknown-policy entry to be retained in running map")
+	}
+
+	// A future restartAfter cools down even RestartAlways.
+	specCool := workload.Spec{ID: uuid.New(), Restart: workload.RestartAlways}
+	runningCool := map[uuid.UUID]*ContainerAndProcess{specCool.ID: {Spec: specCool, ExitStatus: &cr.ExitStatus{Code: 0}, restartAfter: clock.Now().Add(time.Hour)}}
+	pullerCool := &mockPuller{pullResult: &cr.PullResult{}}
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerCool, &mockRunner{}, &mockJournal{}, specCool, runningCool, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
+	if pullerCool.pullCalled {
+		t.Error("expected cooling-down workload to wait, not restart")
+	}
+	if _, exists := runningCool[specCool.ID]; !exists {
+		t.Error("expected cooling-down entry to be retained in running map")
+	}
+
+	// A past restartAfter releases the same workload.
+	runningCool[specCool.ID].restartAfter = clock.Now().Add(-time.Second)
+	pullerWarm := &mockPuller{pullResult: &cr.PullResult{}}
+	reconcileWorkloadSpec(t.Context(), logs.NewTest(t), uuid.Nil, pullerWarm, &mockRunner{}, &mockJournal{}, specCool, runningCool, map[uuid.UUID]string{}, nil, nil, nil, nil, nil, nil)
+	if !pullerWarm.pullCalled {
+		t.Error("expected cooled-down workload to restart")
+	}
+}
+
+// A negative stop timeout is not a negative timer: it falls back to the
+// 60s default like an unset one.
+func TestReconcilerStopTimeoutNegativeDefaults(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), StopTimeoutSeconds: -5}
+	if timeout := stopTimeout(spec); timeout != 60*time.Second {
+		t.Errorf("expected default timeout 60s, got %v", timeout)
+	}
+}
+
+// A dependency stall counts ticks and reports once at the threshold: one
+// warn plus one journal edge, never an auto-break. Later ticks stay quiet
+// until progress resets the count.
+func TestNoteBlockedTickStallThreshold(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New(), DependsOn: []uuid.UUID{uuid.New()}}
+	blocked := map[uuid.UUID]int{}
+	rec := &recordingJournal{}
+	logger := logs.NewTest(t)
+	nodeID := uuid.New()
+
+	for i := 1; i < blockedTickStallThreshold; i++ {
+		noteBlockedTick(t.Context(), logger, rec, nil, nodeID, spec, blocked)
+	}
+	if blocked[spec.ID] != blockedTickStallThreshold-1 {
+		t.Fatalf("blocked ticks = %d, want %d", blocked[spec.ID], blockedTickStallThreshold-1)
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("reported %d events before threshold, want 0", len(rec.events))
+	}
+
+	noteBlockedTick(t.Context(), logger, rec, nil, nodeID, spec, blocked)
+	if blocked[spec.ID] != blockedTickStallThreshold {
+		t.Fatalf("blocked ticks = %d, want %d", blocked[spec.ID], blockedTickStallThreshold)
+	}
+	if len(rec.events) != 1 {
+		t.Fatalf("events = %d, want 1 stall edge", len(rec.events))
+	}
+
+	noteBlockedTick(t.Context(), logger, rec, nil, nodeID, spec, blocked)
+	if len(rec.events) != 1 {
+		t.Fatalf("events = %d, want edge to stay at 1 past threshold", len(rec.events))
+	}
+
+	// A nil counter is a no-op for callers without dependency tracking.
+	noteBlockedTick(t.Context(), logger, rec, nil, nodeID, spec, nil)
+	if len(rec.events) != 1 {
+		t.Fatalf("events = %d, want nil map to record nothing", len(rec.events))
+	}
+}
+
+// Stall counters reset when dependencies resolve and prune with the view:
+// a removed workload never carries a stale count into a future same-ID spec.
+func TestBlockedCountersResetAndPrune(t *testing.T) {
+	oldReady := bridgeReady
+	bridgeReady = func() bool { return true }
+	t.Cleanup(func() { bridgeReady = oldReady })
+
+	puller, runner, workloads, running, cidrs := setupReconcilerTest(t)
+	puller.pullResult = &cr.PullResult{RootFS: t.TempDir()}
+	dep := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil}
+	sub := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: uuid.Nil, DependsOn: []uuid.UUID{dep.ID}}
+	writeSpecEvent(t, workloads, dep, uuid.Nil)
+	writeSpecEvent(t, workloads, sub, uuid.Nil)
+	running[dep.ID] = &ContainerAndProcess{Spec: dep}
+	blocked := map[uuid.UUID]int{sub.ID: 5}
+
+	exitEvents := make(chan ExitEvent, 100)
+	reconcileTick(t.Context(), logs.NewTest(t), uuid.Nil, puller, runner, &mockJournal{}, workloads, running, cidrs, blocked, exitEvents, nil, nil, nil)
+
+	if !runner.createCalled {
+		t.Fatal("dependent did not start once dependency ran")
+	}
+	if _, ok := blocked[sub.ID]; ok {
+		t.Fatal("stall counter not reset on progress")
+	}
+
+	blocked[uuid.New()] = blockedTickStallThreshold
+	pruneBlocked(blocked, []workload.Spec{dep, sub})
+	if len(blocked) != 0 {
+		t.Fatalf("stale counters not pruned: %v", blocked)
+	}
+	pruneBlocked(nil, []workload.Spec{dep, sub})
 }
 
 // A running container whose live spec points elsewhere gets SIGTERM;

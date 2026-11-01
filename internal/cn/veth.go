@@ -41,18 +41,31 @@ func CreateVethPair(ctx context.Context, containerID string, namespacePID int) (
 	// Get the bridge.
 	bridgeLink, err := netlink.LinkByName(bridgeName)
 	if err != nil {
+		// The veth ends already exist, so a missing bridge would leak
+		// vethA on the host. Remove it best-effort before failing.
+		if delErr := DeleteLink(vethA); delErr != nil {
+			return "", fmt.Errorf("link by name: %w (cleanup %s: %w)", err, vethA, delErr)
+		}
 		return "", fmt.Errorf("link by name: %w", err)
 	}
 
 	// Attach vethA to the bridge.
 	err = netlink.LinkSetMaster(vethALink, bridgeLink)
 	if err != nil {
+		// Same leak as above: the pair exists but is unattached.
+		if delErr := DeleteLink(vethA); delErr != nil {
+			return "", fmt.Errorf("link set master: %w (cleanup %s: %w)", err, vethA, delErr)
+		}
 		return "", fmt.Errorf("link set master: %w", err)
 	}
 
 	// Bring the vethA link up.
 	err = netlink.LinkSetUp(vethALink)
 	if err != nil {
+		// Attached but down is still a leak once the container dies.
+		if delErr := DeleteLink(vethA); delErr != nil {
+			return "", fmt.Errorf("link set up: %w (cleanup %s: %w)", err, vethA, delErr)
+		}
 		return "", fmt.Errorf("link set up: %w", err)
 	}
 
@@ -127,7 +140,10 @@ func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (
 
 	// Set the address for the link device / interface before putting it into the
 	// namespace of the container.
-	ipAndCIDRString := AllocateIP()
+	ipAndCIDRString, err := AllocateIP()
+	if err != nil {
+		return nil, "", fmt.Errorf("allocate ip: %w", err)
+	}
 	addr, err := netlink.ParseAddr(ipAndCIDRString)
 	if err != nil {
 		return nil, "", fmt.Errorf("netlink parse addr: %w", err)

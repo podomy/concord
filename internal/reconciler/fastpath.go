@@ -58,7 +58,7 @@ func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.
 		switch entry.Spec.HealthAction {
 		case workload.HealthActionRestart:
 			logger.Warn("restarting unhealthy workload")
-			destroyContainer(ctx, logger, entry.Spec, running)
+			destroyContainer(logger, entry.Spec, running)
 		case workload.HealthActionSignal:
 			signalUnhealthy(ctx, logger, entry, j, views, nodeID)
 		}

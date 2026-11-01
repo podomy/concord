@@ -429,6 +429,19 @@ func TestPendingIndexesOrder(t *testing.T) {
 func TestSchedulePreemptsLowerClass(t *testing.T) {
 	t.Parallel()
 
+	view, rec, victim, arrival := runPreemptScenario(t, workload.QoSBestEffort, workload.QoSGuaranteed)
+
+	if len(rec.events) != 1 {
+		t.Fatalf("expected 1 preempt event, got %d", len(rec.events))
+	}
+	checkPreemptOutcome(t, view, victim, arrival)
+}
+
+// runPreemptScenario seeds one assigned occupant and one unassigned arrival
+// on a node too full for both, then runs one scheduler tick.
+func runPreemptScenario(t *testing.T, occupantQoS, arrivalQoS workload.QoS) (*journalview.Workloads, *recordingJournal, workload.Spec, workload.Spec) {
+	t.Helper()
+
 	node := peerdiscovery.Node{
 		ID:    uuid.New(),
 		State: peerdiscovery.NodeStateAlive,
@@ -438,17 +451,21 @@ func TestSchedulePreemptsLowerClass(t *testing.T) {
 		},
 	}
 	view := newSchedulerWorkloads(t)
-	victim := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: node.ID, QoS: workload.QoSBestEffort, Resources: workload.Resources{MemoryMB: 800}}
-	arrival := workload.Spec{ID: uuid.New(), Image: "x", QoS: workload.QoSGuaranteed, Resources: workload.Resources{MemoryMB: 800}}
+	victim := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: node.ID, QoS: occupantQoS, Resources: workload.Resources{MemoryMB: 800}}
+	arrival := workload.Spec{ID: uuid.New(), Image: "x", QoS: arrivalQoS, Resources: workload.Resources{MemoryMB: 800}}
 	seedSchedulerSpec(t, view, victim)
 	seedSchedulerSpec(t, view, arrival)
 
 	rec := &recordingJournal{}
 	runScheduler(t, view, rec, []peerdiscovery.Node{node})
+	return view, rec, victim, arrival
+}
 
-	if len(rec.events) != 1 {
-		t.Fatalf("expected 1 preempt event, got %d", len(rec.events))
-	}
+// checkPreemptOutcome asserts the victim unassigned with an epoch bump and
+// the arrival still waiting for the next tick.
+func checkPreemptOutcome(t *testing.T, view *journalview.Workloads, victim, arrival workload.Spec) {
+	t.Helper()
+
 	gotVictim, err := view.Get(t.Context(), victim.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -517,4 +534,91 @@ func TestScheduleReservesWithinTick(t *testing.T) {
 	if len(rec.events) != 1 {
 		t.Fatalf("expected 1 assignment event, got %d", len(rec.events))
 	}
+}
+
+// An orphan whose only fitting node is non-alive stays put: orphans
+// reassign solely to alive nodes, and a dead pick records nothing instead
+// of stranding the workload where it cannot run.
+func TestScheduleOrphanIgnoresNonAlivePick(t *testing.T) {
+	t.Parallel()
+
+	full := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 100,
+		},
+	}
+	dead := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateDead,
+	}
+	view := newSchedulerWorkloads(t)
+	deadOwner := uuid.New()
+	spec := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: deadOwner, Resources: workload.Resources{MemoryMB: 512}}
+	seedSchedulerSpec(t, view, spec)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{full, dead})
+
+	if len(rec.events) != 0 {
+		t.Fatalf("expected no events for non-alive pick, got %d", len(rec.events))
+	}
+	got, err := view.Get(t.Context(), spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.AssignedNodeID != deadOwner {
+		t.Fatalf("orphan moved to non-alive node: %+v", got)
+	}
+}
+
+// Equal top classes never displace: a guaranteed arrival with nowhere to
+// fit waits for the next tick instead of evicting guaranteed, so eviction
+// stays strictly downward and cannot loop.
+func TestScheduleGuaranteedVsGuaranteedWaits(t *testing.T) {
+	t.Parallel()
+
+	node := peerdiscovery.Node{
+		ID:    uuid.New(),
+		State: peerdiscovery.NodeStateAlive,
+		Metadata: peerdiscovery.NodeMetadata{
+			MemoryMB:   1024,
+			MemPercent: 90,
+		},
+	}
+	view := newSchedulerWorkloads(t)
+	occupant := workload.Spec{ID: uuid.New(), Image: "x", AssignedNodeID: node.ID, QoS: workload.QoSGuaranteed, Resources: workload.Resources{MemoryMB: 800}}
+	arrival := workload.Spec{ID: uuid.New(), Image: "x", QoS: workload.QoSGuaranteed, Resources: workload.Resources{MemoryMB: 800}}
+	seedSchedulerSpec(t, view, occupant)
+	seedSchedulerSpec(t, view, arrival)
+
+	rec := &recordingJournal{}
+	runScheduler(t, view, rec, []peerdiscovery.Node{node})
+
+	if len(rec.events) != 0 {
+		t.Fatalf("expected no events, got %d", len(rec.events))
+	}
+	got, err := view.Get(t.Context(), occupant.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.AssignedNodeID != node.ID || got.AssignmentEpoch != 0 {
+		t.Fatalf("occupant moved: %+v", got)
+	}
+}
+
+// A burstable arrival fitting nowhere displaces one best-effort victim:
+// the victim unassigns with an epoch bump, the arrival waits for the next
+// tick, when the freed request counts.
+func TestScheduleBurstableDisplacesBestEffort(t *testing.T) {
+	t.Parallel()
+
+	view, rec, victim, arrival := runPreemptScenario(t, workload.QoSBestEffort, workload.QoSBurstable)
+
+	if len(rec.events) != 1 {
+		t.Fatalf("expected 1 preempt event, got %d", len(rec.events))
+	}
+	checkPreemptOutcome(t, view, victim, arrival)
 }

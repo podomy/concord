@@ -76,19 +76,51 @@ func TestWGInterfaceName(t *testing.T) {
 
 func TestSetNodeSubnetAndAllocateIP(t *testing.T) {
 	SetNodeSubnet(3)
-	ip1 := AllocateIP()
+	ip1, err := AllocateIP()
+	if err != nil {
+		t.Fatalf("allocate ip: %v", err)
+	}
 	if ip1 != "10.0.3.2/24" {
 		t.Fatalf("expected 10.0.3.2/24, got %s", ip1)
 	}
 
-	ip2 := AllocateIP()
+	ip2, err := AllocateIP()
+	if err != nil {
+		t.Fatalf("allocate ip: %v", err)
+	}
 	if ip2 != "10.0.3.3/24" {
 		t.Fatalf("expected 10.0.3.3/24, got %s", ip2)
 	}
 
 	SetNodeSubnet(0)
-	ip0 := AllocateIP()
+	ip0, err := AllocateIP()
+	if err != nil {
+		t.Fatalf("allocate ip: %v", err)
+	}
 	if ip0 != "10.0.0.2/24" {
 		t.Fatalf("expected 10.0.0.2/24, got %s", ip0)
+	}
+}
+
+// AllocateIP fails closed at the /24 edge instead of spilling Next() into
+// the next node's subnet: overlapping container IPs across nodes must be
+// an explicit error, never a silent reuse.
+func TestAllocateIPExhaustionFailsClosed(t *testing.T) {
+	SetNodeSubnet(9)
+	t.Cleanup(func() { SetNodeSubnet(0) })
+	// Pool is .2 through .255: 254 addresses.
+	for i := range 254 {
+		if _, err := AllocateIP(); err != nil {
+			t.Fatalf("allocation %d: %v", i, err)
+		}
+	}
+	if _, err := AllocateIP(); err == nil {
+		t.Fatal("expected exhaustion error after 254 allocations, got nil")
+	} else if !strings.Contains(err.Error(), "10.0.9.0/24") {
+		t.Fatalf("exhaustion error names no subnet: %v", err)
+	}
+	// Still exhausted on the next call: the cursor never advances past the edge.
+	if _, err := AllocateIP(); err == nil {
+		t.Fatal("expected sticky exhaustion error, got nil")
 	}
 }
