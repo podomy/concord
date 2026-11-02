@@ -31,6 +31,9 @@ Unreleased
   invalid synced lines skip instead of breaking replay. Torn
   journal tails (crash between write and newline) drop at most one
   line and rebuild the committed prefix. Pinned by test.
+- Key files fail closed: a corrupt WireGuard key is kept on disk and
+  rejected instead of silently regenerated, and world-readable Noise
+  or WireGuard keys are refused at load. Pinned by test.
 
 v1.1.1 (2026-10-16)
 
