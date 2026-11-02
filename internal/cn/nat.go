@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -214,12 +215,21 @@ func RemovePortMapping(ctx context.Context, hostPort uint16, containerIPAndCIDR 
 	return nil
 }
 
+// buildPortRulespec renders the DNAT rule for one host to container
+// port mapping. The container address must be IPv4.
 func buildPortRulespec(containerIPAndCIDR string, hostPort, containerPort uint16) ([]string, error) {
 	hostPortStr := strconv.FormatUint(uint64(hostPort), 10)
 	containerPortStr := strconv.FormatUint(uint64(containerPort), 10)
 	containerIP, _, found := strings.Cut(containerIPAndCIDR, "/")
 	if !found {
 		return nil, fmt.Errorf("invalid CIDR format: %s", containerIPAndCIDR)
+	}
+	addr, err := netip.ParseAddr(containerIP)
+	if err != nil {
+		return nil, fmt.Errorf("invalid container IP %q: %w", containerIP, err)
+	}
+	if !addr.Is4() {
+		return nil, fmt.Errorf("invalid container IP %q: not IPv4", containerIP)
 	}
 	return []string{
 		"-p", "tcp",
