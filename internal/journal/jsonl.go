@@ -12,6 +12,7 @@ import (
 	"sync"
 )
 
+// JSONL is an append-only journal file with one JSON event per line.
 type JSONL struct {
 	file *os.File
 	mu   sync.Mutex
@@ -125,6 +126,7 @@ func TestOpenJSONL() (*JSONL, error) {
 	return &JSONL{file: file}, nil
 }
 
+// TestDeleteOpenJSONL removes the test journal file.
 func TestDeleteOpenJSONL() error {
 	path, err := TestGetJournalPath()
 	if err != nil {

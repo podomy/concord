@@ -196,7 +196,7 @@ func TestDxInspectArgCounts(t *testing.T) {
 	}
 }
 
-// TestDxUpdateRequiresImage checks cobra identical required flag text.
+// TestDxUpdateRequiresImage checks historical required flag text.
 func TestDxUpdateRequiresImage(t *testing.T) {
 	t.Parallel()
 	_, _, err := dxRun([]string{"workload", "update", "someid"})

@@ -378,6 +378,7 @@ func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, imag
 
 	id, err := client.Submit(ctx, workload)
 	if err != nil {
+		// A failed submit leaves pushed blobs as orphans; cleanup is operator-owned.
 		return fmt.Errorf("submit workload: %w", err)
 	}
 
@@ -449,12 +450,16 @@ func handleWorkloadList(ctx context.Context, stdout io.Writer) error {
 	return nil
 }
 
-// printWorkloadInspectHelp writes inspect usage to w.
+// printWorkloadInspectHelp writes inspect usage to w. IDs accept a full
+// UUID or any-length prefix: resolveWorkloadID matches exact UUIDs and
+// falls back to prefix search over active workloads.
 func printWorkloadInspectHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Display detailed specification for a workload") //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Usage:")                                        //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  concord workload inspect <id>")               //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Display detailed specification for a workload")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                                //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload inspect <id>")                                       //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Accepts a full UUID or any-length ID prefix; ambiguous prefixes fail.") //nolint:errcheck // CLI output
 }
 
 // runWorkloadInspect validates the id argument and prints the workload spec.
@@ -566,6 +571,9 @@ func runWorkloadLogs(ctx context.Context, stdout, stderr io.Writer, args []strin
 	err := fs.Parse(flagArgs)
 	if err != nil {
 		return fmt.Errorf("parse workload logs flags: %w", err)
+	}
+	if tail < 0 {
+		return fmt.Errorf("invalid --tail %d: must be >= 0", tail)
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))
@@ -773,6 +781,6 @@ func handleWorkloadStop(ctx context.Context, stdout io.Writer, idArg string) err
 		return fmt.Errorf("stop workload %s: %w", targetID, err)
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Stopped workload %s\n", targetID) //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintf(stdout, "Stopped workload %s\n", truncateID(targetID)) //nolint:errcheck // CLI output
 	return nil
 }

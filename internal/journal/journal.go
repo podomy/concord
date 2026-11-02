@@ -13,6 +13,7 @@ import (
 	"github.com/podomy/concord/internal/clock"
 )
 
+// Event is one journal record with identity, type, and payload.
 type Event struct {
 	ID        uuid.UUID       `json:"id"`
 	Type      string          `json:"type"`

@@ -28,6 +28,7 @@ func TestWorkloadsApplyAndGet(t *testing.T) {
 		Image:          "nginx:latest",
 		AssignedNodeID: uuid.New(),
 		HostPort:       8080,
+		ContainerPort:  80,
 	}
 	payload, err := json.Marshal(spec)
 	if err != nil {

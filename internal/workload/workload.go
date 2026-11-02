@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// Spec is the desired state of one workload.
 type Spec struct {
 	Image          string // OCI reference, e.g. "docker.io/nginx:latest".
 	Restart        RestartPolicy
@@ -129,10 +130,13 @@ func CheckNoCycle(live []Spec, newSpec Spec) error {
 	return visit(newSpec.ID)
 }
 
+// HealthAction selects what the supervisor does when a workload turns unhealthy.
 type HealthAction int
 
 const (
+	// HealthActionRestart restarts an unhealthy workload.
 	HealthActionRestart = iota
+	// HealthActionSignal emits a workload.unhealthy event without restarting.
 	HealthActionSignal
 )
 
@@ -148,6 +152,7 @@ const (
 	HealthProbeExec HealthProbe = "exec"
 )
 
+// Resources caps CPU shares and memory for one workload.
 type Resources struct {
 	CPUShares uint64 // relative weight (default 1024).
 	MemoryMB  int64  // max memory, 0 = unlimited.
@@ -191,14 +196,19 @@ func (f FileRef) Validate() error {
 	return nil
 }
 
+// RestartPolicy controls when a stopped workload is restarted.
 type RestartPolicy string
 
 const (
-	RestartNever     RestartPolicy = "never"
-	RestartAlways    RestartPolicy = "always"
+	// RestartNever never restarts a stopped workload.
+	RestartNever RestartPolicy = "never"
+	// RestartAlways always restarts a stopped workload.
+	RestartAlways RestartPolicy = "always"
+	// RestartOnFailure restarts a stopped workload only on failure.
 	RestartOnFailure RestartPolicy = "on_failure"
 )
 
+// Instance is the runtime state of one workload on one node.
 type Instance struct {
 	State  State
 	ID     uuid.UUID
@@ -216,10 +226,14 @@ type Unhealthy struct {
 	WorkloadID uuid.UUID
 }
 
+// State is the lifecycle phase of a workload instance.
 type State string
 
 const (
+	// StatePending marks a workload waiting to start.
 	StatePending State = "pending"
+	// StateRunning marks a workload currently running.
 	StateRunning State = "running"
+	// StateStopped marks a workload that has stopped.
 	StateStopped State = "stopped"
 )

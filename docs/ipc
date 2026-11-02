@@ -117,8 +117,10 @@ journal archival; see docs/files.
 
 Errors are {"error":"message"} with a non-2xx status. SDK mapping:
 400 validation failures arrive as sdk.ErrValidation with the server
-message preserved, 404 as sdk.ErrNotFound, everything else (503
-trail/metrics unavailable, 500) stays an unstructured server error.
+message preserved, 404 as sdk.ErrNotFound, 503 (trail and metrics
+without a sampler) as sdk.ErrUnavailable. List and Nodes map any 4xx
+to ErrValidation and any 5xx to ErrUnavailable; other endpoints leave
+remaining statuses unstructured.
 Messages are human text and may change; match on status and sentinel,
 never on strings.
 

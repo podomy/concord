@@ -17,6 +17,7 @@ import (
 	"github.com/podomy/concord/internal/geo"
 )
 
+// NodeConfig is the persisted identity and discovery configuration for one node.
 type NodeConfig struct {
 	// MemberlistAddress is the local bind address for gossip.
 	MemberlistAddress netip.AddrPort `json:"memberlist_address"`

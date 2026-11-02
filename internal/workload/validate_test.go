@@ -42,6 +42,8 @@ func TestSpecValidateRejects(t *testing.T) {
 		{"bad health probe", func(s *Spec) { s.HealthProbe = "smoke-signals" }},
 		{"exec without command", func(s *Spec) { s.HealthProbe = HealthProbeExec }},
 		{"bad qos", func(s *Spec) { s.QoS = "ultra" }},
+		{"host port without container port", func(s *Spec) { s.HostPort = 8080 }},
+		{"container port without host port", func(s *Spec) { s.ContainerPort = 80 }},
 		{"bad file", func(s *Spec) {
 			s.Files = []FileRef{{Path: "relative", Digest: "sha256:" + strings.Repeat("a", 64)}}
 		}},
@@ -67,5 +69,30 @@ func TestSpecValidateMemoryZeroUnlimited(t *testing.T) {
 	spec := Spec{ID: uuid.New(), Image: "x", Resources: Resources{MemoryMB: 0}}
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("zero memory rejected: %v", err)
+	}
+}
+
+// Ports pair together or stay unset together: one without the other
+// cannot start, so submit rejects it, matching sdk.Builder.
+func TestSpecValidatePortsPaired(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	good := Spec{ID: id, Image: "x", HostPort: 8080, ContainerPort: 80}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("paired ports rejected: %v", err)
+	}
+	unset := Spec{ID: id, Image: "x"}
+	if err := unset.Validate(); err != nil {
+		t.Fatalf("unset ports rejected: %v", err)
+	}
+	half := []Spec{
+		{ID: id, Image: "x", HostPort: 8080},
+		{ID: id, Image: "x", ContainerPort: 80},
+	}
+	for _, spec := range half {
+		if err := spec.Validate(); err == nil {
+			t.Errorf("Validate(%+v) = nil, want error", spec)
+		}
 	}
 }

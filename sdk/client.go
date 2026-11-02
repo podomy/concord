@@ -35,6 +35,11 @@ var (
 	// invalid (HTTP 400). The wrapped message preserves the server text.
 	ErrValidation = errors.New("workload validation failed")
 
+	// ErrUnavailable is returned when the daemon reports 503: the sampler
+	// backing Metrics or Trail is missing, so the reading cannot be
+	// served. The wrapped message preserves the server text.
+	ErrUnavailable = errors.New("service unavailable")
+
 	// ErrDaemonUnreachable is returned when the Unix domain socket cannot be reached.
 	ErrDaemonUnreachable = errors.New("concord daemon unreachable; ensure the daemon is running")
 )
@@ -156,10 +161,38 @@ func validationError(body []byte) error {
 }
 
 // requestError maps a non-2xx status with its body to an error, routing
-// 400 through ErrValidation and leaving every other status unstructured.
+// 400 through ErrValidation, 503 through ErrUnavailable, and leaving
+// every other status unstructured.
 func requestError(status int, body []byte) error {
 	if status == http.StatusBadRequest {
 		return validationError(body)
+	}
+	if status == http.StatusServiceUnavailable {
+		return unavailableError(body)
+	}
+	return fmt.Errorf("server error (%d): %s", status, string(body))
+}
+
+// unavailableError maps an HTTP 503 body to ErrUnavailable, preserving
+// the server message. Non-JSON bodies keep their trimmed text.
+func unavailableError(body []byte) error {
+	var errResp errorResponse
+	msg := strings.TrimSpace(string(body))
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+		msg = errResp.Error
+	}
+	return fmt.Errorf("%w: %s", ErrUnavailable, msg)
+}
+
+// listError maps a List or Nodes non-2xx status to a sentinel: any 4xx
+// arrives as ErrValidation, any 5xx as ErrUnavailable, both preserving
+// the server message. Other statuses stay unstructured.
+func listError(status int, body []byte) error {
+	if status >= 400 && status < 500 {
+		return validationError(body)
+	}
+	if status >= 500 && status < 600 {
+		return unavailableError(body)
 	}
 	return fmt.Errorf("server error (%d): %s", status, string(body))
 }
@@ -332,7 +365,7 @@ func (c *unixClient) Metrics(ctx context.Context) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return "", requestError(resp.StatusCode, body)
 	}
 
 	return string(body), nil
@@ -357,7 +390,7 @@ func (c *unixClient) Trail(ctx context.Context) ([]TrailPoint, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, requestError(resp.StatusCode, body)
 	}
 
 	var trailResp struct {
@@ -505,7 +538,7 @@ func (c *unixClient) List(ctx context.Context) ([]Workload, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, listError(resp.StatusCode, body)
 	}
 
 	var listResp listResponse
@@ -543,7 +576,7 @@ func (c *unixClient) Nodes(ctx context.Context) ([]Node, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, listError(resp.StatusCode, body)
 	}
 
 	var nResp nodesResponse

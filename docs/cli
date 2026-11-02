@@ -95,7 +95,7 @@ Output:
 ---
 
 Inspect a Workload
-  # Supports full UUIDs or 8-character prefixes
+  # Accepts a full UUID or any-length ID prefix (ambiguous prefixes fail)
   concord workload inspect id
 
 Returns the full JSON specification for the workload.
@@ -172,7 +172,9 @@ Workload Logs
 
 Prints captured stdout/stderr oldest-first, one line per line. Absent
 output (never logged, already stopped) reports not found, mirroring
-stats. Follow polls every second until interrupted.
+stats. Follow polls every second until interrupted. Negative --tail
+values are rejected client-side as a usage error; the server also
+answers 400 for non-numeric or negative tail values.
 
 ---
 

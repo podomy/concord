@@ -43,6 +43,11 @@ func (s Spec) Validate() error {
 		return err
 	}
 
+	err = validatePorts(s.HostPort, s.ContainerPort)
+	if err != nil {
+		return err
+	}
+
 	if !s.QoS.Valid() {
 		return fmt.Errorf("invalid QoS class: %q", string(s.QoS))
 	}
@@ -73,6 +78,16 @@ func validateRestart(r RestartPolicy) error {
 	default:
 		return fmt.Errorf("invalid restart policy %q; must be 'always', 'never', or 'on_failure'", string(r))
 	}
+}
+
+// validatePorts requires host and container ports set together: both
+// set maps the port, both unset means no mapping. One without the
+// other cannot start, so submit rejects it, matching sdk.Builder.
+func validatePorts(host, container uint16) error {
+	if (host == 0) != (container == 0) {
+		return fmt.Errorf("both host_port and container_port must be specified together") //nolint:perfsprint // plain error, no wrap target
+	}
+	return nil
 }
 
 // validateHealth accepts action 0 (restart) or 1 (signal) and probe
