@@ -213,7 +213,7 @@ func dialHandshake(
 		if ctx.Err() != nil {
 			return nil, nil, fmt.Errorf("handshake %s: %w", addr, ctx.Err())
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("handshake %s: %w", addr, err)
 	}
 
 	// The handshake finished but the caller left while it ran: the
@@ -240,7 +240,7 @@ func dialHandshake(
 func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []byte) (*noiseConn, []byte, error) {
 	selfKey, err := toNoiseStatic(self)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("noise static key: %w", err)
 	}
 	var peerStatic [32]byte
 	if len(expectPub) != 32 {
@@ -260,12 +260,12 @@ func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []by
 
 	err = writeFrame(raw, msg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("noise write request frame: %w", err)
 	}
 
 	reply, err := readFrame(raw, handshakeFrameMax)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("noise read response frame: %w", err)
 	}
 
 	parcel, send, recv, err := hs.ReadResponse(reply)
@@ -299,7 +299,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 	}
 	selfKey, err := toNoiseStatic(static)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("noise static key: %w", err)
 	}
 
 	hs, err := noise.NewIKResponder([]byte(noisePrologue), selfKey)
@@ -309,7 +309,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 
 	msg, err := readFrame(raw, handshakeFrameMax)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("noise read request frame: %w", err)
 	}
 
 	payload, peerStatic, err := hs.ReadRequest(msg)
@@ -319,7 +319,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 
 	peerID, generation, sig, err := decodeParcel(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode initiator parcel: %w", err)
 	}
 
 	// The presented static key must be the membership-bound key for the
@@ -327,7 +327,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 	// before any reply bytes go out.
 	err = verify(peerID, generation, peerStatic[:], sig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verify initiator parcel %s: %w", peerID, err)
 	}
 
 	reply, send, recv, err := hs.WriteResponse(selfParcel)
@@ -337,7 +337,7 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 
 	err = writeFrame(raw, reply)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("noise write response frame: %w", err)
 	}
 
 	conn := &noiseConn{conn: raw, send: send, recv: recv}
@@ -501,7 +501,7 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 		}
 		frame, err := readFrame(c.conn, maxTransportFrame)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("noise read frame: %w", err)
 		}
 
 		plain, err := c.recv.Decrypt(nil, nil, frame)

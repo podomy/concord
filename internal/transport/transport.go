@@ -88,6 +88,11 @@ func Start(
 	return nil
 }
 
+// serverReadHeaderTimeout bounds first-request headers. Shared by the
+// HTTP server config and the post-handshake re-arm so the current Read
+// stays bounded after the handshake deadline clears.
+const serverReadHeaderTimeout = 5 * time.Second
+
 // newTransportServer builds the node-to-node HTTP server over Noise.
 // IdleTimeout mirrors the registry at 120s: every transport connection
 // is Noise-authenticated, so an idle keep-alive pins an authenticated
@@ -103,7 +108,7 @@ func newTransportServer(handler http.Handler) *http.Server {
 		// hit WriteTimeout and fail the page instead of stalling the
 		// connection. The offset index exists to keep the common path
 		// a seek plus a bounded page; timeout values stay frozen.
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -216,9 +221,10 @@ type deferredNoiseConn struct {
 }
 
 // ensure runs the responder handshake once and reports its outcome. The
-// deadline was preset by Accept; success clears it so HTTP I/O runs
-// unbounded by the handshake bound. Failure closes the raw conn and logs
-// the remote addr with a static failure class, never peer bytes.
+// deadline was preset by Accept; success re-arms the header bound so the
+// current Read stays bounded while http.Server manages the rest. Failure
+// closes the raw conn and logs the remote addr with a static failure
+// class, never peer bytes.
 func (c *deferredNoiseConn) ensure() error {
 	c.once.Do(func() {
 		conn, err := serveHandshake(c.raw, c.static, c.parcel, c.verify)
@@ -238,10 +244,10 @@ func (c *deferredNoiseConn) ensure() error {
 			return
 		}
 
-		err = c.raw.SetDeadline(time.Time{})
+		err = c.raw.SetDeadline(time.Now().Add(serverReadHeaderTimeout))
 		if err != nil {
 			_ = c.raw.Close() //nolint:errcheck // best-effort close on failed accept
-			c.handshakeErr = fmt.Errorf("clear handshake deadline: %w", err)
+			c.handshakeErr = fmt.Errorf("re-arm header deadline: %w", err)
 			return
 		}
 

@@ -180,6 +180,7 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 		DisableKeepAlives: true,
 	}
 	client := &http.Client{Timeout: c.getTimeout(), Transport: transport}
+	defer transport.CloseIdleConnections()
 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
@@ -207,7 +208,7 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 		return SyncResponse{}, fmt.Errorf("decode sync response: %w", err)
 	}
 	if err := validateSyncResponse(peer, resp, expectedCursor); err != nil {
-		return SyncResponse{}, err
+		return SyncResponse{}, fmt.Errorf("sync %s: %w", peer, err)
 	}
 	resp, _ = clampRegressiveCursor(expectedCursor, resp, c.logger)
 	c.noteDecodeSuccess()
@@ -340,7 +341,7 @@ func (c *Client) verifyResponder(expect Peer, raw []byte) error {
 	}
 	id, generation, sig, err := decodeParcel(raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode responder parcel: %w", err)
 	}
 
 	if id != expect.ID {
@@ -349,7 +350,7 @@ func (c *Client) verifyResponder(expect Peer, raw []byte) error {
 
 	err = c.verify(id, generation, expect.Pub, sig)
 	if err != nil {
-		return err
+		return fmt.Errorf("verify responder %s: %w", expect.ID, err)
 	}
 
 	return nil
