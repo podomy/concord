@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/podomy/concord/internal/journal"
 )
@@ -59,7 +60,7 @@ func getJournalPath() (string, error) {
 func OpenJSONLReader() (*JSONLReader, error) {
 	path, err := getJournalPath()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("journal path: %w", err)
 	}
 
 	return OpenJSONLReaderPath(path)
@@ -97,7 +98,9 @@ func (r *JSONLReader) Read(ctx context.Context) (*journal.Event, error) {
 // trailing newline it is the partial tail, so it is dropped and EOF is
 // reported: at most the torn line is lost, the prefix rebuilds. A
 // corrupt line in the middle of the file still errors loudly instead of
-// silently skipping history.
+// silently skipping history. Blank or whitespace-only lines are skipped:
+// they carry no event and arise from hand edits, so they never fail the
+// read or shift offsets for later lines.
 func (r *JSONLReader) ReadWithOffset(ctx context.Context) (*journal.Event, int64, error) {
 	select {
 	case <-ctx.Done():
@@ -105,30 +108,36 @@ func (r *JSONLReader) ReadWithOffset(ctx context.Context) (*journal.Event, int64
 	default:
 	}
 
-	if !r.scanner.Scan() {
-		serr := r.scanner.Err()
-		if serr != nil {
-			return nil, 0, fmt.Errorf("scan journal: %w", serr)
-		}
-		return nil, 0, io.EOF
-	}
-
-	text := r.scanner.Text()
-	start := r.offset
-	// One newline byte follows every line; the writer always appends it.
-	r.offset += int64(len(text)) + 1
-
-	var event journal.Event
-	err := json.Unmarshal([]byte(text), &event)
-	if err != nil {
-		if isTornTail(r.file, start, int64(len(text))) {
-			r.offset = start
+	for {
+		if !r.scanner.Scan() {
+			serr := r.scanner.Err()
+			if serr != nil {
+				return nil, 0, fmt.Errorf("scan journal: %w", serr)
+			}
 			return nil, 0, io.EOF
 		}
-		return nil, 0, fmt.Errorf("unmarshal journal event: %w", err)
-	}
 
-	return &event, start, nil
+		text := r.scanner.Text()
+		start := r.offset
+		// One newline byte follows every line; the writer always appends it.
+		r.offset += int64(len(text)) + 1
+
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+
+		var event journal.Event
+		err := json.Unmarshal([]byte(text), &event)
+		if err != nil {
+			if isTornTail(r.file, start, int64(len(text))) {
+				r.offset = start
+				return nil, 0, io.EOF
+			}
+			return nil, 0, fmt.Errorf("unmarshal journal event: %w", err)
+		}
+
+		return &event, start, nil
+	}
 }
 
 // isTornTail reports whether the line starting at start with bodyLen

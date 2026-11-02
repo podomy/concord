@@ -39,7 +39,8 @@ func (j *JSONL) Append(ctx context.Context, event Event) error {
 		return fmt.Errorf("marshal journal event: %w", err)
 	}
 
-	if _, err := j.file.Write(append(data, '\n')); err != nil {
+	_, err = j.file.Write(append(data, '\n'))
+	if err != nil {
 		return fmt.Errorf("write journal event: %w", err)
 	}
 
@@ -93,7 +94,7 @@ func TestGetJournalPath() (string, error) {
 func OpenJSONL() (*JSONL, error) {
 	path, err := getJournalPath()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("journal path: %w", err)
 	}
 
 	return OpenJSONLPath(path)

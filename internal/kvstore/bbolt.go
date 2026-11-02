@@ -60,7 +60,7 @@ func OpenDBPath(path string) (*KVStore, error) {
 func Open() (*KVStore, error) {
 	db, err := openDB()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open state database: %w", err)
 	}
 
 	return &KVStore{db: db}, nil
