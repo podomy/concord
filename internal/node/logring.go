@@ -49,6 +49,9 @@ type LogRing struct {
 	next    int
 	full    bool
 	stream  string
+	// dropped counts lines overwritten past the cap: backpressure made
+	// visible. Monotonic; the fast beat reports it on its debug line.
+	dropped uint64
 }
 
 // newLogRing creates an empty ring collecting one stream.
@@ -91,7 +94,8 @@ func (r *LogRing) lines() []LogLine {
 	return out
 }
 
-// add appends a line, overwriting the oldest once full.
+// add appends a line, overwriting the oldest once full and counting the
+// overwrite as dropped.
 func (r *LogRing) add(line LogLine) {
 	if len(r.pts) < logRingSize {
 		r.pts = append(r.pts, line)
@@ -101,6 +105,14 @@ func (r *LogRing) add(line LogLine) {
 	r.pts[r.next] = line
 	r.next = (r.next + 1) % logRingSize
 	r.full = true
+	r.dropped++
+}
+
+// Dropped reports lines overwritten past the cap.
+func (r *LogRing) Dropped() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.dropped
 }
 
 // truncateLine strips a trailing carriage return and caps length.
@@ -110,4 +122,17 @@ func truncateLine(line []byte) string {
 		line = line[:maxLogLineBytes]
 	}
 	return string(line)
+}
+
+// LogDropped totals overwritten log lines across all workload rings.
+// The reconciler's fast beat reports it on its periodic debug line so
+// backpressure stays visible without touching the log API.
+func (s *Sampler) LogDropped() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total uint64
+	for _, bundle := range s.logs {
+		total += bundle.stdout.Dropped() + bundle.stderr.Dropped()
+	}
+	return total
 }

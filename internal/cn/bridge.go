@@ -8,10 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/google/uuid"
 	"github.com/vishvananda/netlink"
+
+	"github.com/podomy/concord/internal/peerdiscovery"
 )
 
 const (
@@ -25,7 +31,19 @@ var (
 	// fails closed outside it so one node can never spill into another
 	// node's subnet and overlap container IPs.
 	nodeSubnet = netip.MustParsePrefix("10.0.0.0/24")
-	ipMu       sync.Mutex
+	// nodeSubnetIndex is the deterministic memberlist index SetNodeSubnet
+	// derived nodeSubnet from. The reconciler compares it against the
+	// live membership order every tick to detect subnet index drift.
+	nodeSubnetIndex int
+	ipMu            sync.Mutex
+	// freeIPs holds released container IPs ready for reuse. AllocateIP
+	// prefers them over advancing the cursor so destroy and recreate
+	// cycles reuse addresses instead of marching toward exhaustion.
+	freeIPs []netip.Addr
+	// usedIPs tracks live container IPs: sequential allocations plus
+	// adopted ones. The cursor skips them so a daemon restart that
+	// resets the cursor never hands out an adopted container's IP twice.
+	usedIPs = map[netip.Addr]struct{}{}
 )
 
 // Invariants
@@ -217,24 +235,124 @@ func BridgeExists() bool {
 
 // SetNodeSubnet configures the base container IP allocation pool for this node
 // using its deterministic cluster-wide subnet index (10.0.<index>.2 onwards).
+// It also records the index for drift detection and resets the free and
+// used sets: a new index owns a disjoint /24, so previous-pool state must
+// not carry over.
 func SetNodeSubnet(index int) {
 	ipMu.Lock()
 	defer ipMu.Unlock()
+	nodeSubnetIndex = index
 	nodeSubnet = netip.MustParsePrefix(fmt.Sprintf("10.0.%d.0/24", index))
 	nextContainerIP = netip.MustParseAddr(fmt.Sprintf("10.0.%d.2", index))
+	freeIPs = nil
+	usedIPs = map[netip.Addr]struct{}{}
+}
+
+// NodeSubnetIndex returns the deterministic memberlist index the node's
+// /24 was derived from at boot. The reconciler compares it against the
+// live order every tick; a mismatch is drift, never a re-pick.
+func NodeSubnetIndex() int {
+	ipMu.Lock()
+	defer ipMu.Unlock()
+	return nodeSubnetIndex
+}
+
+// SubnetIndexFor sorts members by ID string and returns nodeID's position.
+// It mirrors runtime's boot-time index so the reconciler can detect drift
+// without importing runtime (which would cycle: runtime imports cn).
+// Absence is an error, never a silent 0: two nodes on 10.0.0.0/24 would
+// hand out overlapping container IPs.
+func SubnetIndexFor(members []peerdiscovery.Node, nodeID uuid.UUID) (int, error) {
+	ordered := make([]peerdiscovery.Node, len(members))
+	copy(ordered, members)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].ID.String() < ordered[j].ID.String()
+	})
+	for i, m := range ordered {
+		if m.ID == nodeID {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("node %s not in member list (%d members)", nodeID, len(members))
 }
 
 // AllocateIP allocates an available IP address and returns that as a string of IP + CIDR.
-// It fails closed with an exhaustion error once the node's /24 is spent,
-// instead of spilling Next() into the next node's subnet and overlapping
-// container IPs across the cluster.
+// Freed IPs reuse first, then the cursor advances past used (adopted)
+// addresses. It fails closed with an exhaustion error once the node's /24
+// is spent, instead of spilling Next() into the next node's subnet and
+// overlapping container IPs across the cluster.
 func AllocateIP() (string, error) {
 	ipMu.Lock()
 	defer ipMu.Unlock()
-	if !nodeSubnet.Contains(nextContainerIP) {
-		return "", fmt.Errorf("node subnet %s exhausted, no address left at %s", nodeSubnet, nextContainerIP)
+	for len(freeIPs) > 0 {
+		ip := freeIPs[len(freeIPs)-1]
+		freeIPs = freeIPs[:len(freeIPs)-1]
+		if !nodeSubnet.Contains(ip) {
+			continue
+		}
+		if _, dup := usedIPs[ip]; dup {
+			continue
+		}
+		usedIPs[ip] = struct{}{}
+		return ip.String() + "/24", nil
 	}
-	ip := nextContainerIP
-	nextContainerIP = nextContainerIP.Next()
-	return ip.String() + "/24", nil
+	for nodeSubnet.Contains(nextContainerIP) {
+		if _, dup := usedIPs[nextContainerIP]; dup {
+			nextContainerIP = nextContainerIP.Next()
+			continue
+		}
+		ip := nextContainerIP
+		nextContainerIP = nextContainerIP.Next()
+		usedIPs[ip] = struct{}{}
+		return ip.String() + "/24", nil
+	}
+	return "", fmt.Errorf("node subnet %s exhausted, no free address left (cursor at %s): remove unused workloads or restart the node to reclaim addresses", nodeSubnet, nextContainerIP)
+}
+
+// ReleaseIP returns a container CIDR to the free pool for reuse. Unknown,
+// unparsable, or out-of-subnet CIDRs are ignored: cleanup paths call this
+// best-effort and must never fail container teardown on an IP parse.
+func ReleaseIP(cidr string) {
+	ip, ok := parsePoolAddr(cidr)
+	if !ok {
+		return
+	}
+	ipMu.Lock()
+	defer ipMu.Unlock()
+	if !nodeSubnet.Contains(ip) {
+		return
+	}
+	delete(usedIPs, ip)
+	if !slices.Contains(freeIPs, ip) {
+		freeIPs = append(freeIPs, ip)
+	}
+}
+
+// AdoptIP records an adopted container's CIDR as used so the cursor skips
+// it instead of handing it out twice. Unknown or out-of-subnet CIDRs are
+// ignored; adoption already warns those paths may leak on cleanup.
+func AdoptIP(cidr string) {
+	ip, ok := parsePoolAddr(cidr)
+	if !ok {
+		return
+	}
+	ipMu.Lock()
+	defer ipMu.Unlock()
+	if !nodeSubnet.Contains(ip) {
+		return
+	}
+	usedIPs[ip] = struct{}{}
+}
+
+// parsePoolAddr cuts the IP half off an IP/CIDR string for pool accounting.
+func parsePoolAddr(cidr string) (netip.Addr, bool) {
+	ipStr, _, ok := strings.Cut(cidr, "/")
+	if !ok {
+		return netip.Addr{}, false
+	}
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return ip, true
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -70,6 +71,8 @@ func isLeader(myID uuid.UUID, peerService MemberSource) bool {
 
 // scheduleWorkloads assigns unassigned workload specs (AssignedNodeID == uuid.Nil)
 // and reassigns orphaned specs whose owner is no longer alive to an alive node.
+// At most maxEvictionsPerTick preemptions happen per call; the rest wait
+// for the next tick so one arrival wave cannot evict the whole node.
 func scheduleWorkloads(
 	ctx context.Context,
 	logger *logs.Logger,
@@ -106,10 +109,12 @@ func scheduleWorkloads(
 	// first. The unassigned follow highest class first so important
 	// arrivals claim room before the best-effort crowd. Both orders are
 	// stable: view order decides within a class.
+	advanceEvictTick()
 	pending := pendingIndexes(specs, alive)
 	reserved := make(map[uuid.UUID]uint64)
+	evictions := 0
 	for _, i := range pending {
-		schedulePending(ctx, logger, j, views, nodeID, members, specs, reserved, i)
+		schedulePending(ctx, logger, j, views, nodeID, members, specs, reserved, i, &evictions)
 	}
 }
 
@@ -139,7 +144,8 @@ func pendingIndexes(specs []workload.Spec, alive map[uuid.UUID]struct{}) []int {
 
 // schedulePending assigns one unassigned spec or reassigns one orphan at
 // specs[i]. A fitting node takes it; a higher class with nowhere to fit
-// displaces one lower victim; anything else waits for the next tick.
+// displaces one lower victim while the per-tick eviction budget lasts;
+// anything else waits for the next tick.
 // Writes update specs in place so later candidates in the same tick see
 // earlier placements.
 func schedulePending(
@@ -152,13 +158,20 @@ func schedulePending(
 	specs []workload.Spec,
 	reserved map[uuid.UUID]uint64,
 	i int,
+	evictions *int,
 ) {
 	spec := &specs[i]
 	initial := spec.AssignedNodeID == uuid.Nil
 
 	chosenMember, ok := pickNode(members, *spec, reserved)
 	if !ok {
+		if *evictions >= maxEvictionsPerTick {
+			logger.Debug("preemption budget spent, leaving for next tick",
+				logs.String("workload_id", spec.ID.String()))
+			return
+		}
 		if tryPreempt(ctx, logger, j, views, nodeID, members, specs, reserved, i) {
+			*evictions++
 			return
 		}
 		logger.Debug("no node fits workload, leaving for next tick",
@@ -180,15 +193,66 @@ func schedulePending(
 	recordAssignment(ctx, logger, j, views, nodeID, *spec, "workload.spec reassigned")
 }
 
+// maxEvictionsPerTick caps preemption evictions per scheduler tick. One
+// eviction frees one victim's request, which the arrival claims on the
+// next tick; allowing more would let one arrival wave evict a whole node
+// before any freed request counts. The rest wait for later ticks.
+const maxEvictionsPerTick = 1
+
+// evictCooldownTicks bars an evicted workload from re-eviction for this
+// many scheduler ticks. An evicted workload is unassigned, so it cannot
+// be a victim again until it is placed and running; the cooldown covers
+// the flapping window where it oscillates between nodes.
+const evictCooldownTicks = 3
+
+// evictTracker clocks scheduler ticks and remembers recent evictions so
+// the same workload is not re-evicted while it flaps. Keyed by workload
+// ID, so parallel unit tests with fresh IDs never interfere. All access
+// holds the mutex; scheduleWorkloads runs single-threaded.
+var evictTracker = struct {
+	sync.Mutex
+	tick uint64
+	last map[uuid.UUID]uint64
+}{last: make(map[uuid.UUID]uint64)}
+
+// advanceEvictTick moves the scheduler clock one tick and prunes expired
+// cooldowns. Call once per scheduleWorkloads.
+func advanceEvictTick() {
+	evictTracker.Lock()
+	defer evictTracker.Unlock()
+	evictTracker.tick++
+	for id, at := range evictTracker.last {
+		if evictTracker.tick-at >= evictCooldownTicks {
+			delete(evictTracker.last, id)
+		}
+	}
+}
+
+// onEvictCooldown reports whether id was evicted within the cooldown.
+func onEvictCooldown(id uuid.UUID) bool {
+	evictTracker.Lock()
+	defer evictTracker.Unlock()
+	_, ok := evictTracker.last[id]
+	return ok
+}
+
+// recordEviction stamps id with the current tick.
+func recordEviction(id uuid.UUID) {
+	evictTracker.Lock()
+	defer evictTracker.Unlock()
+	evictTracker.last[id] = evictTracker.tick
+}
+
 // tryPreempt displaces one lower-class running workload to make room for
 // the unplaceable spec at specs[i]. It scans live assigned specs for the
 // lowest class whose freed request covers the deficit on its node, writes
 // that victim's unassignment (empty node, epoch plus one), and leaves the
 // arrival for the next tick, when the freed request counts. Single
 // victim, strictly downward, so displacement terminates; equal classes
-// keep first-come-first-served. Memory math is approximate: node free is
-// real usage, requests are reservations, and the overlap drains as the
-// victim stops. It reports whether it evicted.
+// keep first-come-first-served. Victims on eviction cooldown are skipped.
+// Memory math is approximate: node free is real usage, requests are
+// reservations, and the overlap drains as the victim stops. It reports
+// whether it evicted.
 func tryPreempt(
 	ctx context.Context,
 	logger *logs.Logger,
@@ -206,14 +270,17 @@ func tryPreempt(
 	}
 
 	victim := -1
+	var victimSpec *workload.Spec
 	for j := range specs {
+		if onEvictCooldown(specs[j].ID) {
+			continue
+		}
 		if !victimCovers(members, &specs[j], arrival, reserved) {
 			continue
 		}
-		candidate := &specs[j]
-		if victim < 0 || candidate.QoS.Rank() < specs[victim].QoS.Rank() ||
-			(candidate.QoS.Rank() == specs[victim].QoS.Rank() && candidate.Resources.MemoryMB > specs[victim].Resources.MemoryMB) {
+		if victim < 0 || isBetterVictim(&specs[j], victimSpec) {
 			victim = j
+			victimSpec = &specs[j]
 		}
 	}
 	if victim < 0 {
@@ -221,10 +288,21 @@ func tryPreempt(
 	}
 
 	evicted := &specs[victim]
+	recordEviction(evicted.ID)
 	evicted.AssignedNodeID = uuid.Nil
 	evicted.AssignmentEpoch++
 	recordAssignment(ctx, logger, j, views, nodeID, *evicted, "workload.spec preempted")
 	return true
+}
+
+// isBetterVictim reports whether candidate displaces current as the
+// eviction victim: strictly lower class wins; within a class the larger
+// request frees more room.
+func isBetterVictim(candidate, current *workload.Spec) bool {
+	if candidate.QoS.Rank() != current.QoS.Rank() {
+		return candidate.QoS.Rank() < current.QoS.Rank()
+	}
+	return candidate.Resources.MemoryMB > current.Resources.MemoryMB
 }
 
 // victimCovers reports whether a live spec assigned to an alive node may
@@ -309,14 +387,31 @@ func recordAssignment(ctx context.Context, logger *logs.Logger, j journal.Journa
 
 // pickNode selects the alive peer with the lowest pressure that fits the
 // workload's memory request minus this tick's reservations, preferring
-// healthy peers; fewest running workloads breaks pressure ties. It
+// healthy peers; fewest running workloads breaks pressure ties, and the
+// lowest node ID string breaks the rest so the choice is deterministic
+// across observers regardless of member order. Non-alive members never
+// place: initial assignments and orphan reassignments alike wait for an
+// alive node instead of stranding a workload where it cannot run. It
 // reports false when no member fits, and the caller leaves the spec for
 // the next tick instead of placing where it cannot run.
+//
+// Placement policy, kept stable: a measured node is preferred at any
+// load, even 95 percent, over an unknown-pressure (fresh-boot gossip
+// trio all zero) node; unknown nodes deprioritize but never exclude, so
+// a fleet of only unknowns still places by workload count. Unknown
+// capacity (MemoryMB 0) never blocks: missing data must not strand
+// workloads. There are no taints or tolerations yet: pressure steers,
+// fit gates, nothing else filters.
 func pickNode(members []peerdiscovery.Node, spec workload.Spec, reserved map[uuid.UUID]uint64) (peerdiscovery.Node, bool) {
 	var best peerdiscovery.Node
 	found := false
 
 	for _, member := range members {
+		// Liveness gates every placement, not just orphans: a dead or
+		// suspect node cannot run the workload however empty it looks.
+		if member.State != peerdiscovery.NodeStateAlive {
+			continue
+		}
 		if !fitsMemory(member, spec.Resources.MemoryMB, reserved[member.ID]) {
 			continue
 		}
@@ -334,11 +429,13 @@ func pickNode(members []peerdiscovery.Node, spec workload.Spec, reserved map[uui
 
 // prefersNode reports whether member beats best under the placement
 // order: alive over non-alive, known pressure over unknown, lowest
-// pressure, fewest workloads. An all-zero CPU/Mem/Disk triple means
+// pressure, fewest workloads, lowest node ID string. An all-zero CPU/Mem/Disk triple means
 // fresh-boot gossip with no samples yet: it deprioritizes below any
 // measured node but never excludes, so unknown nodes still place when
 // they are the only candidates. If all candidates are unknown, pressure
-// ties and the workload count decides among them.
+// ties and the workload count decides among them. The final ID tiebreak
+// keeps the pick identical for every observer even when memberlists
+// arrive in different orders.
 func prefersNode(member, best peerdiscovery.Node) bool {
 	if member.State == peerdiscovery.NodeStateAlive && best.State != peerdiscovery.NodeStateAlive {
 		return true
@@ -355,7 +452,10 @@ func prefersNode(member, best peerdiscovery.Node) bool {
 	if memberPressure != bestPressure {
 		return memberPressure < bestPressure
 	}
-	return member.Metadata.Workloads < best.Metadata.Workloads
+	if member.Metadata.Workloads != best.Metadata.Workloads {
+		return member.Metadata.Workloads < best.Metadata.Workloads
+	}
+	return member.ID.String() < best.ID.String()
 }
 
 // isUnknownPressure reports whether the gossip trio carries no samples

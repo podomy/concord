@@ -148,20 +148,26 @@ func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (
 	}
 	addr, err := netlink.ParseAddr(ipAndCIDRString)
 	if err != nil {
+		// The IP is allocated but unusable: return it before the veth
+		// cleanup so a failed setup does not burn one address per tick.
+		ReleaseIP(ipAndCIDRString)
 		return nil, "", failVeth("netlink parse addr", vethA, err)
 	}
 	err = netlink.AddrAdd(vethBLink, addr)
 	if err != nil {
+		ReleaseIP(ipAndCIDRString)
 		return nil, "", failVeth("netlink addr add", vethA, err)
 	}
 
 	err = netlink.LinkSetUp(vethBLink)
 	if err != nil {
+		ReleaseIP(ipAndCIDRString)
 		return nil, "", failVeth("link set up B", vethA, err)
 	}
 
 	err = netlink.LinkSetNsPid(vethBLink, namespacePID)
 	if err != nil {
+		ReleaseIP(ipAndCIDRString)
 		return nil, "", failVeth("link set ns pid", vethA, err)
 	}
 

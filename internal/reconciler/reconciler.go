@@ -266,6 +266,48 @@ func drainExitEvents(
 	}
 }
 
+// detectSubnetDrift compares the live membership order's subnet index
+// against the boot-time index and warns on mismatch. The index stays
+// sticky: no auto-migration, no restart, no bridge change, so overlapping
+// /24s can never flap into existence mid-tick. The operator action is a
+// node restart, which re-picks the index and lets CreateBridge reconcile
+// stale gateway addrs on boot. A missing or failing member list skips
+// quietly: uncertainty never warns.
+func detectSubnetDrift(logger *logs.Logger, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) {
+	if peerService == nil {
+		return
+	}
+	members, err := peerService.Members()
+	if err != nil {
+		logger.Debug("subnet drift check skipped, members failed", logs.Error(err))
+		return
+	}
+	drifted, current, active, err := checkSubnetDrift(members, nodeID)
+	if err != nil {
+		logger.Debug("subnet drift check skipped, self absent", logs.Error(err))
+		return
+	}
+	if drifted {
+		logger.Warn("subnet index drift: membership now selects index, node keeps boot index; restart the node to re-pick its /24",
+			logs.Int("current_index", current),
+			logs.Int("active_index", active),
+			logs.String("node_id", nodeID.String()),
+		)
+	}
+}
+
+// checkSubnetDrift compares the live membership order's subnet index
+// against the boot-time index. It reports drift plus both indexes. Self
+// absent from the list is an error, not drift: uncertainty never warns.
+func checkSubnetDrift(members []peerdiscovery.Node, nodeID uuid.UUID) (bool, int, int, error) {
+	active := cn.NodeSubnetIndex()
+	current, err := cn.SubnetIndexFor(members, nodeID)
+	if err != nil {
+		return false, 0, active, fmt.Errorf("subnet index: %w", err)
+	}
+	return current != active, current, active, nil
+}
+
 // bridgeReady probes the cn0 bridge. A var so unit tests stub it without
 // root; production uses cn.BridgeExists.
 var bridgeReady = cn.BridgeExists
@@ -294,6 +336,11 @@ func reconcileTick(
 		logger.Debug("container bridge missing, skipping tick")
 		return
 	}
+
+	// Subnet index is sticky: membership churn never re-picks it. Detect
+	// drift every tick and warn; the operator restarts the node to
+	// re-pick. See detectSubnetDrift.
+	detectSubnetDrift(logger, nodeID, peerService)
 
 	workloadSpecs, err := workloadsView.List(ctx)
 	if err != nil {
@@ -603,11 +650,23 @@ func specDrifted(old, next workload.Spec) bool {
 
 // handleExitedEntry processes an exited entry and reports whether to
 // start a fresh container now. An explicit spec update (image, ports,
-// files, or resources) drops policy and backoff: the operator ordered a
-// new spec, and the old container already exited and cleaned up.
-// Otherwise the restart policy decides.
+// files, or resources) drops policy but keeps the backoff: the operator
+// ordered a new spec, so a Never policy still restarts on the new image,
+// but the normal cooldown still paces a hot crash loop. Otherwise
+// the restart policy decides.
 func handleExitedEntry(entry *ContainerAndProcess, spec workload.Spec, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) bool {
 	if specDrifted(entry.Spec, spec) {
+		// Drift restarts ride the same cooldown as normal restarts.
+		// Without this a crash-looping workload that also drifted
+		// would bypass backoff on every tick.
+		//
+		// Limitation: drift compares image references as strings.
+		// PullResult carries config plus rootfs, no manifest digest,
+		// so a :latest tag that moves upstream without a spec change
+		// is not detected. Pin digests to catch upstream moves.
+		if entry.restartAfter.After(clock.Now()) {
+			return false
+		}
 		delete(running, spec.ID)
 		peerService.SetWorkloadCount(countRunning(running))
 		return true
@@ -680,6 +739,9 @@ func setupContainerNetwork(
 		if linkErr := cn.DeleteLink(cn.VethHostName(spec.ID.String(), cn.VethA)); linkErr != nil {
 			logger.Error("delete veth link on port mapping failure", logs.Error(linkErr))
 		}
+		// The veth address was allocated above: return it so a
+		// port-mapping failure does not burn one address per tick.
+		cn.ReleaseIP(ipAndCIDRstring)
 		delete(ipAndCIDRs, spec.ID)
 		cleanupContainerStartFailure(logger, ctr, processHandle)
 		return fmt.Errorf("add port mapping: %w", err)
@@ -924,6 +986,12 @@ func cleanupContainerResources(
 	}
 
 	removeEntryPortMapping(ctx, logger, entry, ipAndCIDRs)
+	// Return the container IP to the pool for reuse. Runs on every exit
+	// path so destroy and recreate cycles converge instead of marching
+	// the cursor toward exhaustion.
+	if cidr, ok := ipAndCIDRs[id]; ok {
+		cn.ReleaseIP(cidr)
+	}
 	delete(ipAndCIDRs, id)
 
 	if entry.Container != nil {
@@ -1223,6 +1291,7 @@ func retryAdopts(
 			continue
 		}
 		if spec == nil || spec.Removed || spec.AssignedNodeID != nodeID {
+			logger.Warn("dropping pending adopt, spec reassigned or removed", logs.String("id", id.String()))
 			delete(pending, id)
 			continue
 		}
@@ -1272,5 +1341,8 @@ func adoptPortMapping(ctx context.Context, logger *logs.Logger, spec workload.Sp
 			logs.Error(err))
 		return
 	}
+	// The rediscovered IP belongs to a live container: mark it used so
+	// the cursor skips it instead of handing it out twice.
+	cn.AdoptIP(cidr)
 	ipAndCIDRs[spec.ID] = cidr
 }

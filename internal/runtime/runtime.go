@@ -7,13 +7,14 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
-	"sort"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/certs"
 	"github.com/podomy/concord/internal/cn"
 	"github.com/podomy/concord/internal/cr"
@@ -52,8 +53,22 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	defer teardownNetworking(logger) //nolint:contextcheck // shutdown runs after ctx is done; teardown stays detached on purpose
 	defer closeStores(logger, st)
 
+	// Child ctx plus waitgroup own every background loop below. Loops
+	// read runCtx so Run can cancel them on every exit path, and the
+	// waitgroup drains them before teardown closes their stores: the
+	// ordered drain runs first (latest defer), teardown after (earlier
+	// defers). The plain runCancel backstop runs last and stays
+	// idempotent for paths that return before the drain registers.
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+	var bg sync.WaitGroup
+	abort := func() {
+		runCancel()
+		waitBackground(logger, &bg)
+	}
+
 	eventsByID, _, workloads, pinned, views, err := setupViews(
-		ctx,
+		runCtx,
 		st.kv,
 	)
 	if err != nil {
@@ -68,7 +83,7 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	}
 
 	stopMDNS, err := startMDNSAdvertise(
-		ctx,
+		runCtx,
 		logger,
 		nodeConfig,
 	)
@@ -111,18 +126,23 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	// is active, it re-queries mDNS and anchors for new
 	// candidates and calls Join. Without the loop a node
 	// that booted alone would never discover later peers.
-	go peerdiscovery.ObserveMemberlistPeers(
-		ctx,
-		logger,
-		nodeConfig.ID,
-		peerService,
-		st.journal,
-		views,
-	)
-	go runDiscoveryLoop(ctx, logger, peerService, nodeConfig.Anchors, sampler)
+	goBackground(&bg, func() {
+		peerdiscovery.ObserveMemberlistPeers(
+			runCtx,
+			logger,
+			nodeConfig.ID,
+			peerService,
+			st.journal,
+			views,
+		)
+	})
+	goBackground(&bg, func() {
+		runDiscoveryLoop(runCtx, logger, peerService, nodeConfig.Anchors, sampler)
+	})
 
-	err = dnsserver.Start(ctx, peerService, logger, "")
+	err = dnsserver.Start(runCtx, peerService, logger, "")
 	if err != nil {
+		abort()
 		return fmt.Errorf(
 			"dns server start failed: %w",
 			err,
@@ -130,29 +150,29 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	}
 	logger.Info("DNS server started")
 
-	client, err := setupSyncTransport(ctx, logger, *nodeConfig, staticKey, noiseIdentity, st.journal, views, pinned, st.kv)
+	client, err := setupSyncTransport(runCtx, logger, *nodeConfig, staticKey, noiseIdentity, st.journal, views, pinned, st.kv)
 	if err != nil {
+		abort()
 		return err
 	}
-	// Reconciliation loop: pull peers and apply events into
-	// local journal/views. Cursors persist in the kv store so
-	// restarts resume mid-history.
-	go peersync.RunPullLoop(
-		ctx,
-		logger,
-		nodeConfig.ID,
-		peerService,
-		client,
-		st.journal,
-		views,
-		eventsByID,
-		peersync.NewCursorStore(st.kv),
-	)
+	goBackground(&bg, func() {
+		peersync.RunPullLoop(
+			runCtx,
+			logger,
+			nodeConfig.ID,
+			peerService,
+			client,
+			st.journal,
+			views,
+			eventsByID,
+			peersync.NewCursorStore(st.kv),
+		)
+	})
 	logger.Info("peer sync pull loop started")
 
 	// Start the workload infrastructure and network.
 	ocireg, err := startWorkloadAndNetwork(
-		ctx,
+		runCtx,
 		nodeConfig.ID,
 		peerService,
 		logger,
@@ -161,8 +181,10 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		views,
 		wgKey,
 		sampler,
+		&bg,
 	)
 	if err != nil {
+		abort()
 		return fmt.Errorf(
 			"start workload and network: %w",
 			err,
@@ -180,16 +202,17 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		logger,
 		sampler,
 	)
-	if err := ipcServer.Start(ctx, ""); err != nil {
+	if err := ipcServer.Start(runCtx, ""); err != nil {
+		abort()
 		return fmt.Errorf("start local ipc server: %w", err)
 	}
-	defer shutdownIPCServer(ctx, logger, ipcServer)
+	defer shutdownIPCServer(runCtx, logger, ipcServer)
 
 	// Record boot only after keys, peer, transport, registry, reconciler,
 	// network, and IPC are all up, so a failed boot leaves no phantom
 	// node.started behind for the fleet to observe.
 	err = journalview.RecordNodeStarted(
-		ctx,
+		runCtx,
 		logger,
 		st.journal,
 		views,
@@ -197,8 +220,13 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		nodeConfig.MemberlistAddress,
 	)
 	if err != nil {
+		abort()
 		return fmt.Errorf("record node started: %w", err)
 	}
+
+	// Ordered drain registered last so it runs first on return: cancel
+	// the child ctx, wait for owned loops, then earlier teardowns run.
+	defer abort()
 
 	// Block until the OS delivers a shutdown signal.
 	<-ctx.Done()
@@ -296,6 +324,53 @@ func setupNetwork(ctx context.Context, nodeIndex int) error {
 	return nil
 }
 
+// bgDrainTimeout bounds the post-cancel wait for owned background loops
+// on Run exit. Loops all select on the child ctx, so the bound only
+// bites a stuck loop; expiry warns and proceeds with teardown rather
+// than hanging shutdown forever.
+const bgDrainTimeout = 10 * time.Second
+
+// goBackground tracks one owned background loop: Add before start so a
+// concurrent drain cannot miss it. bg must be non-nil.
+func goBackground(bg *sync.WaitGroup, fn func()) {
+	bg.Go(fn)
+}
+
+// waitBackground drains owned loops after cancel, warning past the bound
+// instead of hanging shutdown on a stuck loop.
+func waitBackground(logger *logs.Logger, bg *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		bg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(bgDrainTimeout):
+		logger.Warn("background loops did not drain, proceeding with teardown")
+	}
+}
+
+// syncerIface is the blob sync surface runtime manages: the run loop,
+// miss nudges (via reconciler.BlobEnsurer), and cursor persistence. A
+// narrow interface, not *peersync.BlobSyncer, so tests stub the syncer
+// without a mesh.
+type syncerIface interface {
+	reconciler.BlobEnsurer
+	Run(context.Context)
+	AttachCursorStore(*kvstore.KVStore)
+}
+
+// newBlobSyncer builds the production blob syncer. A var so the startup
+// leak test substitutes a fake and asserts it stops on failure.
+var newBlobSyncer = func(store *blob.Store, members *peerdiscovery.MemberService, logger *logs.Logger) syncerIface {
+	return peersync.New(store, members, logger)
+}
+
+// newContainerRuntime builds the container runtime. A var so the startup
+// leak test fails it and asserts the registry and syncer release.
+var newContainerRuntime = cr.NewRuntime
+
 // startWorkloadInfrastructure starts the local blob store before the
 // reconciler. Pulls must never run before the store serves; blob sync
 // starts here after the registry, before the reconciler.
@@ -308,6 +383,7 @@ func startWorkloadInfrastructure(
 	workloads *journalview.Workloads,
 	views []journalview.View,
 	sampler *node.Sampler,
+	bg *sync.WaitGroup,
 ) (*registry.Registry, error) {
 	// Start the OCI registry.
 	ocireg, err := startOCIRegistry(
@@ -324,41 +400,56 @@ func startWorkloadInfrastructure(
 		logs.Int("port", registry.Port),
 	)
 
+	// Every error return past the registry start releases the registry and stops the syncer: a failed boot must not leak the listener or
+	// the sync goroutine. The sync child ctx follows the caller ctx on the success path; explicit syncCancel covers errors.
+	syncCtx, syncCancel := context.WithCancel(ctx)
+	failed := true
+	//nolint:contextcheck // failure-path cleanup runs detached: Stop owns a 5s shutdown timeout and the caller ctx may already be cancelled
+	defer func() {
+		if failed {
+			syncCancel()
+			ocireg.Stop()
+		}
+	}()
+
 	// Start blob sync after the registry store exists. A nil member
 	// service (tests) skips sync; otherwise Run stops on ctx cancel.
 	// The syncer is also wired into the reconciler miss path so a
 	// missing blob nudges a fetch now instead of waiting for the
 	// background tick; the start still fails and retries next tick.
 	if peerService != nil {
-		syncer := peersync.New(ocireg.Store(), peerService, logger)
+		syncer := newBlobSyncer(ocireg.Store(), peerService, logger)
 		if st != nil {
 			syncer.AttachCursorStore(st.kv)
 		}
 		reconciler.SetBlobEnsurer(syncer)
-		go syncer.Run(ctx)
+		goBackground(bg, func() { syncer.Run(syncCtx) })
 		logger.Info("blob sync started")
 	}
 
 	// Start the workload reconciler loop.
 	puller := cr.NewImagePuller()
-	crRuntime, err := cr.NewRuntime()
+	crRuntime, err := newContainerRuntime()
 	if err != nil {
 		return nil, fmt.Errorf("container runtime: %w", err)
 	}
-	go reconciler.RunLoop(
-		ctx,
-		logger,
-		nodeID,
-		puller,
-		crRuntime,
-		st.journal,
-		workloads,
-		views,
-		peerService,
-		sampler,
-	)
+	goBackground(bg, func() {
+		reconciler.RunLoop(
+			ctx,
+			logger,
+			nodeID,
+			puller,
+			crRuntime,
+			st.journal,
+			workloads,
+			views,
+			peerService,
+			sampler,
+		)
+	})
 	logger.Info("workload reconciler started")
 
+	failed = false
 	return ocireg, nil
 }
 
@@ -372,6 +463,7 @@ func startWorkloadAndNetwork(
 	views []journalview.View,
 	wgKey cn.Key,
 	sampler *node.Sampler,
+	bg *sync.WaitGroup,
 ) (*registry.Registry, error) {
 	// Network before workloads: the reconciler pulls and creates
 	// containers that need cn0, veth pairs, and masquerade on their first
@@ -401,6 +493,7 @@ func startWorkloadAndNetwork(
 		workloads,
 		views,
 		sampler,
+		bg,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -410,14 +503,16 @@ func startWorkloadAndNetwork(
 	}
 
 	// Start WireGuard tunnel manager loop.
-	go cn.RunTunnelManager(
-		ctx,
-		logger,
-		peerService,
-		nodeID,
-		wgKey,
-		cn.DefaultWGPort,
-	)
+	goBackground(bg, func() {
+		cn.RunTunnelManager(
+			ctx,
+			logger,
+			peerService,
+			nodeID,
+			wgKey,
+			cn.DefaultWGPort,
+		)
+	})
 
 	return ocireg, nil
 }
@@ -437,20 +532,16 @@ func nodeIndex(
 		return 0, fmt.Errorf("peerservice members: %w", err)
 	}
 
-	// Sort the members in ascending order.
-	sort.Slice(members, func(i, j int) bool {
-		return members[i].ID.String() < members[j].ID.String()
-	})
-
-	// Find ourselves in the list and then return the index. Absence is an
-	// error, never a silent 0: two nodes on subnet 10.0.0.0/24 would hand
-	// out overlapping container IPs.
-	for i, m := range members {
-		if m.ID == nodeID {
-			return i, nil
-		}
+	// Sort the members in ascending order and find ourselves through the
+	// shared helper. Absence is an error, never a silent 0: two nodes on
+	// subnet 10.0.0.0/24 would hand out overlapping container IPs. The
+	// helper keeps the boot pick and the reconciler's drift check on one
+	// order.
+	idx, err := cn.SubnetIndexFor(members, nodeID)
+	if err != nil {
+		return 0, fmt.Errorf("subnet index: %w", err)
 	}
-	return 0, fmt.Errorf("node %s not in member list (%d members)", nodeID, len(members))
+	return idx, nil
 }
 
 func startTransport(

@@ -89,29 +89,34 @@ func NewSampler() *Sampler {
 
 // SampleHost reads /proc/stat, /proc/meminfo, and disk usage, and returns
 // the node trio. The first call establishes the CPU baseline and reports
-// CPU 0; memory and disk report immediately.
+// CPU 0; memory and disk report immediately. Each source is best-effort
+// and independent: a failed source keeps its previous reading while the
+// others still update, so one broken input never blinds the scheduler to
+// the rest. Only when all three fail does SampleHost return an error.
 func (s *Sampler) SampleHost() (HostPressure, error) {
-	times, err := readCPUTimes()
-	if err != nil {
-		return HostPressure{}, err
-	}
-	mem, err := readMemPercent()
-	if err != nil {
-		return HostPressure{}, err
-	}
-	disk, err := readDiskPercent()
-	if err != nil {
-		return HostPressure{}, err
+	times, cpuErr := readCPUTimes()
+	mem, memErr := readMemPercent()
+	disk, diskErr := readDiskPercent()
+	if cpuErr != nil && memErr != nil && diskErr != nil {
+		return HostPressure{}, fmt.Errorf("host sample sources failed: %w", errors.Join(cpuErr, memErr, diskErr))
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pressure := HostPressure{Mem: mem, Disk: disk}
-	if s.haveHost {
-		pressure.CPU = cpuPercent(s.lastCPU, times)
+	pressure := HostPressure{Mem: s.last.Mem, Disk: s.last.Disk, CPU: s.last.CPU}
+	if memErr == nil {
+		pressure.Mem = mem
 	}
-	s.lastCPU = times
-	s.haveHost = true
+	if diskErr == nil {
+		pressure.Disk = disk
+	}
+	if cpuErr == nil {
+		if s.haveHost {
+			pressure.CPU = cpuPercent(s.lastCPU, times)
+		}
+		s.lastCPU = times
+		s.haveHost = true
+	}
 	s.last = pressure
 	return pressure, nil
 }
@@ -318,12 +323,22 @@ func percentOf(a, b uint64) uint8 {
 }
 
 // cpuPercent returns 100*(1-idleDelta/totalDelta) clamped to 0-100.
+// Deltas saturate instead of wrapping: counters read at different times
+// can step back inconsistently, and idle can never exceed total, so an
+// inverted pair clamps to 0 busy instead of underflowing to 100 percent.
 func cpuPercent(before, after cpuTimes) uint8 {
 	if after.total <= before.total {
 		return 0
 	}
-	busy := (after.total - before.total) - (after.idle - before.idle)
-	return percentOf(busy, after.total-before.total)
+	totalDelta := after.total - before.total
+	var idleDelta uint64
+	if after.idle > before.idle {
+		idleDelta = after.idle - before.idle
+	}
+	if idleDelta > totalDelta {
+		idleDelta = totalDelta
+	}
+	return percentOf(totalDelta-idleDelta, totalDelta)
 }
 
 // readCPUTimes parses the aggregate cpu line of /proc/stat.
