@@ -402,3 +402,12 @@ No history, no replay, late duplicates harmless by construction. The
 journal is the opposite, total history with deterministic replay, which
 is exactly what coordination needs and exactly what telemetry would
 drown in.
+
+Event authorship posture. Journal events ride connections authenticated
+by Noise, but events themselves carry no per-event signature: a member
+holding fleet credentials can hand-write any NodeID into a line it
+appends or serves. The mitigation is membership-level, not per-line:
+pins plus generation keep a stolen key from forking identity silently,
+and hand-written lines still converge through the same view rules.
+Explicit revocation (deny lists beyond pinning) is future work; the
+assumption is a single-tenant fleet where members are mutually trusted.

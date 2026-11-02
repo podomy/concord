@@ -124,6 +124,12 @@ Size, secrets, garbage: documented, not solved
   cleanup is operator-owned like track rotation and journal archival.
   Store-side collection is a later lever with numbers behind it.
 
+Blob transport posture. File and image bytes move as plaintext HTTP on
+the mesh port between members; integrity comes from digest
+verification on receipt, not from the channel. Confidentiality is an
+assumption, not a mechanism: it rests on physical and network trust in
+the fleet LAN, so the posture is fleet-only by design.
+
 The closed storage list
 
 There are exactly four durable things: the journal (small state,

@@ -6,6 +6,32 @@ Unreleased
   /dev used to reach the cgroup program and fail compilation for
   every container on that host. Pinned by test.
 
+- Container layers verify before extract: digests check on download
+  and each tar entry screens (absolute paths, escapes, symlinks,
+  devices, size caps) before write. Pinned by test.
+- Registry pulls stream with single-pass verification: bytes hash
+  while writing, so a large blob never sits in daemon memory, and
+  tag overwrites stay visible instead of silently winning. Pinned
+  by test.
+- Blob sync resumes mid-blob: per-peer cursors persist in bbolt and
+  only advance, raw fetches obey the 32MB cap, and tag state stays
+  coherent across ticks. Pinned by test.
+- Discovery skips bad members with a warning instead of stalling:
+  unparsable gossip entries and cert or DNS misconfigurations fail
+  loudly at the edge and never break the join loop. Pinned by test.
+- Transport dials honor context and sync validates strictly:
+  cancelled dials abort the handshake, and oversized or malformed
+  sync bodies reject before apply. Pinned by test.
+- Runtime starts in dependency order and stops leaking: networking
+  and stores come up before the reconciler, and bridge, NAT, and
+  sampler goroutines release on shutdown. Pinned by test.
+- Submits validate before commit: unknown fields, bad restart
+  policies, negative memory, bad probes and ports, bad file
+  pointers, self-dependencies, and cycles all fail with 400, and
+  invalid synced lines skip instead of breaking replay. Torn
+  journal tails (crash between write and newline) drop at most one
+  line and rebuild the committed prefix. Pinned by test.
+
 v1.1.1 (2026-10-16)
 
 Containers now start end to end. A nodev bundle directory used to

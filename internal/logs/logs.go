@@ -25,7 +25,7 @@ const (
 	ErrorLevel Level = Level(slog.LevelError)
 )
 
-// Attr is a structured log field, mirroring zap.Field in shape.
+// Attr is a structured log field.
 type Attr = slog.Attr
 
 // String builds a string-valued Attr.
@@ -65,12 +65,12 @@ func Bool(key string, val bool) Attr {
 
 // Error builds an error-valued Attr keyed "error". The error stays
 // structured instead of being flattened. A nil error records an explicit
-// null; zap skipped the field, and this difference is accepted.
+// null; the previous logger skipped the field, and this difference is accepted.
 func Error(err error) Attr {
 	return slog.Any("error", err)
 }
 
-// Logger is a JSON slog logger with zap-shaped convenience methods.
+// Logger is a JSON slog logger with short convenience methods.
 type Logger struct {
 	inner *slog.Logger
 	name  string
@@ -134,11 +134,11 @@ func (l *Logger) With(attrs ...Attr) *Logger {
 	return &Logger{inner: l.inner.With(toAny(attrs)...), name: l.name}
 }
 
-// Named returns a logger tagged with a logger name, mirroring zap.Named:
+// Named returns a logger tagged with a logger name:
 // the name rides as a single logger field on every entry. Chained names
 // join with a dot, so Named("a") then Named("b") renders logger "a.b".
 // A user field keyed "logger" collides as before: both keys are emitted
-// and the last one wins, matching zap behavior.
+// and the last one wins, as before.
 func (l *Logger) Named(name string) *Logger {
 	if l == nil || l.inner == nil {
 		return NewNop().Named(name)

@@ -84,6 +84,10 @@ Key rotation means deleting secret.key, bumping noise/generation, and restarting
 
 Peers pin the first valid key they see for each node ID. A different key at the same generation is rejected with a warning and the pin sticks, which is how partial state loss (new key, old counter) surfaces instead of silently splitting the fleet. Recover by bumping the generation, an intentional act.
 
+CA Expiry and Rotation
+
+CA lifetime is 10 years from minting, shared fleet-wide so expiry is correlated. Startup warns within 30 days of NotAfter (ca certificate expiring soon) and fails closed past expiry. Rotation is manual with no CRL or reissue: mint a fresh CA offline with WriteCA, place the same ca.crt and ca.key on every node (mode 0600), restart the fleet, then rotate each node key to bump NoiseGeneration so the new CA signs the binding. Highest generation seen wins and supersedes the old binding without a revocation list.
+
 Gossip Encryption Key Provisioning
 
 Memberlist gossip is AES-GCM encrypted with a cluster-wide pre-shared key. Every node must hold the exact same key bytes. Generate once per cluster and distribute alongside the CA files:

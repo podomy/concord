@@ -88,7 +88,7 @@ func TestNamedChaining(t *testing.T) {
 }
 
 // A user field keyed logger collides as before: both keys are emitted and
-// the last one wins, matching zap. The joined name stays present.
+// the last one wins, as before. The joined name stays present.
 func TestNamedUserKeyCollision(t *testing.T) {
 	t.Parallel()
 
