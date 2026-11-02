@@ -68,7 +68,11 @@ Conventions
 * JSON both ways; Content-Type: application/json on bodies. Request
   bodies are capped at 1MB (larger is a 400) and unknown JSON fields
   are rejected with a 400: both ends ship from this repo, so an
-  unknown field is a version mismatch worth failing loudly.
+  unknown field is a version mismatch worth failing loudly. Trailing
+  data after the first JSON value is also a 400. The journal line cap
+  is 10MB: submit carries one spec (1MB is a client bug), sync carries
+  batches and journal lines carry full events, so the caps differ by
+  payload shape, not by strictness.
 * Errors are {"error":"message"} with a non-2xx status. Machine-readable
   only by status code; messages are human text and may change.
 * UUIDs are strings in URLs and bodies. POST /v1/workloads mints one
@@ -116,11 +120,12 @@ garbage collection is operator-owned, same as track rotation and
 journal archival; see docs/files.
 
 Errors are {"error":"message"} with a non-2xx status. SDK mapping:
-400 validation failures arrive as sdk.ErrValidation with the server
-message preserved, 404 as sdk.ErrNotFound, 503 (trail and metrics
-without a sampler) as sdk.ErrUnavailable. List and Nodes map any 4xx
-to ErrValidation and any 5xx to ErrUnavailable; other endpoints leave
-remaining statuses unstructured.
+400 and 422 validation failures arrive as sdk.ErrValidation with the
+server message preserved, 404 as sdk.ErrNotFound, any 5xx as
+sdk.ErrUnavailable. List and Nodes map 400 and 422 to ErrValidation
+and any 5xx to ErrUnavailable; other statuses stay unstructured.
+Mutating calls route through the same mapping, so Submit and
+UpdateImage report 503 and other 5xx as ErrUnavailable too.
 Messages are human text and may change; match on status and sentinel,
 never on strings.
 
@@ -161,8 +166,9 @@ PUT /v1/workloads/{id}/image: move to a new image
 
 Same ID, same assignment, epoch plus one (a plain resubmit could lose
 to byte comparison, so this endpoint exists). 404 for unknown or
-stopped workloads, 400 for empty images, unknown fields, or bodies
-past 1MB:
+stopped workloads, 400 for empty images, unknown fields, bodies
+past 1MB, trailing data, invalid merged specs, or invalid stored
+specs (rejected, never auto-healed):
 
   // request
   {"image": "nginx:1.28"}

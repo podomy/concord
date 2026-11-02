@@ -77,6 +77,22 @@ func NewServer(
 	}
 }
 
+// resolveSocketPath fills the default path and enforces the unix
+// sun_path length so overlong XDG homes fail here, not in listen.
+func resolveSocketPath(socketPath string) (string, error) {
+	if socketPath == "" {
+		defaultPath, err := sdk.DefaultSocketPath()
+		if err != nil {
+			return "", fmt.Errorf("resolve default socket path: %w", err)
+		}
+		socketPath = defaultPath
+	}
+	if len(socketPath) >= 108 {
+		return "", fmt.Errorf("socket path too long (%d bytes): unix limit is 107: %s", len(socketPath), socketPath)
+	}
+	return socketPath, nil
+}
+
 // Start opens the Unix domain socket at socketPath and begins serving incoming IPC requests:
 // 1. Resolves default socket path (~/.config/concord/concord.sock) if none provided.
 // 2. Creates parent directories with 0700 permissions.
@@ -92,12 +108,9 @@ func (s *Server) Start(ctx context.Context, socketPath string) error {
 		return fmt.Errorf("%w", ErrAlreadyRunning)
 	}
 
-	if socketPath == "" {
-		defaultPath, err := sdk.DefaultSocketPath()
-		if err != nil {
-			return fmt.Errorf("resolve default socket path: %w", err)
-		}
-		socketPath = defaultPath
+	socketPath, err := resolveSocketPath(socketPath)
+	if err != nil {
+		return err
 	}
 
 	socketDir := filepath.Dir(socketPath)

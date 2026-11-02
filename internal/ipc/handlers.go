@@ -5,6 +5,7 @@ package ipc
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -47,7 +48,9 @@ const maxRequestBodyBytes = 1 << 20
 
 // decodeBody decodes one JSON request body with unknown fields rejected
 // and the size capped. Both ends ship from this repo, so an unknown
-// field is always a version mismatch worth failing loudly.
+// field is always a version mismatch worth failing loudly. Trailing
+// garbage after the first JSON value is rejected: a second Decode must
+// hit EOF, so concatenated values never slip through as one request.
 func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	dec := json.NewDecoder(r.Body)
@@ -55,6 +58,16 @@ func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	err := dec.Decode(target)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	var extra json.RawMessage
+	err = dec.Decode(&extra)
+	if err != io.EOF {
+		if err == nil {
+			writeError(w, http.StatusBadRequest, "invalid request body: trailing data after JSON value")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		}
 		return false
 	}
 	return true
@@ -331,9 +344,18 @@ func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := spec.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "stored workload spec is invalid: "+err.Error())
+		return
+	}
+
 	updated := *spec
 	updated.Image = strings.TrimSpace(input.Image)
 	updated.AssignmentEpoch++
+	if err := updated.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workload: "+err.Error())
+		return
+	}
 	payload, err := json.Marshal(updated)
 	if err != nil {
 		s.logger.Error("failed to marshal updated spec", logs.Error(err))
