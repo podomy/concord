@@ -37,7 +37,7 @@ Run a Workload
 
 Flags:
   --port, -p (default ""): port mapping host:container (e.g. 8080:80)
-  --env, -e (default []): environment variables in KEY=VAL format (repeatable)
+  --env, -e (default []): environment variables in KEY=VALUE format (repeatable)
   --restart (default always): policy always, never, on_failure
   --cpu (default 1024): CFS CPU shares (1024 = 1 core)
   --memory (default 0): memory limit in MB (0 = unlimited)
@@ -172,7 +172,9 @@ Workload Logs
 
 Prints captured stdout/stderr oldest-first, one line per line. Absent
 output (never logged, already stopped) reports not found, mirroring
-stats. Follow polls every second until interrupted. Negative --tail
+stats. Follow polls every second until interrupted, tracking
+(timestamp, count) so lines sharing a timestamp print once each.
+Negative --tail
 values are rejected client-side as a usage error; the server also
 answers 400 for non-numeric or negative tail values.
 

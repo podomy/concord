@@ -255,11 +255,11 @@ func newNodePositionSetFlagSet(lat, lon *float64) (*flag.FlagSet, []flagDoc) {
 func printNodePositionSetHelp(w io.Writer) {
 	var lat, lon float64
 	_, docs := newNodePositionSetFlagSet(&lat, &lon)
-	_, _ = fmt.Fprintln(w, "Apply one live position fix") //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                            //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Usage:")                      //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  concord node position set") //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                            //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Apply one live position fix")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                    //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord node position set --lat <lat> --lon <lon>") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                    //nolint:errcheck // CLI output
 	printFlagDocs(w, docs)
 }
 

@@ -202,8 +202,11 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	rest := args[1:]
 	switch {
 	case isHelpRequest(name):
-		printRootHelp(stdout)
-		return nil
+		if len(rest) == 0 {
+			printRootHelp(stdout)
+			return nil
+		}
+		return printHelpPath(rest, stdout, stderr)
 	case name == "help":
 		return printHelpPath(rest, stdout, stderr)
 	case name == "workload":

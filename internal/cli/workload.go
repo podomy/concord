@@ -276,7 +276,7 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 	builder := sdk.NewWorkload().
 		Image(image).
 		Command(command...).
-		Restart(sdk.RestartPolicy(rf.restart)).
+		Restart(sdk.RestartPolicy(strings.ToLower(strings.TrimSpace(rf.restart)))).
 		CPUShares(rf.cpu).
 		MemoryMB(rf.memory).
 		HealthCheck(rf.healthPath, action).
@@ -310,6 +310,9 @@ func parseFileFlag(flag string) (container, local string, mode uint32, err error
 	if !ok || container == "" || local == "" {
 		return "", "", 0, fmt.Errorf("invalid --file %q; want /container/path=/local/path[:mode]", flag)
 	}
+	if !filepath.IsAbs(container) || container != filepath.Clean(container) {
+		return "", "", 0, fmt.Errorf("invalid --file %q; container path must be absolute and clean", flag)
+	}
 	if base, modeStr, ok := strings.Cut(local, ":"); ok {
 		parsed, perr := strconv.ParseUint(modeStr, 8, 32)
 		if perr != nil || parsed > 0o777 {
@@ -342,7 +345,7 @@ func pushFileFlag(ctx context.Context, artifacts *fileart.Client, flag string) (
 func handleWorkloadRun(ctx context.Context, stdout io.Writer, rf *runFlags, image string, command []string) error {
 	workload, err := buildWorkloadSpec(rf, image, command)
 	if err != nil {
-		return err
+		return fmt.Errorf("build workload spec: %w", err)
 	}
 
 	client, closeFn, err := dialIPCClient()
@@ -626,6 +629,9 @@ func runWorkloadUpdate(ctx context.Context, stdout, stderr io.Writer, args []str
 	visited := visitedFlags(fs)
 	if !visited["image"] {
 		return fmt.Errorf("required flag(s) \"image\" not set") //nolint:perfsprint // plain error, no wrap target
+	}
+	if strings.TrimSpace(image) == "" {
+		return fmt.Errorf("workload image reference is required") //nolint:perfsprint // plain error, no wrap target
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("accepts 1 arg(s), received %d", len(positional))

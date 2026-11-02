@@ -92,6 +92,7 @@ func parsePortMapping(mapping string) (uint16, uint16, error) {
 }
 
 // parseEnvVars parses a slice of "KEY=VALUE" strings into a map.
+// Keys follow POSIX names; values may be empty.
 func parseEnvVars(entries []string) (map[string]string, error) {
 	res := make(map[string]string, len(entries))
 	for _, entry := range entries {
@@ -100,10 +101,28 @@ func parseEnvVars(entries []string) (map[string]string, error) {
 		if !ok || k == "" {
 			return nil, fmt.Errorf("invalid environment variable %q; expected KEY=VALUE", entry)
 		}
+		if !validEnvKey(k) {
+			return nil, fmt.Errorf("invalid environment variable %q; key must match [A-Za-z_][A-Za-z0-9_]*", entry)
+		}
 		res[k] = v
 	}
 
 	return res, nil
+}
+
+// validEnvKey reports whether k is a POSIX environment name.
+func validEnvKey(k string) bool {
+	for i := range len(k) {
+		c := k[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_' {
+			continue
+		}
+		if i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return len(k) > 0
 }
 
 // resolveWorkloadID parses a full UUID or searches active workloads for a matching short prefix.
@@ -127,7 +146,7 @@ func resolveWorkloadID(ctx context.Context, client sdk.Client, input string) (uu
 
 	var matches []uuid.UUID
 	for _, w := range workloads {
-		if strings.HasPrefix(w.ID.String(), input) {
+		if strings.HasPrefix(strings.ToLower(w.ID.String()), strings.ToLower(input)) {
 			matches = append(matches, w.ID)
 		}
 	}
