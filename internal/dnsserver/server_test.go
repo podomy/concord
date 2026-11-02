@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
 
+	"github.com/podomy/concord/internal/logs"
 	"github.com/podomy/concord/internal/peerdiscovery"
 )
 
@@ -194,7 +195,7 @@ func TestPopulateSRVIPv6Extra(t *testing.T) {
 
 	id := uuid.MustParse("f7daefa1-a223-4480-a1ca-3b8b07e7472e")
 	nodes := []peerdiscovery.Node{
-		{ID: id, Address: netip.MustParseAddrPort("[2001:db8::5]:7946")},
+		{ID: id, Address: netip.MustParseAddrPort("[2001:db8::5]:7946"), State: peerdiscovery.NodeStateAlive},
 	}
 
 	msg := &dns.Msg{}
@@ -209,6 +210,63 @@ func TestPopulateSRVIPv6Extra(t *testing.T) {
 	if !aaaa.AAAA.Equal(net.ParseIP("2001:db8::5")) {
 		t.Fatalf("AAAA = %v, want 2001:db8::5", aaaa.AAAA)
 	}
+}
+
+// SRV serves alive members only: suspect may be partitioned, the rest
+// cannot answer. A newcomer learns them on the next round after they go
+// alive. By-name A lookups stay state-independent (see TestPopulateA).
+func TestPopulateSRVSkipsNonAlive(t *testing.T) {
+	t.Parallel()
+
+	alive := uuid.MustParse("f7daefa1-a223-4480-a1ca-3b8b07e7472e")
+	others := []peerdiscovery.NodeState{
+		peerdiscovery.NodeStateSuspect,
+		peerdiscovery.NodeStateDead,
+		peerdiscovery.NodeStateLeft,
+		peerdiscovery.NodeStateUnknown,
+		"",
+	}
+	nodes := []peerdiscovery.Node{
+		{ID: alive, Address: netip.MustParseAddrPort("10.0.0.5:7946"), State: peerdiscovery.NodeStateAlive},
+	}
+	for _, state := range others {
+		nodes = append(nodes, peerdiscovery.Node{
+			ID:      uuid.New(),
+			Address: netip.MustParseAddrPort("10.0.0.6:7946"),
+			State:   state,
+		})
+	}
+
+	msg := &dns.Msg{}
+	(&handler{}).populateSRV(msg, nodes, peerdiscovery.DNSService+".")
+	if len(msg.Answer) != 1 {
+		t.Fatalf("answers = %d, want 1 (alive only)", len(msg.Answer))
+	}
+	srv, ok := msg.Answer[0].(*dns.SRV)
+	if !ok {
+		t.Fatalf("answer type %T", msg.Answer[0])
+	}
+	if srv.Target != alive.String()+tldConcord {
+		t.Fatalf("target = %q, want alive member", srv.Target)
+	}
+}
+
+// Stop with no server registered is a no-op, and repeat calls after one
+// shutdown stop nothing.
+func TestStopWithoutStart(t *testing.T) {
+	Stop()
+	Stop()
+}
+
+// Start then Stop then Stop leaves no server behind and never fails.
+func TestStopAfterStart(t *testing.T) {
+	ctx := t.Context()
+
+	if err := Start(ctx, nil, logs.NewNop(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	Stop()
+	Stop()
 }
 
 // Oversize answers truncate with TC set instead of fragmenting: no TCP

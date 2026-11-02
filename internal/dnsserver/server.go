@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 
@@ -95,10 +96,17 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
 }
 
-// populateSRV fills msg with SRV records for all known members and
+// populateSRV fills msg with SRV records for alive members only and
 // their corresponding address records in the additional section: A for
 // IPv4 members, AAAA for IPv6 members. A member address that is neither
 // (should not happen) contributes no additional record.
+//
+// Only alive members serve: suspect may already be partitioned, and
+// dead, left, or unknown members cannot answer. A newcomer learns them
+// on the next round after they go alive. By-name A and AAAA lookups
+// below stay state-independent: an explicit name query answers from the
+// last known address, while SRV (the discovery path) never points at a
+// member that cannot answer.
 func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name string) {
 	service := dns.Fqdn(peerdiscovery.DNSService)
 	if !strings.HasPrefix(strings.ToLower(dns.Fqdn(name)), strings.ToLower(service)) {
@@ -107,6 +115,9 @@ func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name str
 	}
 
 	for _, node := range nodes {
+		if node.State != peerdiscovery.NodeStateAlive {
+			continue
+		}
 		msg.Answer = append(msg.Answer, &dns.SRV{
 			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
 			Target: node.ID.String() + tldConcord,
@@ -185,6 +196,37 @@ func truncateToFit(msg *dns.Msg) {
 	}
 }
 
+// dnsMu guards dnsSrv: Start registers the server, Stop and the ctx
+// goroutine each take it at most once, so shutdown runs exactly once.
+var (
+	dnsMu  sync.Mutex
+	dnsSrv *dns.Server
+)
+
+// Stop shuts down the server started by Start. It is idempotent and safe
+// when Start never ran: with no server registered it is a no-op, and a
+// second call after shutdown (or after context cancel) shuts down
+// nothing. Runtime teardown ordering relies on this: Stop runs even on
+// paths where Start failed or the context already fired.
+func Stop() {
+	srv := takeDNSServer()
+	if srv == nil {
+		return
+	}
+	_ = srv.Shutdown() //nolint:errcheck // second shutdown after ctx cancel only reports already-stopped; nothing to do
+}
+
+// takeDNSServer removes and returns the registered server, or nil when
+// none is registered.
+func takeDNSServer() *dns.Server {
+	dnsMu.Lock()
+	defer dnsMu.Unlock()
+
+	srv := dnsSrv
+	dnsSrv = nil
+	return srv
+}
+
 // Start launches an embedded DNS server that serves Concord peer membership.
 // Empty addr binds to ":"+DNSPort. Bind is checked before return so a second
 // instance fails fast if the port is taken. The server runs until ctx is done.
@@ -207,10 +249,19 @@ func Start(ctx context.Context, memberService *peerdiscovery.MemberService, logg
 		Handler:    &handler{memberService: memberService},
 	}
 
-	// Graceful shutdown.
+	dnsMu.Lock()
+	dnsSrv = srv
+	dnsMu.Unlock()
+
+	// Graceful shutdown: take the handle so Stop and cancel cannot both
+	// shut down, which would log a spurious already-stopped error.
 	go func() {
 		<-ctx.Done()
-		if err := srv.Shutdown(); err != nil {
+		doneSrv := takeDNSServer()
+		if doneSrv == nil {
+			return
+		}
+		if err := doneSrv.Shutdown(); err != nil {
 			logger.Error("dns server shutdown", logs.Error(err))
 		}
 	}()

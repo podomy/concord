@@ -80,3 +80,24 @@ func TestSanitizeNodeMetaKeepsValid(t *testing.T) {
 		t.Fatalf("got %+v, want %+v", got, meta)
 	}
 }
+
+// NodeMeta enforces the caller limit instead of panicking downstream:
+// over-limit metadata advertises nothing (nil) until Publish's
+// pre-flight rejects it with an error. Normal metadata within the limit
+// is unchanged.
+func TestNodeMetaEnforcesLimit(t *testing.T) {
+	t.Parallel()
+
+	delegate := &nodeMetadataDelegate{}
+	delegate.meta = func() NodeMetadata {
+		return NodeMetadata{CPUMHz: 2400.0, MemoryMB: 8192}
+	}
+
+	full := delegate.NodeMeta(512)
+	if len(full) == 0 || len(full) > 512 {
+		t.Fatalf("full meta = %d bytes, want within cap", len(full))
+	}
+	if got := delegate.NodeMeta(len(full) - 1); got != nil {
+		t.Fatalf("over-limit meta = %q, want nil", got)
+	}
+}

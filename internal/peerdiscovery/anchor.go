@@ -22,11 +22,23 @@ import (
 // out-of-planet coordinates sort last: they may still dial fine, their
 // position just orders nothing. Empty anchors resolve empty, which keeps
 // LAN-only fleets on mDNS alone.
+//
+// A (0, 0) self position counts as unknown and keeps list order: (0, 0)
+// is the gossip encoding for no fix, not a real fix (see anchorKnown).
 type AnchorResolver struct {
 	// Self is this node's position, or nil when unknown.
 	Self *geo.Point
 	// Anchors is the configured rendezvous list from node config.
 	Anchors []nodepackage.AnchorEntry
+}
+
+// anchorKnown reports whether p is a real position fix. The exact zero
+// point is unknown, not Null Island: members without a fix gossip (0, 0),
+// and no fleet anchors at the Gulf of Guinea buoy, so (0, 0) must never
+// win nearest-first. Out-of-planet points are not known either; Valid
+// already rejects those.
+func anchorKnown(p geo.Point) bool {
+	return p != (geo.Point{}) && p.Valid()
 }
 
 // Resolve returns anchor addresses without any I/O: anchors are
@@ -39,7 +51,7 @@ func (a AnchorResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 	// Copy: sorting must not reorder the shared config list.
 	entries := make([]nodepackage.AnchorEntry, len(a.Anchors))
 	copy(entries, a.Anchors)
-	if a.Self != nil && a.Self.Valid() {
+	if a.Self != nil && anchorKnown(*a.Self) {
 		self := *a.Self
 		slices.SortStableFunc(entries, func(x, y nodepackage.AnchorEntry) int {
 			return cmp.Compare(anchorDistance(self, x), anchorDistance(self, y))
@@ -58,10 +70,12 @@ func (a AnchorResolver) Resolve(ctx context.Context) ([]netip.AddrPort, error) {
 
 // anchorDistance is the great-circle distance to an entry, or infinite
 // when its coordinates are unusable. Infinite sorts last without dropping
-// the address.
+// the address. A (0, 0) entry is unknown, not Null Island (see
+// anchorKnown): it sorts with the invalid ones. When every entry is
+// unknown the order is just config order, same as no self position.
 func anchorDistance(self geo.Point, entry nodepackage.AnchorEntry) float64 {
 	p, ok := entry.AnchorPoint()
-	if !ok {
+	if !ok || !anchorKnown(p) {
 		return math.Inf(1)
 	}
 	return geo.DistanceKM(self, p)

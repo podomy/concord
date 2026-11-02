@@ -154,3 +154,28 @@ func TestEntryToAddrPortExBadInput(t *testing.T) {
 		t.Fatal("expected not ok for out of range port")
 	}
 }
+
+// The insert cap bounds the collection itself: past 1024 entries the
+// rest drop and retry next round instead of growing memory.
+func TestCollectEntriesCapsAtInsert(t *testing.T) {
+	t.Parallel()
+
+	ch := make(chan *mdns.ServiceEntry, maxMDNSEntries+64)
+	go func() {
+		for range maxMDNSEntries + 6 {
+			ch <- &mdns.ServiceEntry{
+				AddrV4: net.ParseIP("192.168.1.7").To4(),
+				Port:   7946,
+			}
+		}
+		close(ch)
+	}()
+
+	entries, dropped := collectEntries(ch)
+	if len(entries) != maxMDNSEntries {
+		t.Fatalf("entries = %d, want %d", len(entries), maxMDNSEntries)
+	}
+	if dropped != 6 {
+		t.Fatalf("dropped = %d, want 6", dropped)
+	}
+}

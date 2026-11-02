@@ -82,6 +82,48 @@ func TestAnchorResolverEmpty(t *testing.T) {
 	}
 }
 
+// A (0, 0) anchor entry is unknown, not Null Island: even a self
+// position next door must not prefer it over a positioned entry. The
+// zero entry below carries no coordinates at all, which is how unknown
+// anchors arrive from config.
+func TestAnchorResolverZeroZeroSortsLast(t *testing.T) {
+	t.Parallel()
+
+	self := &geo.Point{Lat: 0.5, Lon: 0.5}
+	zero := nodepackage.AnchorEntry{Name: "zero", Addr: netip.MustParseAddrPort("10.0.0.2:7946")}
+	nearby := nodepackage.AnchorEntry{Name: "nearby", Addr: netip.MustParseAddrPort("10.0.0.1:7946"), Lat: 47.61, Lon: 8.91}
+	got := mustResolve(t, AnchorResolver{Self: self, Anchors: []nodepackage.AnchorEntry{zero, nearby}})
+
+	if len(got) != 2 || got[0] != nearby.Addr || got[1] != zero.Addr {
+		t.Fatalf("got %v, want positioned anchor before unknown (0, 0)", got)
+	}
+}
+
+// A (0, 0) self position is unknown: list order decides, same as nil.
+func TestAnchorResolverZeroSelfKeepsListOrder(t *testing.T) {
+	t.Parallel()
+
+	self := &geo.Point{Lat: 0, Lon: 0}
+	first := nodepackage.AnchorEntry{Addr: netip.MustParseAddrPort("10.0.0.2:7946"), Lat: 47.6, Lon: 8.9}
+	second := nodepackage.AnchorEntry{Addr: netip.MustParseAddrPort("10.0.0.1:7946"), Lat: 47.61, Lon: 8.91}
+	got := mustResolve(t, AnchorResolver{Self: self, Anchors: []nodepackage.AnchorEntry{first, second}})
+
+	if len(got) != 2 || got[0] != first.Addr || got[1] != second.Addr {
+		t.Fatalf("got %v, want list order for unknown self", got)
+	}
+}
+
+// mustResolve resolves or fails the test.
+func mustResolve(t *testing.T, r AnchorResolver) []netip.AddrPort {
+	t.Helper()
+
+	got, err := r.Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 // Cancelled context fails.
 func TestAnchorResolverCancelledContext(t *testing.T) {
 	t.Parallel()

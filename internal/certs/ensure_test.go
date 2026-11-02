@@ -35,6 +35,24 @@ func TestEnsureSucceedsWithCA(t *testing.T) {
 	}
 }
 
+// EnsureWithLogger returns the same paths as Ensure: a fresh CA is far
+// from expiry, so no warning fires on this path.
+func TestEnsureWithLoggerSucceedsWithCA(t *testing.T) {
+	setupCA(t)
+
+	plain, err := certs.Ensure()
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	withLogger, err := certs.EnsureWithLogger(nil)
+	if err != nil {
+		t.Fatalf("ensure with logger: %v", err)
+	}
+	if plain != withLogger {
+		t.Fatalf("paths = %+v, want %+v", withLogger, plain)
+	}
+}
+
 func TestEnsureFailsWithMissingKey(t *testing.T) {
 	setupCA(t)
 

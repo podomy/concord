@@ -22,6 +22,7 @@ import (
 // dropped with a debug note and retried next round.
 const maxMDNSEntries = 1024
 
+// MDNSResolver discovers Concord peers on the local network over mDNS.
 type MDNSResolver struct {
 	Timeout time.Duration
 	// Self is this node's memberlist endpoint. Entries resolving to Self
@@ -181,12 +182,11 @@ func (m *MDNSResolver) mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, er
 	entriesCh := make(chan *mdns.ServiceEntry, 64)
 
 	var entries []*mdns.ServiceEntry
+	var dropped int
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		for entry := range entriesCh {
-			entries = append(entries, entry)
-		}
+		entries, dropped = collectEntries(entriesCh)
 	})
 
 	// mdns.Query sends a single multicast query and collects responses
@@ -206,5 +206,31 @@ func (m *MDNSResolver) mdnsBrowse(ctx context.Context) ([]*mdns.ServiceEntry, er
 		return nil, fmt.Errorf("mdns lookup: %w", err)
 	}
 
+	if dropped > 0 && m.Logger != nil {
+		m.Logger.Debug(
+			"mdns browse cap reached at insert, rest dropped until next round",
+			logs.Int("cap", maxMDNSEntries),
+			logs.Int("dropped", dropped),
+		)
+	}
+
 	return entries, nil
+}
+
+// collectEntries drains ch until closed, keeping at most maxMDNSEntries
+// and counting the rest as dropped. The cap sits at insert because mDNS
+// answers are unauthenticated LAN traffic: bounding the collection itself
+// keeps one noisy round from growing memory before processing starts.
+// Resolve keeps its own processing cap as a second net.
+func collectEntries(ch <-chan *mdns.ServiceEntry) ([]*mdns.ServiceEntry, int) {
+	var entries []*mdns.ServiceEntry
+	dropped := 0
+	for entry := range ch {
+		if len(entries) >= maxMDNSEntries {
+			dropped++
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, dropped
 }

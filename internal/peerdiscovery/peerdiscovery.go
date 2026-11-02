@@ -20,10 +20,15 @@ import (
 type NodeState string
 
 const (
-	NodeStateAlive   NodeState = "alive"
+	// NodeStateAlive marks a peer currently reachable by memberlist.
+	NodeStateAlive NodeState = "alive"
+	// NodeStateSuspect marks a peer under suspicion of being unreachable.
 	NodeStateSuspect NodeState = "suspect"
-	NodeStateDead    NodeState = "dead"
-	NodeStateLeft    NodeState = "left"
+	// NodeStateDead marks a peer confirmed dead by memberlist.
+	NodeStateDead NodeState = "dead"
+	// NodeStateLeft marks a peer that left the cluster cleanly.
+	NodeStateLeft NodeState = "left"
+	// NodeStateUnknown marks a peer with an unrecognized memberlist state.
 	NodeStateUnknown NodeState = "unknown"
 )
 
@@ -139,10 +144,16 @@ func MDNSAdvertise(
 		)
 	}
 
-	resolved := ResolveAdvertise(
+	resolved, err := ResolveAdvertise(
 		nodeConfig.MemberlistAddress,
 		nodeConfig.AdvertiseAddress,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve advertise address: %w", err)
+	}
+	// Snapshot at startup by design, not per round; see ResolveAdvertise.
+	// A nil IP list falls back to all interfaces and is used only when no
+	// usable address resolves.
 	var ips []net.IP
 	if resolved.IsValid() {
 		ips = []net.IP{net.IP(resolved.Addr().AsSlice())}

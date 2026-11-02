@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"net"
 	"net/netip"
 	"os"
@@ -39,6 +40,59 @@ type MemberService struct {
 	list     *memberlist.Memberlist
 	delegate *nodeMetadataDelegate
 	logger   *logs.Logger
+	// gossipFP is the hex sha256 of the local gossip key, logged at
+	// startup. Join failures carry it so operators can compare
+	// fingerprints across nodes: a key mismatch looks exactly like a
+	// network partition.
+	gossipFP string
+	// joinMu guards joinMisses only.
+	joinMu sync.Mutex
+	// joinMisses counts consecutive Join failures per candidate and gates
+	// the next attempt, so a dead anchor backs off instead of redialing
+	// every discovery tick. Success clears the entry; see joinDelay.
+	joinMisses map[string]*joinMiss
+}
+
+// joinMiss tracks consecutive Join failures for one candidate address.
+type joinMiss struct {
+	failures int
+	nextOK   time.Time
+}
+
+// Join backoff bounds one candidate's retry rate. The discovery loop keeps
+// its 5s tick: alive candidates attempt every round, only repeatedly dead
+// addresses wait. The base 5s doubles per consecutive failure to a 5m
+// ceiling, plus up to 25 percent jitter so a fleet does not redial in
+// lockstep.
+const (
+	joinBackoffBase = 5 * time.Second
+	joinBackoffMax  = 5 * time.Minute
+)
+
+// gossipMismatchHint names the most common silent Join failure: a gossip
+// key mismatch is unreachable peers with no other symptom.
+const gossipMismatchHint = "unreachable peers with no other symptom usually mean secret.key differs between nodes; compare the gossip sha256 across nodes"
+
+// gossipFingerprint renders the hex sha256 of the cluster gossip key for
+// logs and join errors. The key itself never logs.
+func gossipFingerprint(key []byte) string {
+	sum := sha256.Sum256(key)
+	return hex.EncodeToString(sum[:])
+}
+
+// joinDelay returns the wait before the next attempt after failures
+// consecutive failures: base doubling capped at the max, plus jitter.
+func joinDelay(failures int) time.Duration {
+	d := joinBackoffBase
+	for i := 1; i < failures && d < joinBackoffMax; i++ {
+		d *= 2
+	}
+	if d > joinBackoffMax {
+		d = joinBackoffMax
+	}
+	// #nosec G404: jitter only, crypto randomness is not needed.
+	jitter := time.Duration(rand.Int63n(int64(d)/4 + 1))
+	return d + jitter
 }
 
 // Adapter for the message levels coming from the memberlist
@@ -56,6 +110,7 @@ func stripMemberlistToken(s, tag string) string {
 	)
 }
 
+// Write implements io.Writer by routing memberlist log lines to the structured logger.
 func (w *MemberlistLogWriter) Write(p []byte) (int, error) {
 	s := strings.TrimSpace(string(p))
 
@@ -146,19 +201,18 @@ func Start(
 	// their direction. Key rotation has no protocol here: the key is fixed
 	// at provision time and node-key rotation rides NoiseGeneration
 	// (highest generation wins), not a gossip rekey.
-	gossipKey, err := loadGossipKey()
+	gossipKey, gossipFP, err := gossipConfig(logger)
 	if err != nil {
 		return nil, fmt.Errorf("load gossip key: %w", err)
 	}
 	config.SecretKey = gossipKey
 	config.GossipVerifyIncoming = true
 	config.GossipVerifyOutgoing = true
-	if logger != nil {
-		sum := sha256.Sum256(gossipKey)
-		logger.Info("gossip key loaded", logs.String("sha256", hex.EncodeToString(sum[:])))
-	}
 
-	resolved := ResolveAdvertise(node.Address, advertise)
+	resolved, err := ResolveAdvertise(node.Address, advertise)
+	if err != nil {
+		return nil, fmt.Errorf("resolve advertise address: %w", err)
+	}
 	if resolved.IsValid() {
 		config.AdvertiseAddr = resolved.Addr().String()
 		if resolved.Port() != 0 {
@@ -217,29 +271,49 @@ func Start(
 		)
 	}
 
-	// Soft-fail join: bad discovery candidates must not
-	// kill Concord. The local memberlist stays up;
-	// membership is just this node until a
-	// later successful Join or inbound gossip.
-	if len(join) > 0 {
-		if _, err := list.Join(addrPortsToStrings(join)); err != nil {
-			if logger != nil {
-				logger.Warn(
-					"memberlist join failed; continuing alone",
-					logs.Error(err),
-					logs.Int("candidates", len(join)),
-				)
-			}
-		}
-	}
-
 	memberService := MemberService{
 		list:     list,
 		delegate: delegate,
 		logger:   logger,
+		gossipFP: gossipFP,
 	}
+	joinInitial(&memberService, join)
 
 	return &memberService, nil
+}
+
+// gossipConfig loads the provisioned cluster key and its log fingerprint.
+// The key is never generated here; see loadGossipKey.
+func gossipConfig(logger *logs.Logger) ([]byte, string, error) {
+	key, err := loadGossipKey()
+	if err != nil {
+		return nil, "", err
+	}
+	fp := gossipFingerprint(key)
+	if logger != nil {
+		logger.Info("gossip key loaded", logs.String("sha256", fp))
+	}
+	return key, fp, nil
+}
+
+// joinInitial attempts the first join after Start. A failed join does not
+// abort startup (see Start); it only seeds the Join backoff, so a dead
+// anchor does not redial every tick.
+func joinInitial(m *MemberService, join []netip.AddrPort) {
+	if len(join) == 0 {
+		return
+	}
+	if _, err := m.Join(join); err != nil {
+		if m.logger != nil {
+			m.logger.Warn(
+				"memberlist join failed; continuing alone",
+				logs.Error(err),
+				logs.Int("candidates", len(join)),
+				logs.String("gossip_sha256", m.gossipFP),
+				logs.String("hint", gossipMismatchHint),
+			)
+		}
+	}
 }
 
 // sampleCapacity reads the static capacity snapshot gossiped as
@@ -404,7 +478,9 @@ func clampPressure(v uint32) uint8 {
 // (AdvertiseAddress from config). Empty (zero Addr) means
 // the runtime picks one from the bind address or a
 // non-loopback interface. The port always comes from bind
-// regardless.
+// regardless. An explicitly configured unspecified address (0.0.0.0 or
+// ::) is an operator error, not auto-detect: it fails with a clear error
+// instead of publishing an undialable endpoint.
 //
 // Resolution order:
 // 1. Advertise hint if set (IP from config, port from
@@ -412,18 +488,30 @@ func clampPressure(v uint32) uint8 {
 // peers can dial. 3. Otherwise the first usable host
 // interface IP, with the bind port.
 //
-// Returns the zero AddrPort only if no usable address
+// Returns the zero AddrPort with a nil error only when no usable address
 // exists; memberlist will
 // then choose an interface on its own.
+//
+// The result is a startup snapshot: callers (Start, MDNSAdvertise)
+// resolve once and keep it. Re-resolving every round would flap the
+// advertised endpoint and churn memberlist identity; the cost is DHCP: a
+// lease change needs a restart to re-advertise. Anchors carry stable
+// addresses, so rendezvous stays reachable while a DHCP leaf reboots.
 func ResolveAdvertise(
 	bind netip.AddrPort,
 	advertise netip.Addr,
-) netip.AddrPort {
+) (netip.AddrPort, error) {
 	// Operator override: which IP to publish. Port always
 	// matches bind so
 	// peers dial the same port memberlist is listening on.
 	if advertise.IsValid() {
-		return netip.AddrPortFrom(advertise, bind.Port())
+		if advertise.IsUnspecified() {
+			return netip.AddrPort{}, fmt.Errorf(
+				"advertise address %s is unspecified: set a dialable IP or leave it empty for auto-detect",
+				advertise,
+			)
+		}
+		return netip.AddrPortFrom(advertise, bind.Port()), nil
 	}
 
 	// Bind is already a specific IP (not 0.0.0.0 / ::).
@@ -432,21 +520,34 @@ func ResolveAdvertise(
 	// addresses that mean "listen on every interface".
 	if bind.Addr().IsValid() &&
 		!bind.Addr().IsUnspecified() {
-		return bind
+		return bind, nil
 	}
 
 	// Bind is a wildcard (listen everywhere). Peers cannot
 	// dial 0.0.0.0, so take the first non-loopback underlay
 	// IP and attach the bind port.
-	return firstRoutableAddrPort(bind.Port())
+	return firstRoutableAddrPort(bind.Port()), nil
 }
 
-// skipAdvertiseIface reports overlay interfaces. cn0 and
-// wg-*
-// carry 10.0.0.0/16; advertising them makes Join hit the
-// local bridge instead of a peer.
+// skipAdvertiseIface reports overlay and container NAT bridge interfaces.
+// cn0 and wg-* carry 10.0.0.0/16: advertising them makes Join hit the
+// local bridge instead of a peer. docker*, veth*, and br-* are container
+// NAT bridges: their IPs are unreachable from peers, so they never become
+// advertise or Join candidates either. Tradeoff: a node whose only
+// address lives behind such a bridge gets no auto-detect and must set
+// advertise_address explicitly. The 10.0.0.0/16 exclusion stays as a
+// second net: overlay addresses never leak even if a bridge interface
+// slips past the name filter.
 func skipAdvertiseIface(name string) bool {
-	return name == "cn0" || strings.HasPrefix(name, "wg-")
+	if name == "cn0" || strings.HasPrefix(name, "wg-") {
+		return true
+	}
+	for _, prefix := range []string{"docker", "veth", "br-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstRoutableAddrPort returns the first underlay host
@@ -539,17 +640,92 @@ func (m *MemberService) LocalAddr() (netip.AddrPort, error) {
 // identities. After a successful join, memberlist exchanges
 // membership state and Members can return
 // the reachable nodes known to the local process.
+//
+// Join storm guard: candidates in backoff from consecutive failures are
+// skipped this round and retried once their window expires (see
+// joinDelay). Success clears every attempted address. The caller keeps
+// its tick; only dead addresses wait, alive paths attempt every round.
+// A round with nothing attemptable returns 0 and no error, like an
+// empty candidate list.
 func (m *MemberService) Join(
 	existingMembers []netip.AddrPort,
 ) (int, error) {
+	attempted := m.joinFilter(existingMembers)
+	if len(attempted) == 0 {
+		return 0, nil
+	}
 	n, err := m.list.Join(
-		addrPortsToStrings(existingMembers),
+		addrPortsToStrings(attempted),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("list join: %w", err)
+		m.joinRecord(attempted, err)
+		return 0, joinErr(err, m.gossipFP)
 	}
+	m.joinRecord(attempted, nil)
 
 	return n, nil
+}
+
+// joinErr wraps a Join failure with the local gossip fingerprint and the
+// mismatch hint: a wrong cluster key is unreachable peers with no other
+// symptom. The "list join" prefix stays for existing log readers.
+func joinErr(err error, gossipFP string) error {
+	if gossipFP == "" {
+		return fmt.Errorf("list join: %w", err)
+	}
+	return fmt.Errorf(
+		"list join (local gossip sha256 %s; hint: %s): %w",
+		gossipFP,
+		gossipMismatchHint,
+		err,
+	)
+}
+
+// joinFilter drops candidates still backing off from consecutive
+// failures. Entries whose window expired become attemptable again;
+// unknown addresses always pass.
+func (m *MemberService) joinFilter(addrs []netip.AddrPort) []netip.AddrPort {
+	now := time.Now()
+	m.joinMu.Lock()
+	defer m.joinMu.Unlock()
+
+	out := make([]netip.AddrPort, 0, len(addrs))
+	for _, a := range addrs {
+		miss, ok := m.joinMisses[a.String()]
+		if !ok || !now.Before(miss.nextOK) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// joinRecord updates backoff state after a round over the attempted
+// addresses: success clears them, failure pushes each one's next attempt
+// out by joinDelay. Only attempted addresses change; skipped ones keep
+// their existing window.
+func (m *MemberService) joinRecord(attempted []netip.AddrPort, err error) {
+	m.joinMu.Lock()
+	defer m.joinMu.Unlock()
+
+	if m.joinMisses == nil {
+		m.joinMisses = make(map[string]*joinMiss)
+	}
+	if err == nil {
+		for _, a := range attempted {
+			delete(m.joinMisses, a.String())
+		}
+		return
+	}
+	now := time.Now()
+	for _, a := range attempted {
+		miss := m.joinMisses[a.String()]
+		if miss == nil {
+			miss = &joinMiss{}
+			m.joinMisses[a.String()] = miss
+		}
+		miss.failures++
+		miss.nextOK = now.Add(joinDelay(miss.failures))
+	}
 }
 
 // Members returns the current memberlist view as Concord
@@ -584,6 +760,10 @@ func (m *MemberService) Members() ([]Node, error) {
 			m.warnSkip("skip member with bad address", nil, member.Name)
 			continue
 		}
+
+		// Unmap, like LocalAddr: memberlist may hand back IPv4-mapped
+		// IPv6, and peers compare against plain IPv4 underlay addresses.
+		addr = addr.Unmap()
 
 		var meta NodeMetadata
 		if len(member.Meta) > 0 {
@@ -748,9 +928,18 @@ func checkMetaSize(meta NodeMetadata) error {
 // in memberlist ping and gossip packets. Over-limit output panics inside
 // the library; callers that push new metadata (Start, Publish) pre-flight
 // against nodeMetaLimit so this never fires.
+//
+// The limit param is enforced, not advisory: metadata exceeding it
+// advertises nothing (nil) instead of panicking downstream. Nil is the
+// fail-closed signal, consistent with checkMetaSize failing instead of
+// crashing; Publish's pre-flight rejects the same oversize metadata with
+// an error, so a nil here only lasts until the operator fixes the cause.
 func (d *nodeMetadataDelegate) NodeMeta(limit int) []byte {
 	bytes, err := json.Marshal(d.meta())
 	if err != nil {
+		return nil
+	}
+	if len(bytes) > limit {
 		return nil
 	}
 	return bytes
