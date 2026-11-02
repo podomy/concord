@@ -75,6 +75,7 @@ var uploadSlots = make(chan struct{}, maxConcurrentUploads)
 // Registry serves the OCI distribution subset over plain HTTP.
 type Registry struct {
 	srv      *http.Server
+	ln       net.Listener
 	store    *blob.Store
 	logger   *logs.Logger
 	nodeID   uuid.UUID
@@ -149,6 +150,9 @@ func (r *Registry) Start(ctx context.Context, memberService *peerdiscovery.Membe
 	if err != nil {
 		return fmt.Errorf("listen registry: %w", err)
 	}
+	// Track the listener so shutdown closes it even if it runs before
+	// Serve registers it: Server.Shutdown only closes tracked listeners.
+	r.ln = ln
 	go func() {
 		err := r.srv.Serve(ln)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -175,6 +179,9 @@ func (r *Registry) shutdown(ctx context.Context) {
 		err := r.srv.Shutdown(timeoutCtx)
 		if err != nil {
 			_ = r.srv.Close() //nolint:errcheck // fallback close on shutdown error
+		}
+		if r.ln != nil {
+			_ = r.ln.Close() //nolint:errcheck // covers pre-Serve shutdown race; Serve close is idempotent
 		}
 	})
 }
