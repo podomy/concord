@@ -45,6 +45,11 @@ func WGInterfaceName(id uuid.UUID) string {
 }
 
 // EnsureWGKeys reads or generates persistent WireGuard keys under ~/.config/concord/wireguard/wg.key.
+//
+// A present key file must be mode 0600 or stricter: fail closed on group or
+// other access, matching gossip key and ca.key handling. A corrupt file
+// fails closed and is left in place, never regenerated: overwriting would
+// silently break pins and the WG mesh. Only a missing file generates a key.
 func EnsureWGKeys() (Key, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -58,17 +63,32 @@ func EnsureWGKeys() (Key, error) {
 	}
 
 	keyPath := filepath.Join(wgDir, "wg.key")
-	// #nosec G304 -- keyPath is within controlled user config dir
-	data, err := os.ReadFile(keyPath)
+	info, err := os.Stat(keyPath)
 	if err == nil {
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			return Key{}, fmt.Errorf(
+				"refusing wireguard key %s with mode %04o: want 0600 (group and others must have no access)",
+				keyPath,
+				perm,
+			)
+		}
+		// #nosec G304 -- keyPath is within controlled user config dir
+		data, err := os.ReadFile(keyPath)
+		if err != nil {
+			return Key{}, fmt.Errorf("read wireguard key %s: %w", keyPath, err)
+		}
 		privStr := strings.TrimSpace(string(data))
 		privKey, parseErr := wgtypes.ParseKey(privStr)
-		if parseErr == nil {
-			return Key{
-				Private: privKey.String(),
-				Public:  privKey.PublicKey().String(),
-			}, nil
+		if parseErr != nil {
+			return Key{}, fmt.Errorf("wireguard key %s is corrupt: %w", keyPath, parseErr)
 		}
+		return Key{
+			Private: privKey.String(),
+			Public:  privKey.PublicKey().String(),
+		}, nil
+	}
+	if !os.IsNotExist(err) {
+		return Key{}, fmt.Errorf("stat wireguard key %s: %w", keyPath, err)
 	}
 
 	privKey, err := wgtypes.GeneratePrivateKey()

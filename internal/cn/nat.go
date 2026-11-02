@@ -23,7 +23,7 @@ var iptablesWaitTimeout = 15 * time.Second
 
 // execIptables runs iptables with args and returns trimmed stderr on
 // failure. It prepends -w so concurrent callers wait on the xtables
-// lock instead of failing, matching the default go-iptables behavior
+// lock instead of failing, matching the earlier helper
 // of passing --wait. Global -w parses on legacy getopt and nf_tables.
 func execIptables(ctx context.Context, args []string) (string, error) {
 	withWait := append([]string{"-w"}, args...)

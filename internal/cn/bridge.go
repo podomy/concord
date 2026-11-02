@@ -42,7 +42,9 @@ var (
 
 // CreateBridge ensures the cn0 bridge exists, is up, and
 // has 10.0.{nodeIndex}.1/24 assigned. It is idempotent,
-// safe to call on every startup.
+// safe to call on every startup. Stale 10.0.x.1/24 addrs from a previous
+// index reconcile away here, so an index change never leaves two gateway
+// IPs on the bridge; EEXIST stays tolerated for the current addr.
 func CreateBridge(ctx context.Context, nodeIndex int) error {
 	err := ctx.Err()
 	if err != nil {
@@ -82,6 +84,12 @@ func CreateBridge(ctx context.Context, nodeIndex int) error {
 		return fmt.Errorf("netlink addr add: %w", err)
 	}
 
+	// Drop stale gateway addrs from a previous index. Best-effort: a
+	// list failure leaves old addrs for the next call, never fails boot.
+	if err := reconcileBridgeAddrs(linkDevice, ip+mask); err != nil {
+		return fmt.Errorf("reconcile bridge addrs: %w", err)
+	}
+
 	// NAT setup. Setup of the masquerade to rewrite source ip
 	// of the outgoing container packets to the ip of the host.
 	err = SetupMasquerade(ctx)
@@ -90,6 +98,91 @@ func CreateBridge(ctx context.Context, nodeIndex int) error {
 	}
 
 	return nil
+}
+
+// reconcileBridgeAddrs removes stale 10.0.x.1/24 gateway addrs that do not
+// match the current subnet. Called on every CreateBridge so an index
+// change converges without a reboot; every-N-ticks callers get the same
+// effect by re-invoking CreateBridge.
+func reconcileBridgeAddrs(link netlink.Link, current string) error {
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("netlink addr list: %w", err)
+	}
+	stale := staleBridgeAddrs(addrStrings(addrs), current)
+	for _, s := range stale {
+		addr, err := netlink.ParseAddr(s)
+		if err != nil {
+			continue
+		}
+		err = netlink.AddrDel(link, addr)
+		if err != nil {
+			return fmt.Errorf("netlink addr del %s: %w", s, err)
+		}
+	}
+	return nil
+}
+
+// addrStrings renders netlink addrs for pure stale filtering.
+func addrStrings(addrs []netlink.Addr) []string {
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if a.IPNet != nil {
+			out = append(out, a.IPNet.String())
+		}
+	}
+	return out
+}
+
+// staleBridgeAddrs returns 10.0.x.1/24 entries that are not current. Other
+// families, masks, and hosts never match: only the /24 gateway pattern
+// reconciles, so unrelated addrs stay untouched.
+func staleBridgeAddrs(have []string, current string) []string {
+	var out []string
+	for _, h := range have {
+		if h == current {
+			continue
+		}
+		ip, prefix, ok := splitAddrPrefix(h)
+		if !ok {
+			continue
+		}
+		if !isBridgeGateway(ip, prefix) {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+// splitAddrPrefix cuts "10.0.1.1/24" into IP and mask bits.
+func splitAddrPrefix(s string) (string, int, bool) {
+	for i := range len(s) {
+		if s[i] == '/' {
+			n := 0
+			for j := i + 1; j < len(s); j++ {
+				c := s[j]
+				if c < '0' || c > '9' {
+					return "", 0, false
+				}
+				n = n*10 + int(c-'0')
+			}
+			return s[:i], n, true
+		}
+	}
+	return "", 0, false
+}
+
+// isBridgeGateway reports the 10.0.x.1/24 gateway pattern.
+func isBridgeGateway(ip string, mask int) bool {
+	if mask != 24 {
+		return false
+	}
+	var a, b, c, d int
+	if _, err := fmt.Sscanf(ip, "%d.%d.%d.%d", &a, &b, &c, &d); err != nil {
+		return false
+	}
+	return a == 10 && b == 0 && c >= 0 && c <= 255 && d == 1
 }
 
 // findOrCreateBridgeLinkDevice returns the existing cn0 link device or

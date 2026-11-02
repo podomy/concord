@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -59,6 +60,12 @@ type ContainerAndProcess struct {
 	// recovery. Memory-only: a daemon restart re-reports a still-sick
 	// workload once, which is the correct edge after the state loss.
 	unhealthyReported bool
+	// done closes when handleExitEvent records the exit. The SIGKILL timer
+	// watches it and cancels on early exit, so no dead-handle signal fires.
+	// Main goroutine only: created in destroyContainer, closed in
+	// handleExitEvent. Nil means pre-change entry; timer then waits out
+	// the timeout.
+	done chan struct{}
 }
 
 // ExitEvent carries a process exit status paired with its workload ID to the main loop channel.
@@ -135,6 +142,18 @@ func wantedFileDigests(spec workload.Spec) []string {
 	return out
 }
 
+// shutdownDrainBound caps the post-cancel drain of in-flight exits. Exits
+// already queued record stopped status and free network deterministically;
+// anything later is lost with the process. No WaitGroup: monitor
+// goroutines are detached and the channel is the accounting, so the bound
+// is documented, not exact.
+const shutdownDrainBound = 5 * time.Second
+
+// adoptMaxTicks caps Load-failure retries. Every tick warns like the
+// port-mapping path until resolved; the 10th tick drops with a final warn
+// so a permanently missing state never warns forever.
+const adoptMaxTicks = 10
+
 // RunLoop watches for workload events and drives the container lifecycle.
 // It blocks until ctx is cancelled. Always launch as a goroutine.
 func RunLoop(
@@ -155,6 +174,9 @@ func RunLoop(
 	// dependencies. Crossing blockedTickStallThreshold reports the stall
 	// loudly; the wait itself never auto-breaks.
 	blocked := map[uuid.UUID]int{}
+	// adoptPending counts consecutive ticks each workload's Load keeps
+	// failing. Resolved adopts leave; aged-out ones drop with final warn.
+	adoptPending := map[uuid.UUID]int{}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -175,11 +197,12 @@ func RunLoop(
 	if err != nil {
 		logger.Error("State dir path", logs.Error(err))
 	}
-	adoptContainers(ctx, logger, nodeID, running, ipAndCIDRs, workloads, stateDir, exitEvents)
+	maps.Copy(adoptPending, adoptContainers(ctx, logger, nodeID, running, ipAndCIDRs, workloads, stateDir, exitEvents))
 
 	for {
 		select {
 		case <-ctx.Done():
+			drainExitEvents(ctx, logger, j, nodeID, exitEvents, running, ipAndCIDRs, peerService, views)
 			return
 
 		case ev := <-exitEvents:
@@ -191,12 +214,54 @@ func RunLoop(
 			}
 
 			reconcileTick(ctx, logger, nodeID, puller, runtime, j, workloads, running, ipAndCIDRs, blocked, exitEvents, peerService, views, sampler)
+			retryAdopts(ctx, logger, nodeID, running, ipAndCIDRs, workloads, stateDir, exitEvents, adoptPending)
 
 		case <-fastTicker.C:
 			runFastTick(ctx, logger, sampler, running, j, views, nodeID, peerService)
 
 		case <-historyTicker.C:
 			sampler.CaptureTrend()
+		}
+	}
+}
+
+// drainExitEvents processes queued exits after cancel for at most
+// shutdownDrainBound, so in-flight exits record stopped status and free
+// network deterministically instead of stranding. A detached context
+// carries the writes: the parent ctx is already done. It returns early
+// after 200ms idle so a quiet shutdown does not pay the full bound;
+// the 5s bound only caps a busy queue or racing monitors.
+func drainExitEvents(
+	ctx context.Context,
+	logger *logs.Logger,
+	j journal.Journal,
+	nodeID uuid.UUID,
+	exitEvents <-chan ExitEvent,
+	running map[uuid.UUID]*ContainerAndProcess,
+	ipAndCIDRs map[uuid.UUID]string,
+	peerService *peerdiscovery.MemberService,
+	views []journalview.View,
+) {
+	timeout := time.NewTimer(shutdownDrainBound)
+	defer timeout.Stop()
+	drainCtx := context.WithoutCancel(ctx)
+	idle := time.NewTimer(200 * time.Millisecond)
+	defer idle.Stop()
+	for {
+		select {
+		case ev := <-exitEvents:
+			handleExitEvent(drainCtx, logger, j, nodeID, ev.WorkloadID, ev.ExitStatus, running, ipAndCIDRs, peerService, views)
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
+			}
+			idle.Reset(200 * time.Millisecond)
+		case <-timeout.C:
+			return
+		case <-idle.C:
+			return
 		}
 	}
 }
@@ -453,10 +518,14 @@ func reconcileWorkloadSpec(
 		return
 	}
 
-	// 2. Image drift on a running container -> stop it; the exited
-	// entry below picks up the new image after the normal exit cleanup
+	// 2. Spec drift on a running container -> stop it; the exited
+	// entry below picks up the new spec after the normal exit cleanup
 	// (veth and port mappings free through the exit path, never leak).
 	// Checked before the running early-return so drift always stops.
+	// Behavior change: image drift alone used to restart; now HostPort,
+	// ContainerPort, Files, and Resources drift restart the same way, so
+	// a same-image port or resource edit converges instead of sticking
+	// on the old container.
 	if stopOnDrift(logger, spec, entry, exists, running) {
 		return
 	}
@@ -483,10 +552,14 @@ func reconcileWorkloadSpec(
 	startContainer(ctx, logger, puller, runtime, j, nodeID, spec, running, ipAndCIDRs, exitEvents, peerService, views, sampler)
 }
 
-// stopOnDrift stops a running container whose image differs from the
+// stopOnDrift stops a running container whose spec differs from the
 // view, reporting whether it acted. The exited entry picks up the new
-// image through the normal exit path on a later tick, after veth and
+// spec through the normal exit path on a later tick, after veth and
 // port mappings free through exit cleanup.
+// Drift covers image plus HostPort, ContainerPort, Files, and Resources:
+// same-image edits to those fields restart through this same path.
+// Other fields (command, env, QoS, health, etc.) do not trigger a
+// restart here; they take effect on the next natural restart.
 func stopOnDrift(
 	logger *logs.Logger,
 	spec workload.Spec,
@@ -494,22 +567,47 @@ func stopOnDrift(
 	exists bool,
 	running map[uuid.UUID]*ContainerAndProcess,
 ) bool {
-	if !exists || entry == nil || entry.ExitStatus != nil || entry.Stopping || entry.Spec.Image == spec.Image {
+	if !exists || entry == nil || entry.ExitStatus != nil || entry.Stopping || !specDrifted(entry.Spec, spec) {
 		return false
 	}
-	logger.Info("image update, stopping old container",
+	logger.Info("spec update, stopping old container",
 		logs.String("id", spec.ID.String()),
 		logs.String("image", spec.Image))
 	destroyContainer(logger, entry.Spec, running)
 	return true
 }
 
+// specDrifted reports whether the live spec needs a restart to converge:
+// image, ports, files, or resources changed. Same-image edits to ports,
+// files, or resources restart through the image-drift path.
+func specDrifted(old, next workload.Spec) bool {
+	if old.Image != next.Image {
+		return true
+	}
+	if old.HostPort != next.HostPort || old.ContainerPort != next.ContainerPort {
+		return true
+	}
+	if old.Resources != next.Resources {
+		return true
+	}
+	if len(old.Files) != len(next.Files) {
+		return true
+	}
+	for i := range old.Files {
+		if old.Files[i] != next.Files[i] {
+			return true
+		}
+	}
+	return false
+}
+
 // handleExitedEntry processes an exited entry and reports whether to
-// start a fresh container now. An explicit image update drops policy
-// and backoff: the operator ordered a new image, and the old container
-// already exited and cleaned up. Otherwise the restart policy decides.
+// start a fresh container now. An explicit spec update (image, ports,
+// files, or resources) drops policy and backoff: the operator ordered a
+// new spec, and the old container already exited and cleaned up.
+// Otherwise the restart policy decides.
 func handleExitedEntry(entry *ContainerAndProcess, spec workload.Spec, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) bool {
-	if entry.Spec.Image != spec.Image {
+	if specDrifted(entry.Spec, spec) {
 		delete(running, spec.ID)
 		peerService.SetWorkloadCount(countRunning(running))
 		return true
@@ -694,6 +792,7 @@ func startContainer(
 		Container:     ctr,
 		ProcessHandle: processHandle,
 		Spec:          spec,
+		done:          make(chan struct{}),
 	}
 	running[spec.ID] = &containerAndProcess
 	peerService.SetWorkloadCount(countRunning(running))
@@ -734,7 +833,10 @@ func stopTimeout(spec workload.Spec) time.Duration {
 }
 
 // destroyContainer initiates asynchronous shutdown of a container by sending SIGTERM.
-// If SIGTERM times out after stopTimeout(spec), a SIGKILL fallback is sent.
+// If SIGTERM times out after stopTimeout(spec), a SIGKILL fallback is sent
+// unless the target already exited: the timer watches the entry done
+// channel closed by handleExitEvent and cancels on early exit, so no
+// dead-handle signal fires and no PID-reuse risk remains.
 func destroyContainer(
 	logger *logs.Logger,
 	spec workload.Spec,
@@ -746,6 +848,10 @@ func destroyContainer(
 	}
 
 	entry.Stopping = true
+	if entry.done == nil {
+		entry.done = make(chan struct{})
+	}
+	done := entry.done
 	logger.Debug("stopping container", logs.String("id", spec.ID.String()))
 	if err := entry.ProcessHandle.Signal(syscall.SIGTERM); err != nil {
 		logger.Error("SIGTERM failed", logs.String("id", spec.ID.String()), logs.Error(err))
@@ -758,12 +864,23 @@ func destroyContainer(
 	// Launch background fallback timer for SIGKILL escalation if SIGTERM times out.
 	// Detached from ctx on purpose: daemon shutdown cancels ctx, and
 	// aborting the timer there would strand SIGTERM-ignoring containers as
-	// orphans with no escalation.
+	// orphans with no escalation. The timer also watches done: a clean
+	// exit before the timeout cancels escalation, so SIGKILL never fires
+	// at a dead handle or a recycled PID.
 	go func() {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 
-		<-timer.C
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
 		logger.Warn("process SIGTERM timed out, sending SIGKILL", logs.String("id", id.String()))
 		if err := proc.Signal(syscall.SIGKILL); err != nil {
 			logger.Error("SIGKILL failed", logs.String("id", id.String()), logs.Error(err))
@@ -844,6 +961,7 @@ func removeEntryPortMapping(
 
 // handleExitEvent processes container process exit events in the main event loop,
 // performing network and container cleanup and recording the stopped instance state.
+// It closes the entry done channel so a pending SIGKILL timer cancels.
 func handleExitEvent(
 	ctx context.Context,
 	logger *logs.Logger,
@@ -867,6 +985,13 @@ func handleExitEvent(
 	entry.ExitStatus = &status
 	entry.restartCount++
 	entry.restartAfter = clock.Now().Add(backOff(entry.restartCount))
+	if entry.done != nil {
+		select {
+		case <-entry.done:
+		default:
+			close(entry.done)
+		}
+	}
 
 	recordInstanceEvent(ctx, logger, j, views, entry.Spec, nodeID, workload.StateStopped, 0)
 	peerService.SetWorkloadCount(countRunning(running))
@@ -998,49 +1123,58 @@ func backOff(restartCount int) time.Duration {
 // Adopted entries re-learn their CIDR from the surviving NAT rule for the
 // spec's host port; when rediscovery fails the mapping stays missing and
 // every tick warns that the rule may leak on cleanup.
+// Load failures warn (like the port-mapping path) and return pending with
+// count 1; retryAdopts warns every tick until resolved or aged out.
 func adoptContainers(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 	running map[uuid.UUID]*ContainerAndProcess, ipAndCIDRs map[uuid.UUID]string,
 	workloadsView *journalview.Workloads,
 	stateDir string, exitEvents chan<- ExitEvent,
-) {
+) map[uuid.UUID]int {
+	pending := map[uuid.UUID]int{}
 	specs, err := workloadsView.List(ctx)
 	if err != nil {
 		logger.Error("workloads view list", logs.Error(err))
-		return
+		return pending
 	}
 
 	for _, spec := range specs {
-		adoptOneSpec(ctx, logger, nodeID, running, ipAndCIDRs, stateDir, exitEvents, spec)
+		if adoptOneSpec(ctx, logger, nodeID, running, ipAndCIDRs, stateDir, exitEvents, spec) {
+			pending[spec.ID] = 1
+		}
 	}
+	return pending
 }
 
 // adoptOneSpec re-attaches one assigned container. Removed specs are adopted
 // too so the stop path reaps them; anything not running on this node is
 // skipped, and a dead-but-loaded tombstone is destroyed so no state lingers.
+// It reports true when libcontainer.Load fails and the caller should retry:
+// the Load warn repeats every tick via retryAdopts until resolved or aged
+// out, mirroring the port-mapping warn-every-tick path.
 func adoptOneSpec(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 	running map[uuid.UUID]*ContainerAndProcess, ipAndCIDRs map[uuid.UUID]string,
 	stateDir string, exitEvents chan<- ExitEvent, spec workload.Spec,
-) {
+) bool {
 	if spec.AssignedNodeID != nodeID {
-		return
+		return false
 	}
 
 	ctr, err := libcontainer.Load(stateDir, spec.ID.String())
 	if err != nil {
-		logger.Error("libcontainer load", logs.Error(err))
-		return
+		logger.Warn("libcontainer load, retrying", logs.String("id", spec.ID.String()), logs.Error(err))
+		return true
 	}
 
 	status, err := ctr.Status()
 	if err != nil || status != libcontainer.Running {
 		destroyLeftoverTombstone(logger, spec, ctr)
-		return
+		return false
 	}
 
 	state, err := ctr.State()
 	if err != nil {
 		logger.Error("container state", logs.Error(err))
-		return
+		return false
 	}
 
 	proc := cr.AdoptProcess(state.InitProcessPid)
@@ -1048,6 +1182,7 @@ func adoptOneSpec(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 		Container:     ctr,
 		ProcessHandle: proc,
 		Spec:          spec,
+		done:          make(chan struct{}),
 	}
 	adoptPortMapping(ctx, logger, spec, ipAndCIDRs)
 	go monitorProcessExit(ctx, spec.ID, proc, exitEvents)
@@ -1055,6 +1190,53 @@ func adoptOneSpec(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 		// The tombstone already ordered this container stopped; reap
 		// now so the exit path cleans network and records the stop.
 		destroyContainer(logger, spec, running)
+	}
+	return false
+}
+
+// retryAdopts re-attempts pending Load failures every slow tick. Each tick
+// warns like the port-mapping path until the container adopts or the spec
+// leaves this node; at adoptMaxTicks the entry drops with a final warn so
+// a permanently missing state never warns forever.
+func retryAdopts(
+	ctx context.Context,
+	logger *logs.Logger,
+	nodeID uuid.UUID,
+	running map[uuid.UUID]*ContainerAndProcess,
+	ipAndCIDRs map[uuid.UUID]string,
+	workloadsView *journalview.Workloads,
+	stateDir string,
+	exitEvents chan<- ExitEvent,
+	pending map[uuid.UUID]int,
+) {
+	if len(pending) == 0 {
+		return
+	}
+	for id, n := range pending {
+		if _, ok := running[id]; ok {
+			delete(pending, id)
+			continue
+		}
+		spec, err := workloadsView.Get(ctx, id)
+		if err != nil {
+			logger.Debug("adopt retry lookup failed, keeping pending", logs.String("id", id.String()), logs.Error(err))
+			continue
+		}
+		if spec == nil || spec.Removed || spec.AssignedNodeID != nodeID {
+			delete(pending, id)
+			continue
+		}
+		if !adoptOneSpec(ctx, logger, nodeID, running, ipAndCIDRs, stateDir, exitEvents, *spec) {
+			delete(pending, id)
+			continue
+		}
+		n++
+		if n >= adoptMaxTicks {
+			logger.Warn("libcontainer load still failing, dropping adopt", logs.String("id", id.String()), logs.Int("ticks", n))
+			delete(pending, id)
+			continue
+		}
+		pending[id] = n
 	}
 }
 

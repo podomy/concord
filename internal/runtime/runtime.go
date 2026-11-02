@@ -45,6 +45,11 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		// error was wrapped inside open stores.
 		return err
 	}
+	// Teardown order is loops (ctx cancel) -> DNS stop -> stores ->
+	// network. Registering network teardown before stores close makes it
+	// run after: defers run LIFO. DNS Stop goes explicitly after ctx.Done
+	// below; it is idempotent and safe when never started.
+	defer teardownNetworking(logger) //nolint:contextcheck // shutdown runs after ctx is done; teardown stays detached on purpose
 	defer closeStores(logger, st)
 
 	eventsByID, _, workloads, pinned, views, err := setupViews(
@@ -202,8 +207,10 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		logs.String("node_id", nodeConfig.ID.String()),
 	)
 
-	// Clean up wireguard tunnels and network masquerade.
-	teardownNetworking(logger) //nolint:contextcheck // shutdown runs after ctx is done; teardown stays detached on purpose
+	// Shutdown order: loops already observe ctx cancel, then DNS stop,
+	// then stores (deferred), then network (deferred last). Stop is
+	// idempotent and safe when Start never ran.
+	dnsserver.Stop()
 	return nil
 }
 

@@ -333,7 +333,12 @@ func pickNode(members []peerdiscovery.Node, spec workload.Spec, reserved map[uui
 }
 
 // prefersNode reports whether member beats best under the placement
-// order: alive over non-alive, lowest pressure, fewest workloads.
+// order: alive over non-alive, known pressure over unknown, lowest
+// pressure, fewest workloads. An all-zero CPU/Mem/Disk triple means
+// fresh-boot gossip with no samples yet: it deprioritizes below any
+// measured node but never excludes, so unknown nodes still place when
+// they are the only candidates. If all candidates are unknown, pressure
+// ties and the workload count decides among them.
 func prefersNode(member, best peerdiscovery.Node) bool {
 	if member.State == peerdiscovery.NodeStateAlive && best.State != peerdiscovery.NodeStateAlive {
 		return true
@@ -341,11 +346,23 @@ func prefersNode(member, best peerdiscovery.Node) bool {
 	if member.State != best.State {
 		return false
 	}
+	memberUnknown := isUnknownPressure(member.Metadata)
+	bestUnknown := isUnknownPressure(best.Metadata)
+	if memberUnknown != bestUnknown {
+		return !memberUnknown
+	}
 	memberPressure, bestPressure := nodePressure(member), nodePressure(best)
 	if memberPressure != bestPressure {
 		return memberPressure < bestPressure
 	}
 	return member.Metadata.Workloads < best.Metadata.Workloads
+}
+
+// isUnknownPressure reports whether the gossip trio carries no samples
+// yet. Fresh-boot nodes gossip zeros until the fast beat publishes its
+// first reading; zeros then mean unknown, not idle.
+func isUnknownPressure(m peerdiscovery.NodeMetadata) bool {
+	return m.CPUPercent == 0 && m.MemPercent == 0 && m.DiskPercent == 0
 }
 
 // fitsMemory reports whether the member has the requested megabytes free

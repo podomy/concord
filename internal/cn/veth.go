@@ -113,6 +113,8 @@ func DeleteLink(linkName string) error {
 // setupVethLink create the veth pairs. It returns end A, and an error.
 // The end A goes to the host, the end B goes to the other namespace (i.e. container).
 // Returns the interface, ipAndCIDR as string, and an error.
+// Interior failures delete vethA best-effort, mirroring the port-mapping
+// failure path, so no host end leaks when addressing or netns moves fail.
 func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (netlink.Link, string, error) {
 	err := ctx.Err()
 	if err != nil {
@@ -135,41 +137,55 @@ func setupVethLink(ctx context.Context, vethA, vethB string, namespacePID int) (
 	// The link becomes unavailable after this change on host.
 	vethBLink, err := netlink.LinkByName(vethB)
 	if err != nil {
-		return nil, "", fmt.Errorf("link by name: %w", err)
+		return nil, "", failVeth("link by name", vethA, err)
 	}
 
 	// Set the address for the link device / interface before putting it into the
 	// namespace of the container.
 	ipAndCIDRString, err := AllocateIP()
 	if err != nil {
-		return nil, "", fmt.Errorf("allocate ip: %w", err)
+		return nil, "", failVeth("allocate ip", vethA, err)
 	}
 	addr, err := netlink.ParseAddr(ipAndCIDRString)
 	if err != nil {
-		return nil, "", fmt.Errorf("netlink parse addr: %w", err)
+		return nil, "", failVeth("netlink parse addr", vethA, err)
 	}
 	err = netlink.AddrAdd(vethBLink, addr)
 	if err != nil {
-		return nil, "", fmt.Errorf("netlink addr add: %w", err)
+		return nil, "", failVeth("netlink addr add", vethA, err)
 	}
 
 	err = netlink.LinkSetUp(vethBLink)
 	if err != nil {
-		return nil, "", fmt.Errorf("link set up B: %w", err)
+		return nil, "", failVeth("link set up B", vethA, err)
 	}
 
 	err = netlink.LinkSetNsPid(vethBLink, namespacePID)
 	if err != nil {
-		return nil, "", fmt.Errorf("link set ns pid: %w", err)
+		return nil, "", failVeth("link set ns pid", vethA, err)
 	}
 
 	return vethALink, ipAndCIDRString, nil
 }
 
+// failVeth wraps an interior veth failure with best-effort vethA cleanup.
+// A failed cleanup appends its error like the port-mapping path; success
+// returns the plain wrapped cause.
+func failVeth(op, vethA string, err error) error {
+	delErr := DeleteLink(vethA)
+	if delErr != nil {
+		return fmt.Errorf("%s: %w (cleanup %s: %w)", op, err, vethA, delErr)
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// VethEnd selects one end of a veth pair.
 type VethEnd string
 
 const (
+	// VethA is the host-side end of a veth pair.
 	VethA VethEnd = "a"
+	// VethB is the container-side end of a veth pair.
 	VethB VethEnd = "b"
 )
 

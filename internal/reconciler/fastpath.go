@@ -6,6 +6,7 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,20 @@ const fastTickInterval = 500 * time.Millisecond
 // the fast beat, not in history.
 const historyInterval = 5 * time.Second
 
+// fastProbeConcurrency caps parallel health probes on the fast beat. Each
+// probe holds its own 5s timeout, so 8 in flight keeps a normal fleet
+// well under the 500ms cadence even when one probe hangs.
+const fastProbeConcurrency = 8
+
+// fastProbeTimeout bounds one probe's context. cr.CheckHealth already
+// times out internally, but the explicit bound keeps the beat detached
+// from caller cancellation semantics.
+const fastProbeTimeout = 5 * time.Second
+
+// checkHealth runs one probe. A var so unit tests stub slow probes
+// without root or network; production always uses cr.CheckHealth.
+var checkHealth = cr.CheckHealth
+
 // runFastTick checks the health of running workloads on the fast beat and
 // samples pressure for the scheduler and inspection. It appends journal
 // events solely on transitions (see runHealthChecks), so the fast cadence
@@ -43,11 +58,45 @@ func runFastTick(ctx context.Context, logger *logs.Logger, sampler *node.Sampler
 }
 
 func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
-	for _, entry := range running {
+	// Collect probe targets first so mutation below stays single-threaded.
+	// Probes run in parallel below; destroy/signal decisions apply after,
+	// in map order, preserving the old sequential semantics.
+	type target struct {
+		id    uuid.UUID
+		entry *ContainerAndProcess
+	}
+	var targets []target
+	for id, entry := range running {
 		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
 			continue
 		}
-		healthy := cr.CheckHealth(ctx, logger, entry.Spec, entry.Container)
+		targets = append(targets, target{id: id, entry: entry})
+	}
+	if len(targets) == 0 {
+		return
+	}
+
+	// Probe in parallel with bounded concurrency. Each probe gets its own
+	// 5s timeout so one hung check cannot stall the beat behind it.
+	results := make([]bool, len(targets))
+	sem := make(chan struct{}, fastProbeConcurrency)
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t target) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			probeCtx, cancel := context.WithTimeout(ctx, fastProbeTimeout)
+			defer cancel()
+			results[i] = checkHealth(probeCtx, logger, t.entry.Spec, t.entry.Container)
+		}(i, t)
+	}
+	wg.Wait()
+
+	for i := range targets {
+		healthy := results[i]
+		entry := targets[i].entry
 		// Check liveness.
 		if healthy {
 			entry.unhealthyReported = false
