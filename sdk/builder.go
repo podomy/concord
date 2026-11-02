@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -186,26 +187,107 @@ func (b *Builder) StopTimeoutSeconds(seconds int) *Builder {
 
 // Validate verifies that the workload configuration satisfies all invariants.
 func (b *Builder) Validate() error {
-	if b.workload.Image == "" {
+	err := validateBuilderPlacement(b.workload)
+	if err != nil {
+		return err
+	}
+
+	err = validateBuilderHealth(b.workload.HealthAction, b.workload.HealthProbe, b.workload.HealthCommand)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range b.workload.Files {
+		err = validateBuilderFile(file)
+		if err != nil {
+			return err
+		}
+	}
+
+	if slices.Contains(b.workload.DependsOn, b.workload.ID) {
+		return fmt.Errorf("workload cannot depend on itself: %s", b.workload.ID)
+	}
+
+	return nil
+}
+
+// validateBuilderPlacement checks image, ports, memory, restart, and
+// QoS so Build fails before server 400.
+func validateBuilderPlacement(w Workload) error {
+	if w.Image == "" {
 		return ErrEmptyImage //nolint:wrapcheck // sentinel error
 	}
 
-	if (b.workload.HostPort > 0 && b.workload.ContainerPort == 0) ||
-		(b.workload.ContainerPort > 0 && b.workload.HostPort == 0) {
+	if (w.HostPort > 0 && w.ContainerPort == 0) ||
+		(w.ContainerPort > 0 && w.HostPort == 0) {
 		return ErrInvalidPortMapping //nolint:wrapcheck // sentinel error
 	}
 
-	if b.workload.Resources.MemoryMB < 0 {
+	if w.Resources.MemoryMB < 0 {
 		return ErrNegativeMemory //nolint:wrapcheck // sentinel error
 	}
 
-	switch b.workload.Restart {
+	switch w.Restart {
 	case "", RestartAlways, RestartNever, RestartOnFailure:
 		// valid.
 	default:
-		return fmt.Errorf("%w: %q", ErrInvalidRestartPolicy, b.workload.Restart)
+		return fmt.Errorf("%w: %q", ErrInvalidRestartPolicy, w.Restart)
 	}
 
+	switch w.QoS {
+	case "", QoSBestEffort, QoSBurstable, QoSGuaranteed:
+		// valid.
+	default:
+		return fmt.Errorf("invalid QoS class %q; must be 'besteffort', 'burstable', or 'guaranteed'", string(w.QoS))
+	}
+
+	return nil
+}
+
+// validateBuilderHealth mirrors the server health gate so bad probes
+// fail at Build instead of server 400.
+func validateBuilderHealth(action HealthAction, probe HealthProbe, command []string) error {
+	switch action {
+	case HealthActionRestart, HealthActionSignal:
+	default:
+		return fmt.Errorf("invalid health action %d; must be 0 (restart) or 1 (signal)", int(action))
+	}
+	switch probe {
+	case "", HealthProbeHTTP, HealthProbeTCP:
+	case HealthProbeExec:
+		if len(command) == 0 {
+			return fmt.Errorf("exec probe requires a health command") //nolint:perfsprint // plain error, no wrap target
+		}
+	default:
+		return fmt.Errorf("invalid health probe %q; must be 'http', 'tcp', or 'exec'", string(probe))
+	}
+	return nil
+}
+
+// validateBuilderFile mirrors the server file gate: absolute clean
+// paths, sha256 digests, modes within 0777.
+func validateBuilderFile(file FileRef) error {
+	if !filepath.IsAbs(file.Path) {
+		return fmt.Errorf("file path must be absolute: %q", file.Path)
+	}
+	if filepath.Clean(file.Path) != file.Path {
+		return fmt.Errorf("file path must be clean: %q", file.Path)
+	}
+	if slices.Contains(strings.Split(file.Path, string(filepath.Separator)), "..") {
+		return fmt.Errorf("file path must not escape: %q", file.Path)
+	}
+	hexPart, ok := strings.CutPrefix(file.Digest, "sha256:")
+	if !ok || len(hexPart) != 64 {
+		return fmt.Errorf("file digest must be sha256:<64 hex>: %q", file.Digest)
+	}
+	for _, c := range hexPart {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return fmt.Errorf("file digest must be sha256:<64 hex>: %q", file.Digest)
+		}
+	}
+	if file.Mode > 0o777 {
+		return fmt.Errorf("file mode %o exceeds 0777: %s", file.Mode, file.Path)
+	}
 	return nil
 }
 

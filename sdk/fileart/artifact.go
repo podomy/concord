@@ -116,11 +116,12 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 	blobDigest := digestOf(data)
 	exists, err := c.blobExists(ctx, blobDigest)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("check blob %s: %w", blobDigest, err)
 	}
 	if !exists {
-		if err := c.uploadBlob(ctx, blobDigest, data); err != nil {
-			return "", err
+		err = c.uploadBlob(ctx, blobDigest, data)
+		if err != nil {
+			return "", fmt.Errorf("upload blob %s: %w", blobDigest, err)
 		}
 	}
 
@@ -286,11 +287,11 @@ func (c *Client) PullTo(ctx context.Context, digest, dest string) error {
 func Materialize(ctx context.Context, rootfs string, files []File, fetch func(ctx context.Context, digest, dest string) error) error {
 	dests, err := resolveDests(rootfs, files)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve file destinations: %w", err)
 	}
 	err = fetchAll(ctx, files, dests, fetch)
 	if err != nil {
-		return err
+		return fmt.Errorf("fetch files: %w", err)
 	}
 	return nil
 }

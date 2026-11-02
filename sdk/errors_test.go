@@ -37,7 +37,7 @@ func TestClient_UnavailableMapping(t *testing.T) {
 	}
 }
 
-// List and Nodes map any 4xx to ErrValidation and any 5xx to
+// List and Nodes map 400 and 422 to ErrValidation and any 5xx to
 // ErrUnavailable.
 func TestClient_ListNodesStatusMapping(t *testing.T) {
 	t.Parallel()
@@ -49,7 +49,7 @@ func TestClient_ListNodesStatusMapping(t *testing.T) {
 		want   error
 	}{
 		{"list 400", "/v1/workloads", http.StatusBadRequest, sdk.ErrValidation},
-		{"list 403", "/v1/workloads", http.StatusForbidden, sdk.ErrValidation},
+		{"list 422", "/v1/workloads", http.StatusUnprocessableEntity, sdk.ErrValidation},
 		{"list 500", "/v1/workloads", http.StatusInternalServerError, sdk.ErrUnavailable},
 		{"list 503", "/v1/workloads", http.StatusServiceUnavailable, sdk.ErrUnavailable},
 		{"nodes 400", "/v1/nodes", http.StatusBadRequest, sdk.ErrValidation},

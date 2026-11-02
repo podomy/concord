@@ -161,13 +161,16 @@ func validationError(body []byte) error {
 }
 
 // requestError maps a non-2xx status with its body to an error, routing
-// 400 through ErrValidation, 503 through ErrUnavailable, and leaving
-// every other status unstructured.
+// 400 and 422 through ErrValidation, any 5xx through ErrUnavailable,
+// and leaving every other status unstructured. All 5xx map to
+// ErrUnavailable for consistency: every 5xx is a server-side failure
+// the client cannot fix by resending the same bytes. 404 keeps its own
+// ErrNotFound mapping at call sites that check it first.
 func requestError(status int, body []byte) error {
-	if status == http.StatusBadRequest {
+	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
 		return validationError(body)
 	}
-	if status == http.StatusServiceUnavailable {
+	if status >= 500 && status < 600 {
 		return unavailableError(body)
 	}
 	return fmt.Errorf("server error (%d): %s", status, string(body))
@@ -184,11 +187,12 @@ func unavailableError(body []byte) error {
 	return fmt.Errorf("%w: %s", ErrUnavailable, msg)
 }
 
-// listError maps a List or Nodes non-2xx status to a sentinel: any 4xx
-// arrives as ErrValidation, any 5xx as ErrUnavailable, both preserving
-// the server message. Other statuses stay unstructured.
+// listError maps a List or Nodes non-2xx status to a sentinel: 400 and
+// 422 arrive as ErrValidation, any 5xx as ErrUnavailable, both preserving
+// the server message. Other statuses stay unstructured so auth or rate
+// limits never misreport as validation.
 func listError(status int, body []byte) error {
-	if status >= 400 && status < 500 {
+	if status == 400 || status == 422 {
 		return validationError(body)
 	}
 	if status >= 500 && status < 600 {
@@ -221,17 +225,8 @@ func (c *unixClient) Submit(ctx context.Context, w Workload) (uuid.UUID, error) 
 		return uuid.Nil, fmt.Errorf("read response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusBadRequest {
-		return uuid.Nil, validationError(body)
-	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		var errResp errorResponse
-		jsonErr := json.Unmarshal(body, &errResp)
-		if jsonErr == nil && errResp.Error != "" {
-			return uuid.Nil, fmt.Errorf("server rejected submission: %s", errResp.Error)
-		}
-
-		return uuid.Nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return uuid.Nil, requestError(resp.StatusCode, body)
 	}
 
 	var submitResp submitResponse
@@ -471,11 +466,8 @@ func (c *unixClient) UpdateImage(ctx context.Context, id uuid.UUID, image string
 	if resp.StatusCode == http.StatusNotFound {
 		return ErrNotFound //nolint:wrapcheck // sentinel error
 	}
-	if resp.StatusCode == http.StatusBadRequest {
-		return validationError(body)
-	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return requestError(resp.StatusCode, body)
 	}
 
 	return nil
