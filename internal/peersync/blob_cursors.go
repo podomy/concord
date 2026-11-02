@@ -388,7 +388,7 @@ func (s *blobCursorStore) DeletePeer(peer uuid.UUID) error {
 	if s.kv != nil {
 		err := s.deleteStoredPeer(prefix)
 		if err != nil {
-			return err
+			return fmt.Errorf("delete stored peer %s: %w", prefix, err)
 		}
 	}
 	s.deleteMemPeer(prefix)

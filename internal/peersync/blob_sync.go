@@ -219,6 +219,9 @@ func WantedFromSpecs(specs []workload.Spec) []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, spec := range specs {
+		if spec.Removed {
+			continue
+		}
 		for _, file := range spec.Files {
 			norm, ok := normalizeBlobDigest(file.Digest)
 			if !ok {
@@ -296,7 +299,7 @@ func (b *BlobSyncer) Ensure(ctx context.Context, digests []string) error {
 	}
 	clean, err := cleanDigests(digests)
 	if err != nil {
-		return err
+		return fmt.Errorf("clean blob digests: %w", err)
 	}
 	b.rememberWanted(clean)
 	if len(clean) == 0 {
@@ -1129,16 +1132,30 @@ func (b *BlobSyncer) fetchMissingChunks(ctx context.Context, peer blobPeer, chun
 		if cerr != nil {
 			return fmt.Errorf("context cancelled: %w", cerr)
 		}
-		if !b.store.HasRaw(chunk) {
-			serr := b.storeOneChunk(ctx, peer, chunk)
-			if serr != nil {
-				return serr
-			}
-		}
-		serr := store.save(peer.id, root, start+uint64(i)+1)
+		serr := b.ensureOneChunk(ctx, peer, chunk)
 		if serr != nil {
 			return serr
 		}
+		serr = store.save(peer.id, root, start+uint64(i)+1)
+		if serr != nil {
+			return serr
+		}
+	}
+	return nil
+}
+
+// ensureOneChunk guarantees chunk exists and verifies: a present chunk
+// with a bad hash refetches instead of advancing past corruption.
+func (b *BlobSyncer) ensureOneChunk(ctx context.Context, peer blobPeer, chunk string) error {
+	if b.store.HasRaw(chunk) {
+		_, err := b.store.GetRaw(chunk)
+		if err == nil {
+			return nil
+		}
+	}
+	err := b.storeOneChunk(ctx, peer, chunk)
+	if err != nil {
+		return err
 	}
 	return nil
 }
