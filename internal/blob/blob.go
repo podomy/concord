@@ -104,16 +104,16 @@ func ensureStoreDirs(dir string) error {
 func Open(dir string) (*Store, error) {
 	err := ensureStoreDirs(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create store dirs %s: %w", dir, err)
 	}
 	err = syncDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sync store dir %s: %w", dir, err)
 	}
 	s := &Store{dir: dir}
 	err = s.SweepTmp()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sweep tmp %s: %w", dir, err)
 	}
 	return s, nil
 }
@@ -261,12 +261,12 @@ func checkNameChar(c byte, s string) error {
 func checkName(s string) error {
 	err := checkNameHead(s)
 	if err != nil {
-		return err
+		return fmt.Errorf("check name %q: %w", s, err)
 	}
 	for i := range len(s) {
 		err = checkNameChar(s[i], s)
 		if err != nil {
-			return err
+			return fmt.Errorf("check name %q: %w", s, err)
 		}
 	}
 	return nil
@@ -502,15 +502,15 @@ func checkManifestRoot(digest string, m *Manifest) error {
 func checkManifest(digest string, m *Manifest) error {
 	err := checkManifestHeader(digest, m)
 	if err != nil {
-		return err
+		return fmt.Errorf("manifest header %s: %w", digest, err)
 	}
 	err = checkManifestCounts(m)
 	if err != nil {
-		return err
+		return fmt.Errorf("manifest counts %s: %w", digest, err)
 	}
 	err = checkManifestRoot(digest, m)
 	if err != nil {
-		return err
+		return fmt.Errorf("manifest root %s: %w", digest, err)
 	}
 	return nil
 }
@@ -1145,6 +1145,10 @@ func collectTags(entries []fs.DirEntry) []string {
 	return out
 }
 
+// maxTagsList caps ListTags output so a tag-spammed repo cannot grow
+// a caller without limit. Matches the registry serve cap.
+const maxTagsList = 4096
+
 // ListTags returns the sorted tag names bound under a repo.
 // Crash temp files and dotfiles are skipped.
 func (s *Store) ListTags(repo string) []string {
@@ -1160,5 +1164,8 @@ func (s *Store) ListTags(repo string) []string {
 	}
 	out = collectTags(entries)
 	sort.Strings(out)
+	if len(out) > maxTagsList {
+		out = out[:maxTagsList]
+	}
 	return out
 }
