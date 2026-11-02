@@ -38,7 +38,7 @@ type AnchorResolver struct {
 // win nearest-first. Out-of-planet points are not known either; Valid
 // already rejects those.
 func anchorKnown(p geo.Point) bool {
-	return p != (geo.Point{}) && p.Valid()
+	return !p.IsUnknown() && p.Valid()
 }
 
 // Resolve returns anchor addresses without any I/O: anchors are

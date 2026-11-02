@@ -32,6 +32,11 @@ const tldConcord = ".concord.local."
 // Clients must treat TC as incomplete; there is no TCP fallback.
 const maxUDPResponse = 512
 
+// dnsTTL is the TTL in seconds on every SRV, A, and AAAA answer. Ten
+// seconds tracks the 5s membership churn: a dead member lingers at most two
+// beats in caches instead of a minute. The tradeoff is more queries.
+const dnsTTL = 10
+
 // handler implements dns.Handler to serve Concord peer discovery records.
 type handler struct {
 	memberService *peerdiscovery.MemberService
@@ -119,7 +124,7 @@ func (h *handler) populateSRV(msg *dns.Msg, nodes []peerdiscovery.Node, name str
 			continue
 		}
 		msg.Answer = append(msg.Answer, &dns.SRV{
-			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 60},
+			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: dnsTTL},
 			Target: node.ID.String() + tldConcord,
 			Port:   node.Address.Port(),
 		})
@@ -152,6 +157,10 @@ func (h *handler) populateAAAA(msg *dns.Msg, nodes []peerdiscovery.Node, name st
 // populateAddr fills msg with A (wantV6 false) or AAAA (wantV6 true) records
 // for the member matching name. A known name without a record of the asked
 // type returns empty NOERROR (NODATA); an unknown name returns NXDOMAIN.
+//
+// A position of (0, 0) is unknown, not a filter: it is Valid per geo, so a
+// member with no fix still gets records here. By-name answers stay
+// state-independent; only SRV filters on liveness.
 func (h *handler) populateAddr(msg *dns.Msg, nodes []peerdiscovery.Node, name string, wantV6 bool) {
 	for _, node := range nodes {
 		target := node.ID.String() + tldConcord
@@ -167,17 +176,17 @@ func (h *handler) populateAddr(msg *dns.Msg, nodes []peerdiscovery.Node, name st
 }
 
 // addrRecord builds the A or AAAA answer for a normalized member address.
-// Wire shape per type unchanged: same owner name, class, and TTL as before;
-// only the type follows the address family now.
+// Owner name, class, and TTL match the SRV answers; only the type follows
+// the address family.
 func addrRecord(name string, addr netip.Addr, wantV6 bool) dns.RR {
 	if wantV6 {
 		return &dns.AAAA{
-			Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+			Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: dnsTTL},
 			AAAA: addr.AsSlice(),
 		}
 	}
 	return &dns.A{
-		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: dnsTTL},
 		A:   addr.AsSlice(),
 	}
 }

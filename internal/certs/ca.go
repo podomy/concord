@@ -26,7 +26,10 @@ import (
 // and ca.key before Ensure runs. WriteCA is only for those provisioning
 // tools and tests.
 //
-// Overwrites existing CA files at those paths.
+// Overwriting is never silent: existing files are copied to <name>.bak with
+// mode 0600 first, and a warning naming the backup goes to stderr. The
+// generation still supersedes: there is no revocation list, the new CA
+// simply replaces the old binding (see Ensure).
 func WriteCA() error {
 	caDER, _, caKey, err := createCA()
 	if err != nil {
@@ -38,12 +41,46 @@ func WriteCA() error {
 		return fmt.Errorf("default paths: %w", err)
 	}
 
+	if err := backupCAFile(paths.CA); err != nil {
+		return err
+	}
+	if err := backupCAFile(paths.CAKey); err != nil {
+		return err
+	}
 	if err = writePEM(paths.CA, "CERTIFICATE", caDER); err != nil {
 		return fmt.Errorf("write pem: %w", err)
 	}
 	if err = writePEM(paths.CAKey, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)); err != nil {
 		return fmt.Errorf("write pem: %w", err)
 	}
+	return nil
+}
+
+// backupCAFile copies an existing file at path to path plus ".bak" with
+// mode 0600 and warns on stderr naming the backup. A missing file is not
+// an error: first provisioning has nothing to keep. WriteCA has no logger,
+// so stderr carries the warning; provisioning runs are rare and the
+// message must survive any log configuration.
+func backupCAFile(path string) error {
+	// #nosec G304: paths come from DefaultPaths (local config dir).
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read existing %s: %w", path, err)
+	}
+	bak := path + ".bak"
+	// #nosec G703: bak appends a fixed suffix to a DefaultPaths entry (local config dir).
+	if err := os.WriteFile(bak, raw, 0o600); err != nil {
+		return fmt.Errorf("back up %s to %s: %w", path, bak, err)
+	}
+	// WriteFile applies the mode only on creation; an older backup with
+	// wider permissions stays tight.
+	if err := os.Chmod(bak, 0o600); err != nil {
+		return fmt.Errorf("chmod backup %s: %w", bak, err)
+	}
+	fmt.Fprintf(os.Stderr, "warning: WriteCA replaced %s; previous copy kept at %s (mode 0600)\n", path, bak) //nolint:errcheck // best-effort stderr warning, WriteCA has no logger
 	return nil
 }
 

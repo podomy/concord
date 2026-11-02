@@ -24,6 +24,15 @@ func (p Point) Valid() bool {
 	return p.Lat >= -90 && p.Lat <= 90 && p.Lon >= -180 && p.Lon <= 180
 }
 
+// IsUnknown reports whether the point carries no fix: the exact zero
+// point. Members without a position gossip (0, 0), which is Valid but
+// orders nothing: no fleet anchors at the Gulf of Guinea buoy, so (0, 0)
+// must never win nearest-first. Non-finite points are not unknown, they
+// are invalid; see Valid.
+func (p Point) IsUnknown() bool {
+	return p == (Point{})
+}
+
 // DistanceKM returns the great-circle distance between two points. Flat
 // math on degrees breaks with scale (a degree of longitude is 111km at
 // the equator and zero at the poles); the haversine costs the same ten
