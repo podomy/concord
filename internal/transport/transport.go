@@ -43,20 +43,7 @@ func Start(
 		postSync(w, r, index)
 	})
 
-	srv := &http.Server{
-		Addr:    ":" + Port,
-		Handler: mux,
-		// Header bound stays short; body and response bounds below are
-		// frozen at 10s. A large-journal fallback scan (full file walk
-		// on index miss or unknown cursor) runs inside postSync under
-		// these timeouts, so a huge journal without a warm index can
-		// hit WriteTimeout and fail the page instead of stalling the
-		// connection. The offset index exists to keep the common path
-		// a seek plus a bounded page; timeout values stay frozen.
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-	}
+	srv := newTransportServer(mux)
 
 	var lc net.ListenConfig
 	raw, err := lc.Listen(ctx, "tcp", srv.Addr)
@@ -98,6 +85,28 @@ func Start(
 	}()
 
 	return nil
+}
+
+// newTransportServer builds the node-to-node HTTP server over Noise.
+// IdleTimeout mirrors the registry at 120s: every transport connection
+// is Noise-authenticated, so an idle keep-alive pins an authenticated
+// session and must be reaped instead of held open indefinitely.
+func newTransportServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:    ":" + Port,
+		Handler: handler,
+		// Header bound stays short; body and response bounds below are
+		// frozen at 10s. A large-journal fallback scan (full file walk
+		// on index miss or unknown cursor) runs inside postSync under
+		// these timeouts, so a huge journal without a warm index can
+		// hit WriteTimeout and fail the page instead of stalling the
+		// connection. The offset index exists to keep the common path
+		// a seek plus a bounded page; timeout values stay frozen.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // buildSyncIndex runs the one-time offset backfill and logs the outcome.

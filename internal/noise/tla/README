@@ -32,3 +32,6 @@ Go adherence
 
 ik_model_test.go maps IWrite, IRead, RRead, RWrite to real calls plus
 key mirror by cross decrypt and nonce rules.
+Model drift is safe-direction only: write-path pre-checks fail open without poison and never advance state.
+Symmetric transport nonces are unmodeled: each direction starts at 0 and increments independently.
+Checked properties transfer because code refines the model: every modeled step maps to a real call.

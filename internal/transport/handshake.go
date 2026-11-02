@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -271,8 +272,21 @@ func initiatorHandshake(raw net.Conn, self StaticKey, selfParcel, expectPub []by
 // encoded parcel goes out as the reply payload; the initiator's parcel
 // arrives as the request payload and is checked with verify before serving. It
 // returns the encrypted channel, or an error after which the caller must close
-// raw. The caller sets a deadline on raw first.
+// raw. The caller sets a deadline on raw first. A nil verifier fails closed:
+// no handshake runs without one.
+//
+// TLA drift notes (model internal/noise/tla/ik.tla, no model edits):
+// write-path pre-checks in internal/noise/ik.go (checkWriteRequest,
+// checkWriteResponse) return errors without poisoning the handshake, so the
+// caller may retry with a smaller payload, while read-path length failures
+// poison. The model has no write-failure step, so this fail-open retry
+// surface intentionally exceeds it. The handshake symmetric nonce
+// (symmetricState.nonce in internal/noise/symmetric.go) is unmodeled; the
+// TLA tracks only transport nonces.
 func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Verifier) (*noiseConn, error) {
+	if verify == nil {
+		return nil, fmt.Errorf("noise responder requires a verifier") //nolint:perfsprint // plain error, no wrap target
+	}
 	selfKey, err := toNoiseStatic(static)
 	if err != nil {
 		return nil, err
@@ -363,10 +377,39 @@ type noiseConn struct {
 	pending []byte
 }
 
+// maxEmptyFramesPerRead caps consecutive empty-plaintext frames skipped by
+// one Read call. A cooperative Write never sends empty messages (zero-length
+// writes send nothing), so a run of empties means a non-cooperative peer;
+// without a bound one Read could spin on adversarial frames forever.
+const maxEmptyFramesPerRead = 128
+
+// isNonceExhausted reports whether err is terminal transport nonce
+// exhaustion from internal/noise Transport.Encrypt or Decrypt. The noise
+// package raises a fresh error per call with no exported sentinel, so
+// detection is by message. This matches the terminal-err semantics in
+// internal/noise/tla/ik.tla (IEncOverflow, RDecOverflow, IDecOverflow move
+// the model to terminal err): the session is dead, never half-open.
+func isNonceExhausted(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "nonce exhausted")
+}
+
+// closeOnTerminal closes the underlying conn when err is terminal nonce
+// exhaustion, so no half-open session lingers after the session keys are
+// unusable. Other errors pass through with the conn left for the caller,
+// which owns conn lifecycle outside the terminal case.
+func (c *noiseConn) closeOnTerminal(err error) error {
+	if !isNonceExhausted(err) {
+		return err
+	}
+	_ = c.conn.Close() //nolint:errcheck // fail closed; caller already has the cause
+	return fmt.Errorf("noise nonce exhausted, connection closed: %w", err)
+}
+
 // Read returns decrypted stream bytes, reading and decrypting frames until
 // plaintext is available. Empty plaintext frames (only possible from a
 // non-cooperative peer: a cooperative Write never sends one) are skipped by
-// looping to the next frame instead of returning (0, nil). A (0, nil) return
+// looping to the next frame instead of returning (0, nil), up to
+// maxEmptyFramesPerRead consecutive empties per call. A (0, nil) return
 // happens only when p is zero-length, per the net.Conn contract.
 func (c *noiseConn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
@@ -375,7 +418,11 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
 
+	empty := 0
 	for len(c.pending) == 0 {
+		if empty > maxEmptyFramesPerRead {
+			return 0, fmt.Errorf("noise read: %d consecutive empty frames", empty)
+		}
 		frame, err := readFrame(c.conn, maxTransportFrame)
 		if err != nil {
 			return 0, err
@@ -383,11 +430,12 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 
 		plain, err := c.recv.Decrypt(nil, nil, frame)
 		if err != nil {
-			return 0, fmt.Errorf("noise decrypt: %w", err)
+			return 0, c.closeOnTerminal(fmt.Errorf("noise decrypt: %w", err))
 		}
 		// Empty plaintext carries no stream bytes. Loop for the next
 		// frame rather than surfacing a spurious (0, nil).
 		if len(plain) == 0 {
+			empty++
 			continue
 		}
 		c.pending = plain
@@ -413,7 +461,7 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 
 		ciphertext, err := c.send.Encrypt(nil, nil, p[:chunk])
 		if err != nil {
-			return written, fmt.Errorf("noise encrypt: %w", err)
+			return written, c.closeOnTerminal(fmt.Errorf("noise encrypt: %w", err))
 		}
 
 		err = writeFrame(c.conn, ciphertext)

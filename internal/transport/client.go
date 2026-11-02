@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/podomy/concord/internal/journal"
 )
 
 // SyncPath is the node-to-node unary sync endpoint.
@@ -144,11 +146,29 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 	return resp, nil
 }
 
+// maxSyncEventPayload caps one event payload in a sync page at 1 MiB.
+// The response body is already capped at 1 MiB, and the per-event cap
+// stops one giant event plus empty rest from squeezing through while a
+// second event overflows the total.
+const maxSyncEventPayload = 1 << 20
+
+// syncMaxClockSkew bounds how far an event timestamp may lie in the future.
+// Zero timestamps are invalid (never set by journal appends); future
+// timestamps beyond one hour of skew are invalid (clock lie or forgery).
+// Past timestamps carry no bound: old history must keep syncing.
+const syncMaxClockSkew = time.Hour
+
 // validateSyncResponse fails closed on an oversized or malformed page.
 // The event cap is twice maxSyncLimit so a buggy or hostile peer cannot
 // push an unbounded decode into the caller. NextCursor must be empty or a
-// UUID, and every event must carry a usable identity: nil IDs, empty types,
-// or nil node IDs are rejected rather than passed to the caller.
+// UUID, and when events are present a non-empty cursor must bind to the
+// last event id so a peer cannot redirect the caller's stored cursor.
+// Empty pages keep the server's cursor echo (a UUID that names no event
+// in this page), since the validator sees no request cursor to bind
+// against. Every event must carry a usable identity and fresh-enough
+// metadata: nil IDs, empty types, nil node IDs, zero or far-future
+// timestamps, missing or oversized payloads, and duplicate IDs are all
+// rejected rather than passed to the caller.
 func validateSyncResponse(peer netip.AddrPort, resp SyncResponse) error {
 	if len(resp.Events) > 2*maxSyncLimit {
 		return fmt.Errorf("sync %s: too many events %d", peer, len(resp.Events))
@@ -157,25 +177,56 @@ func validateSyncResponse(peer netip.AddrPort, resp SyncResponse) error {
 		if _, err := uuid.Parse(resp.NextCursor); err != nil {
 			return fmt.Errorf("sync %s: bad next cursor: %w", peer, err)
 		}
+		if len(resp.Events) > 0 && resp.NextCursor != resp.Events[len(resp.Events)-1].ID.String() {
+			return fmt.Errorf("sync %s: next cursor %q does not match last event %s", peer, resp.NextCursor, resp.Events[len(resp.Events)-1].ID)
+		}
 	}
+	seen := make(map[uuid.UUID]struct{}, len(resp.Events))
 	for i := range resp.Events {
-		ev := &resp.Events[i]
-		if ev.ID == uuid.Nil {
-			return fmt.Errorf("sync %s: event %d has nil id", peer, i)
+		if err := validateSyncEvent(peer, &resp.Events[i], i, seen); err != nil {
+			return err
 		}
-		if ev.Type == "" {
-			return fmt.Errorf("sync %s: event %s has empty type", peer, ev.ID)
-		}
-		if ev.NodeID == uuid.Nil {
-			return fmt.Errorf("sync %s: event %s has nil node", peer, ev.ID)
-		}
+	}
+	return nil
+}
+
+// validateSyncEvent checks one page event: identity, clock, payload, dup.
+func validateSyncEvent(peer netip.AddrPort, ev *journal.Event, i int, seen map[uuid.UUID]struct{}) error {
+	if ev.ID == uuid.Nil {
+		return fmt.Errorf("sync %s: event %d has nil id", peer, i)
+	}
+	if _, dup := seen[ev.ID]; dup {
+		return fmt.Errorf("sync %s: event %s duplicated", peer, ev.ID)
+	}
+	seen[ev.ID] = struct{}{}
+	if ev.Type == "" {
+		return fmt.Errorf("sync %s: event %s has empty type", peer, ev.ID)
+	}
+	if ev.NodeID == uuid.Nil {
+		return fmt.Errorf("sync %s: event %s has nil node", peer, ev.ID)
+	}
+	if ev.Timestamp.IsZero() {
+		return fmt.Errorf("sync %s: event %s has zero timestamp", peer, ev.ID)
+	}
+	if ev.Timestamp.After(time.Now().Add(syncMaxClockSkew)) {
+		return fmt.Errorf("sync %s: event %s timestamp %s is beyond skew", peer, ev.ID, ev.Timestamp.Format(time.RFC3339))
+	}
+	if ev.Payload == nil {
+		return fmt.Errorf("sync %s: event %s has nil payload", peer, ev.ID)
+	}
+	if len(ev.Payload) > maxSyncEventPayload {
+		return fmt.Errorf("sync %s: event %s payload %d bytes over max %d", peer, ev.ID, len(ev.Payload), maxSyncEventPayload)
 	}
 	return nil
 }
 
 // verifyResponder checks the responder's in-session parcel: it must claim the
 // expected node ID and carry a valid CA signature over the dialed key.
+// A nil verifier fails closed: no parcel is ever trusted without one.
 func (c *Client) verifyResponder(expect Peer, raw []byte) error {
+	if c.verify == nil {
+		return fmt.Errorf("peer %s has no verifier configured", expect.ID)
+	}
 	id, generation, sig, err := decodeParcel(raw)
 	if err != nil {
 		return err

@@ -11,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"os"
 
 	"github.com/google/uuid"
 
@@ -23,6 +24,7 @@ const (
 	maxSyncLimit     = 1000
 )
 
+// SyncRequest asks the peer for journal events after Cursor.
 type SyncRequest struct {
 	// Cursor is the caller's position in the peer's journal. Empty
 	// means from the start.
@@ -30,6 +32,7 @@ type SyncRequest struct {
 	Limit  int    `json:"limit"`
 }
 
+// SyncResponse returns one journal page and the next cursor.
 type SyncResponse struct {
 	// NextCursor is the cursor to send with the next request. Empty
 	// means the peer had nothing new.
@@ -148,6 +151,15 @@ func loadSyncPage(ctx context.Context, index *offsetIndex, cursor string, limit 
 
 	reader, err := journalreader.OpenJSONLReader()
 	if err != nil {
+		// A missing journal means no local events yet: serve an empty
+		// page (200 with Events:[] and empty NextCursor) instead of a
+		// 500. Only not-exist takes this path; real open errors such
+		// as permissions still fail with 500 below. errors.Is is used
+		// because the reader wraps the open error and os.IsNotExist
+		// does not traverse wrap chains.
+		if errors.Is(err, os.ErrNotExist) {
+			return []journal.Event{}, "", nil
+		}
 		return nil, "", fmt.Errorf("open journal: %w", err)
 	}
 	defer func() { _ = reader.Close() }() //nolint:errcheck // best-effort
@@ -191,6 +203,13 @@ func loadIndexedPage(ctx context.Context, index *offsetIndex, cursor string, lim
 	// Jump straight to the stored byte instead of scanning for it.
 	reader, err := journalreader.OpenJSONLReader()
 	if err != nil {
+		// A missing journal holds no offsets: report a miss so the
+		// caller falls back to a full scan, which serves the empty
+		// page. Real open errors still fail closed below. errors.Is is
+		// used because the reader wraps the open error.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", false, nil
+		}
 		return nil, "", false, fmt.Errorf("open journal: %w", err)
 	}
 	defer func() { _ = reader.Close() }() //nolint:errcheck // best-effort

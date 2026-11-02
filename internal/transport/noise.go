@@ -39,21 +39,35 @@ type StaticKey struct {
 // EnsureStaticKey loads or generates the Noise static key under
 // <config>/concord/noise/secret.key.
 //
-// The file holds 32 raw bytes (mode 0600). A file of any other length is an
-// error and is never overwritten. The private half is never logged.
+// The file holds 32 raw bytes (mode 0600). A present file must be mode 0600
+// or stricter: fail closed on group or other access, matching gossip key
+// and ca.key handling. A file of any other length or an unparseable key is
+// an error and is never overwritten: the bad file is left in place. Only a
+// missing file generates a key. The private half is never logged.
 func EnsureStaticKey() (StaticKey, error) {
 	path, err := noiseKeyPath()
 	if err != nil {
 		return StaticKey{}, err
 	}
 
-	// #nosec G304: path is local runtime configuration, not user input.
-	raw, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err == nil {
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			return StaticKey{}, fmt.Errorf(
+				"refusing noise key %s with mode %04o: want 0600 (group and others must have no access)",
+				path,
+				perm,
+			)
+		}
+		// #nosec G304: path is local runtime configuration, not user input.
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return StaticKey{}, fmt.Errorf("read noise key %s: %w", path, err)
+		}
 		return staticKeyFromPrivate(raw)
 	}
 	if !os.IsNotExist(err) {
-		return StaticKey{}, fmt.Errorf("read noise key: %w", err)
+		return StaticKey{}, fmt.Errorf("stat noise key %s: %w", path, err)
 	}
 
 	return generateStaticKey(path)
@@ -91,24 +105,38 @@ func noiseGenerationPath() (string, error) {
 
 // EnsureGenerationCounter loads this node's Noise key rotation counter,
 // creating it at 0 on first use. The file holds one big-endian uint64 (mode
-// 0600). A counter without a static key is meaningless, so runtime always
-// ensures the key first; a missing file here means first boot, not an error.
+// 0600). A present file must be mode 0600 or stricter: fail closed on group
+// or other access, matching the static key check. A corrupt file is an
+// error and is left in place, never reset. A counter without a static key
+// is meaningless, so runtime always ensures the key first; a missing file
+// here means first boot, not an error.
 func EnsureGenerationCounter() (uint64, error) {
 	path, err := noiseGenerationPath()
 	if err != nil {
 		return 0, err
 	}
 
-	// #nosec G304: path is local runtime configuration, not user input.
-	raw, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err == nil {
+		if perm := info.Mode().Perm(); perm&0o077 != 0 {
+			return 0, fmt.Errorf(
+				"refusing noise generation %s with mode %04o: want 0600 (group and others must have no access)",
+				path,
+				perm,
+			)
+		}
+		// #nosec G304: path is local runtime configuration, not user input.
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return 0, fmt.Errorf("read noise generation %s: %w", path, err)
+		}
 		if len(raw) != generationWidth {
 			return 0, fmt.Errorf("noise generation: got %d bytes, want %d", len(raw), generationWidth)
 		}
 		return binary.BigEndian.Uint64(raw), nil
 	}
 	if !os.IsNotExist(err) {
-		return 0, fmt.Errorf("read noise generation: %w", err)
+		return 0, fmt.Errorf("stat noise generation %s: %w", path, err)
 	}
 
 	err = os.MkdirAll(filepath.Dir(path), 0o700)

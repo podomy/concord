@@ -288,8 +288,10 @@ func checkManifestFixed(m BlobManifest) error {
 	return nil
 }
 
-// checkManifestSizes validates empty versus non-empty shape and the chunk
-// count cap.
+// checkManifestSizes validates empty versus non-empty shape, the chunk
+// count cap, and TotalSize against chunk count. A non-empty blob with
+// n chunks satisfies (n-1)*ChunkSize < Total <= n*ChunkSize, matching
+// the blob store checkManifestCounts rule.
 func checkManifestSizes(m BlobManifest) error {
 	if m.TotalSize == 0 && len(m.Chunks) != 0 {
 		return fmt.Errorf("empty manifest must have no chunks") //nolint:perfsprint // plain error, no wrap target
@@ -299,6 +301,16 @@ func checkManifestSizes(m BlobManifest) error {
 	}
 	if int64(len(m.Chunks)) > maxBlobFetchBytes/int64(blob.ChunkSize)+1 {
 		return fmt.Errorf("manifest lists %d chunks, over cap", len(m.Chunks))
+	}
+	n := int64(len(m.Chunks))
+	if n == 0 {
+		return nil
+	}
+	if m.TotalSize <= (n-1)*int64(blob.ChunkSize) {
+		return fmt.Errorf("manifest total size too small for chunk count") //nolint:perfsprint // plain error, no wrap target
+	}
+	if m.TotalSize > n*int64(blob.ChunkSize) {
+		return fmt.Errorf("manifest total size too large for chunk count") //nolint:perfsprint // plain error, no wrap target
 	}
 	return nil
 }
