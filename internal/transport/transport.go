@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/podomy/concord/internal/logs"
@@ -40,7 +41,7 @@ func Start(
 	// A nil index serves from full scans, which keeps index-less
 	// setups on today's behavior.
 	mux.HandleFunc("POST "+SyncPath, func(w http.ResponseWriter, r *http.Request) {
-		postSync(w, r, index)
+		serveSyncPage(w, r, index, logger)
 	})
 
 	srv := newTransportServer(mux)
@@ -146,9 +147,25 @@ func (e *handshakeError) Temporary() bool {
 	return true
 }
 
-// noiseListener wraps accepted TCP connections in the Noise responder
-// handshake. Handshake failures close the connection and surface as temporary
-// Accept errors, which makes http.Serve back off instead of exiting.
+// noiseListener wraps accepted TCP connections so the Noise responder
+// handshake runs in the per-connection serve path, not on the Accept path.
+// Accept returns the raw conn fast with the handshake deadline preset; the
+// first Read or Write runs the handshake before any HTTP bytes flow. A
+// stalled peer therefore occupies one serve goroutine instead of the
+// listener, so honest peers proceed while it waits out the deadline.
+// Handshake failures close the conn and surface as read/write errors on
+// that conn, which the server logs with the remote addr and a static
+// failure class. The handshakeError type stays for failure classification:
+// its Temporary/Unwrap contract is unchanged, but it no longer drives
+// http.Serve backoff, since Accept itself never blocks on a handshake.
+//
+// TLA drift note (model internal/noise/tla/ik.tla, no model edits): the
+// model runs the handshake inline; deferring it past Accept intentionally
+// exceeds the model. Observable wire behavior is unchanged: no HTTP byte
+// moves before the handshake completes, and the deadline still bounds it.
+// One deliberate tradeoff: the handshake clears the preset deadline on
+// success, which also clears any http.Server read deadline set before the
+// first Read. Server timeouts re-apply to later I/O on that conn.
 type noiseListener struct {
 	net.Listener
 	static StaticKey
@@ -157,7 +174,8 @@ type noiseListener struct {
 	logger *logs.Logger
 }
 
-// Accept accepts one TCP connection and runs the Noise responder handshake.
+// Accept accepts one TCP connection and presets the handshake deadline.
+// The handshake itself runs on first I/O in the serving goroutine.
 func (l *noiseListener) Accept() (net.Conn, error) {
 	raw, err := l.Listener.Accept()
 	if err != nil {
@@ -172,18 +190,141 @@ func (l *noiseListener) Accept() (net.Conn, error) {
 		return nil, fmt.Errorf("set handshake deadline: %w", err)
 	}
 
-	conn, err := serveHandshake(raw, l.static, l.parcel, l.verify)
-	if err != nil {
-		_ = raw.Close() //nolint:errcheck // best-effort close on failed handshake
-		l.logger.Warn("noise handshake failed", logs.Error(err))
-		return nil, &handshakeError{err: err}
+	return &deferredNoiseConn{
+		raw:    raw,
+		static: l.static,
+		parcel: l.parcel,
+		verify: l.verify,
+		logger: l.logger,
+	}, nil
+}
+
+// deferredNoiseConn runs the Noise responder handshake on first I/O and
+// then behaves as the established session. It exists so Accept stays
+// fast: http.Server serves each accepted conn in its own goroutine, so the
+// blocking handshake happens there instead of serializing the listener.
+type deferredNoiseConn struct {
+	raw    net.Conn
+	static StaticKey
+	parcel []byte
+	verify Verifier
+	logger *logs.Logger
+
+	once         sync.Once
+	conn         *noiseConn
+	handshakeErr error
+}
+
+// ensure runs the responder handshake once and reports its outcome. The
+// deadline was preset by Accept; success clears it so HTTP I/O runs
+// unbounded by the handshake bound. Failure closes the raw conn and logs
+// the remote addr with a static failure class, never peer bytes.
+func (c *deferredNoiseConn) ensure() error {
+	c.once.Do(func() {
+		conn, err := serveHandshake(c.raw, c.static, c.parcel, c.verify)
+		if err != nil {
+			remote := c.raw.RemoteAddr()
+			addr := ""
+			if remote != nil {
+				addr = remote.String()
+			}
+			c.logger.Warn("noise handshake failed",
+				logs.String("remote_addr", addr),
+				logs.String("failure_class", classifyHandshakeError(err)),
+				logs.Error(err),
+			)
+			_ = c.raw.Close() //nolint:errcheck // failed handshake, nothing to report
+			c.handshakeErr = &handshakeError{err: err}
+			return
+		}
+
+		err = c.raw.SetDeadline(time.Time{})
+		if err != nil {
+			_ = c.raw.Close() //nolint:errcheck // best-effort close on failed accept
+			c.handshakeErr = fmt.Errorf("clear handshake deadline: %w", err)
+			return
+		}
+
+		c.conn = conn
+	})
+
+	return c.handshakeErr
+}
+
+// Read handshakes on first use, then returns decrypted stream bytes.
+func (c *deferredNoiseConn) Read(p []byte) (int, error) {
+	if err := c.ensure(); err != nil {
+		return 0, err
 	}
 
-	err = raw.SetDeadline(time.Time{})
+	n, err := c.conn.Read(p)
 	if err != nil {
-		_ = raw.Close() //nolint:errcheck // best-effort close on failed accept
-		return nil, fmt.Errorf("clear handshake deadline: %w", err)
+		return n, err
 	}
 
-	return conn, nil
+	return n, nil
+}
+
+// Write handshakes on first use, then sends encrypted stream bytes.
+func (c *deferredNoiseConn) Write(p []byte) (int, error) {
+	if err := c.ensure(); err != nil {
+		return 0, err
+	}
+
+	n, err := c.conn.Write(p)
+	if err != nil {
+		return n, err
+	}
+
+	return n, nil
+}
+
+// Close closes the underlying connection.
+func (c *deferredNoiseConn) Close() error {
+	err := c.raw.Close()
+	if err != nil {
+		return fmt.Errorf("close deferred noise conn: %w", err)
+	}
+
+	return nil
+}
+
+// LocalAddr returns the underlying local address.
+func (c *deferredNoiseConn) LocalAddr() net.Addr {
+	return c.raw.LocalAddr()
+}
+
+// RemoteAddr returns the underlying remote address.
+func (c *deferredNoiseConn) RemoteAddr() net.Addr {
+	return c.raw.RemoteAddr()
+}
+
+// SetDeadline delegates to the underlying connection.
+func (c *deferredNoiseConn) SetDeadline(t time.Time) error {
+	err := c.raw.SetDeadline(t)
+	if err != nil {
+		return fmt.Errorf("set deadline: %w", err)
+	}
+
+	return nil
+}
+
+// SetReadDeadline delegates to the underlying connection.
+func (c *deferredNoiseConn) SetReadDeadline(t time.Time) error {
+	err := c.raw.SetReadDeadline(t)
+	if err != nil {
+		return fmt.Errorf("set read deadline: %w", err)
+	}
+
+	return nil
+}
+
+// SetWriteDeadline delegates to the underlying connection.
+func (c *deferredNoiseConn) SetWriteDeadline(t time.Time) error {
+	err := c.raw.SetWriteDeadline(t)
+	if err != nil {
+		return fmt.Errorf("set write deadline: %w", err)
+	}
+
+	return nil
 }

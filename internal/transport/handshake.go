@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -214,6 +216,14 @@ func dialHandshake(
 		return nil, nil, err
 	}
 
+	// The handshake finished but the caller left while it ran: the
+	// session is established yet unwanted, so abandonIfCancelled closes
+	// it and reports the cancellation instead of a live conn.
+	conn, err = abandonIfCancelled(ctx, conn, addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	err = raw.SetDeadline(time.Time{})
 	if err != nil {
 		_ = raw.Close() //nolint:errcheck // best-effort close on failed handshake
@@ -335,6 +345,48 @@ func serveHandshake(raw net.Conn, static StaticKey, selfParcel []byte, verify Ve
 	return conn, nil
 }
 
+// classifyHandshakeError maps a handshake failure to a static failure
+// class for structured logging. Classes are a fixed set (timeout, frame,
+// parcel, verify, handshake), never peer bytes: peer-controlled strings
+// stay inside the wrapped error value, never in the class field.
+func classifyHandshakeError(err error) string {
+	if err == nil {
+		return "none"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "frame length"),
+		strings.Contains(msg, "frame payload"),
+		strings.Contains(msg, "frame "):
+		return "frame"
+	case strings.Contains(msg, "parcel"):
+		return "parcel"
+	case strings.Contains(msg, "signature"),
+		strings.Contains(msg, "verify"),
+		strings.Contains(msg, "claims"),
+		strings.Contains(msg, "verifier"):
+		return "verify"
+	default:
+		return "handshake"
+	}
+}
+
+// abandonIfCancelled drops an established session when ctx already fired.
+// The caller ran the handshake to completion but the result is unwanted, so
+// the conn closes and the ctx error reports instead of a live session.
+func abandonIfCancelled(ctx context.Context, conn *noiseConn, addr string) (*noiseConn, error) {
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close() //nolint:errcheck // abandoned session, nothing to report
+		return nil, fmt.Errorf("handshake %s: %w", addr, err)
+	}
+
+	return conn, nil
+}
+
 // LoadCACert parses the fleet CA certificate from caFile. Only the RSA public
 // key inside is ever used; no X.509 verification runs against it. Runtime uses
 // it to build the transport verifier; tests use it directly.
@@ -364,7 +416,9 @@ const maxTransportFrame = noise.MaxMsgLen + 16 + frameLenBytes
 
 // noiseConn is a net.Conn carrying length-prefixed Noise transport messages.
 // Reads and writes may proceed concurrently; each direction holds its own
-// Transport and mutex.
+// Transport and mutex. Close is idempotent: the first call closes the
+// underlying conn, later calls return nil. Read and Write fail fast after
+// Close instead of touching the conn.
 type noiseConn struct {
 	conn net.Conn
 	send *noise.Transport
@@ -373,15 +427,35 @@ type noiseConn struct {
 	sendMu sync.Mutex
 	recvMu sync.Mutex
 
+	// closed marks a completed Close. Reads and writes check it first so
+	// use-after-close fails with a clear error instead of racing the
+	// underlying conn teardown.
+	closed atomic.Bool
+	// sendPoison marks a desynced send direction: Encrypt advanced the
+	// nonce but the frame never reached the wire, so the peer's nonce
+	// can never catch up. A poisoned conn fails Writes closed instead
+	// of sending undecryptable follow-ups.
+	sendPoison atomic.Bool
+
 	// pending holds decrypted bytes not yet consumed by Read.
 	pending []byte
+	// emptyFrames counts empty-plaintext frames skipped over this
+	// connection's lifetime, guarded by recvMu.
+	emptyFrames uint64
 }
 
-// maxEmptyFramesPerRead caps consecutive empty-plaintext frames skipped by
-// one Read call. A cooperative Write never sends empty messages (zero-length
-// writes send nothing), so a run of empties means a non-cooperative peer;
-// without a bound one Read could spin on adversarial frames forever.
-const maxEmptyFramesPerRead = 128
+// maxEmptyFramesTotal caps cumulative empty-plaintext frames skipped by
+// one connection. A cooperative Write never sends empty messages
+// (zero-length writes send nothing), so any empty frame proves a
+// non-cooperative peer. The bound is connection-scoped on purpose: a
+// per-Read reset would let a slow drip of just-under-the-cap frames
+// spin one Read per frame forever. Honest peers send zero empties, so
+// the cap never trips on good traffic.
+//
+// TLA drift note (model internal/noise/tla/ik.tla, no model edits):
+// empty-frame skipping is unmodeled transport hardening; the bound only
+// narrows what the implementation accepts, never what honest peers send.
+const maxEmptyFramesTotal = 1024
 
 // isNonceExhausted reports whether err is terminal transport nonce
 // exhaustion from internal/noise Transport.Encrypt or Decrypt. The noise
@@ -409,19 +483,21 @@ func (c *noiseConn) closeOnTerminal(err error) error {
 // plaintext is available. Empty plaintext frames (only possible from a
 // non-cooperative peer: a cooperative Write never sends one) are skipped by
 // looping to the next frame instead of returning (0, nil), up to
-// maxEmptyFramesPerRead consecutive empties per call. A (0, nil) return
+// maxEmptyFramesTotal cumulative empties per connection. A (0, nil) return
 // happens only when p is zero-length, per the net.Conn contract.
 func (c *noiseConn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	if c.closed.Load() {
+		return 0, fmt.Errorf("noise read on closed conn") //nolint:perfsprint // plain sentinel, no wrap target
+	}
 	c.recvMu.Lock()
 	defer c.recvMu.Unlock()
 
-	empty := 0
 	for len(c.pending) == 0 {
-		if empty > maxEmptyFramesPerRead {
-			return 0, fmt.Errorf("noise read: %d consecutive empty frames", empty)
+		if c.emptyFrames > maxEmptyFramesTotal {
+			return 0, fmt.Errorf("noise read: %d cumulative empty frames", c.emptyFrames)
 		}
 		frame, err := readFrame(c.conn, maxTransportFrame)
 		if err != nil {
@@ -435,7 +511,7 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 		// Empty plaintext carries no stream bytes. Loop for the next
 		// frame rather than surfacing a spurious (0, nil).
 		if len(plain) == 0 {
-			empty++
+			c.emptyFrames++
 			continue
 		}
 		c.pending = plain
@@ -450,8 +526,16 @@ func (c *noiseConn) Read(p []byte) (int, error) {
 // Write encrypts p in MaxMsgLen chunks and writes one frame per chunk. A
 // zero-length Write returns (0, nil) without sending a frame: empty messages
 // are not delivered and never surface as empty plaintext to a cooperative
-// peer's Read.
+// peer's Read. A frame that fails after Encrypt advanced the nonce poisons
+// the send direction: the peer missed one nonce forever, so later frames
+// could never decrypt and the conn fails closed instead of staying usable.
 func (c *noiseConn) Write(p []byte) (int, error) {
+	if c.closed.Load() {
+		return 0, fmt.Errorf("noise write on closed conn") //nolint:perfsprint // plain sentinel, no wrap target
+	}
+	if c.sendPoison.Load() {
+		return 0, fmt.Errorf("noise write on poisoned conn") //nolint:perfsprint // plain sentinel, no wrap target
+	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
@@ -466,6 +550,11 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 
 		err = writeFrame(c.conn, ciphertext)
 		if err != nil {
+			// The nonce already advanced but the frame never moved:
+			// poison the direction and tear down, so no follow-up
+			// frame is ever sent into the desynced stream.
+			c.sendPoison.Store(true)
+			_ = c.conn.Close() //nolint:errcheck // fail closed; caller already has the cause
 			return written, err
 		}
 
@@ -476,8 +565,14 @@ func (c *noiseConn) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// Close closes the underlying connection.
+// Close closes the underlying connection. It is idempotent and safe to
+// race with in-flight Read and Write: the first call closes once, later
+// calls return nil, and in-flight I/O either completes on the conn or
+// fails fast on the closed flag.
 func (c *noiseConn) Close() error {
+	if c.closed.Swap(true) {
+		return nil
+	}
 	err := c.conn.Close()
 	if err != nil {
 		return fmt.Errorf("close noise conn: %w", err)

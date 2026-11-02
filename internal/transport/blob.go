@@ -131,7 +131,11 @@ func PeerRegistryBase(addr netip.Addr, port int) string {
 // HTTP. The mesh is trusted like the prior sync, and every byte is hash
 // verified against its digest, so a tampering peer fails the fetch
 // instead of poisoning the store. No request timeout: the caller's
-// context bounds the wait.
+// context bounds the wait, so every call must pass a bounded context
+// (a tick or request scope, never a daemon lifetime). Breach of that
+// contract strands a fetch on a stalled peer up to maxBlobFetchBytes.
+// No fixed timeout is added on purpose: one value cannot fit a 1 KiB
+// manifest and a 32 GiB fetch at once.
 type BlobClient struct {
 	http *http.Client
 }

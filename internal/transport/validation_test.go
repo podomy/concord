@@ -295,7 +295,9 @@ func TestCloseOnTerminalPassThrough(t *testing.T) {
 	}
 }
 
-// A run of empty-plaintext frames past the cap fails one Read.
+// A run of empty-plaintext frames past the cumulative per-connection cap
+// fails one Read. Round4 changed the cap from per-Read to cumulative, so
+// this drives the new total.
 func TestNoiseConnEmptyFrameCap(t *testing.T) {
 	fx := newHandshakeFixture(t)
 	c1, c2 := testPipe(t)
@@ -323,7 +325,7 @@ func TestNoiseConnEmptyFrameCap(t *testing.T) {
 
 	writeCh := make(chan error, 1)
 	go func() {
-		for range maxEmptyFramesPerRead + 1 {
+		for range maxEmptyFramesTotal + 1 {
 			empty, encErr := init.send.Encrypt(nil, nil, []byte{})
 			if encErr != nil {
 				writeCh <- encErr

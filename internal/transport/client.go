@@ -13,11 +13,13 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/internal/journal"
+	"github.com/podomy/concord/internal/logs"
 )
 
 // SyncPath is the node-to-node unary sync endpoint.
@@ -26,22 +28,81 @@ const SyncPath = "/v1/sync"
 // Client is a Noise IK client for Concord peer transport.
 // It presents this node's static key and parcel, dials peers whose static
 // key arrives via gossip, and verifies each responder's parcel before syncing.
+//
+// Client is safe for concurrent Sync. timeout and the adaptive page budget
+// (curLimit) are guarded by mu; timeout is otherwise set once at
+// construction (tests may assign it before first use).
 type Client struct {
 	static  StaticKey
 	parcel  []byte
 	verify  Verifier
 	timeout time.Duration
+	logger  *logs.Logger
+
+	mu       sync.RWMutex
+	curLimit int
 }
+
+// minSyncLimit floors the adaptive page budget: decode failures halve the
+// requested limit down to here, never below, so progress continues on
+// constrained links.
+const minSyncLimit = 10
 
 // NewClient builds a Client using this node's static key and encoded parcel.
 // verify checks each responder before syncing; see KeyPinner in runtime.
+// The page budget starts at the default page; see limitFor.
 func NewClient(static StaticKey, parcel []byte, verify Verifier) *Client {
 	return &Client{
-		static:  static,
-		parcel:  parcel,
-		verify:  verify,
-		timeout: 10 * time.Second,
+		static:   static,
+		parcel:   parcel,
+		verify:   verify,
+		timeout:  10 * time.Second,
+		curLimit: defaultSyncLimit,
 	}
+}
+
+// getTimeout reads the request timeout under the mutex.
+func (c *Client) getTimeout() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.timeout
+}
+
+// limitFor bounds the requested page to the adaptive budget: the smaller
+// of want and the current budget, or the budget itself when want asks for
+// the server default. The budget starts at the default page, halves per
+// decode failure to minSyncLimit, and resets on success. peersync always
+// asks for the default page, so the wire sees 100 normally and less while
+// failures persist.
+//
+// TLA drift note (no model edits): adaptive paging is unmodeled transport
+// hardening; it only narrows requested pages, never the wire format.
+func (c *Client) limitFor(want int) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if want <= 0 || want > c.curLimit {
+		return c.curLimit
+	}
+	return want
+}
+
+// noteDecodeFailure halves the page budget to minSyncLimit after a page
+// failed to decode, so the next request asks for a smaller page.
+func (c *Client) noteDecodeFailure() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.curLimit /= 2
+	if c.curLimit < minSyncLimit {
+		c.curLimit = minSyncLimit
+	}
+}
+
+// noteDecodeSuccess resets the page budget after a page decoded and
+// validated, so the next request asks for the full default page again.
+func (c *Client) noteDecodeSuccess() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.curLimit = defaultSyncLimit
 }
 
 // Sync pulls one page of events from peer (unary HTTP POST to /v1/sync over a
@@ -79,10 +140,11 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req
 	err = c.verifyResponder(expect, parcel)
 	if err != nil {
 		_ = conn.Close() //nolint:errcheck // best-effort close on failed verify
-		return SyncResponse{}, err
+		return SyncResponse{}, fmt.Errorf("verify responder %s: %w", peer, err)
 	}
 
 	var buf bytes.Buffer
+	req.Limit = c.limitFor(req.Limit)
 	if err = json.NewEncoder(&buf).Encode(req); err != nil {
 		_ = conn.Close() //nolint:errcheck // best-effort close on encode error
 		return SyncResponse{}, fmt.Errorf("marshal sync request: %w", err)
@@ -96,12 +158,15 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	return c.exchange(conn, peer, httpReq)
+	return c.exchange(conn, peer, httpReq, req.Cursor)
 }
 
 // exchange performs one HTTP request over an established Noise session and
 // decodes the sync response. The connection closes after the body is consumed.
-func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Request) (SyncResponse, error) {
+// expectedCursor is the request cursor the empty page must echo; see
+// validateSyncResponse. A regressive NextCursor keeps the current cursor
+// with a warn instead of failing; see clampRegressiveCursor.
+func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Request, expectedCursor string) (SyncResponse, error) {
 	// Deferred first so it runs last: body first, connection after.
 	defer func() {
 		_ = conn.Close() //nolint:errcheck // session done, nothing to report
@@ -114,7 +179,7 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 		},
 		DisableKeepAlives: true,
 	}
-	client := &http.Client{Timeout: c.timeout, Transport: transport}
+	client := &http.Client{Timeout: c.getTimeout(), Transport: transport}
 
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
@@ -138,11 +203,14 @@ func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Re
 
 	var resp SyncResponse
 	if err := json.NewDecoder(limited).Decode(&resp); err != nil {
+		c.noteDecodeFailure()
 		return SyncResponse{}, fmt.Errorf("decode sync response: %w", err)
 	}
-	if err := validateSyncResponse(peer, resp); err != nil {
+	if err := validateSyncResponse(peer, resp, expectedCursor); err != nil {
 		return SyncResponse{}, err
 	}
+	resp, _ = clampRegressiveCursor(expectedCursor, resp, c.logger)
+	c.noteDecodeSuccess()
 	return resp, nil
 }
 
@@ -163,15 +231,22 @@ const syncMaxClockSkew = time.Hour
 // push an unbounded decode into the caller. NextCursor must be empty or a
 // UUID, and when events are present a non-empty cursor must bind to the
 // last event id so a peer cannot redirect the caller's stored cursor.
-// Empty pages keep the server's cursor echo (a UUID that names no event
-// in this page), since the validator sees no request cursor to bind
-// against. Every event must carry a usable identity and fresh-enough
-// metadata: nil IDs, empty types, nil node IDs, zero or far-future
-// timestamps, missing or oversized payloads, and duplicate IDs are all
-// rejected rather than passed to the caller.
-func validateSyncResponse(peer netip.AddrPort, resp SyncResponse) error {
+// When expectedCursor is given, an empty page must echo the request cursor
+// (or carry an empty cursor); any other id is a foreign injection and is
+// rejected. Without it the legacy rule applies: any UUID echo passes, kept
+// for callers that bind the cursor elsewhere. Every event must carry a
+// usable identity and fresh-enough metadata: nil IDs, empty types, nil
+// node IDs, zero or far-future timestamps, missing or oversized payloads,
+// and duplicate IDs are all rejected rather than passed to the caller.
+//
+// peersync advances on echo, so the echo rule keeps honest servers working:
+// their empty pages carry exactly the requested cursor.
+func validateSyncResponse(peer netip.AddrPort, resp SyncResponse, expectedCursor ...string) error {
 	if len(resp.Events) > 2*maxSyncLimit {
 		return fmt.Errorf("sync %s: too many events %d", peer, len(resp.Events))
+	}
+	if len(resp.Events) == 0 && len(expectedCursor) > 0 {
+		return checkEmptyEcho(peer, resp, expectedCursor[0])
 	}
 	if resp.NextCursor != "" {
 		if _, err := uuid.Parse(resp.NextCursor); err != nil {
@@ -188,6 +263,42 @@ func validateSyncResponse(peer netip.AddrPort, resp SyncResponse) error {
 		}
 	}
 	return nil
+}
+
+// checkEmptyEcho rejects a non-empty NextCursor on an empty page that does
+// not echo the request cursor. An empty cursor always passes: it names
+// nothing-new, which advance ignores either way.
+func checkEmptyEcho(peer netip.AddrPort, resp SyncResponse, expected string) error {
+	if resp.NextCursor == "" {
+		return nil
+	}
+	if resp.NextCursor != normalizeCursor(expected) {
+		return fmt.Errorf("sync %s: next cursor %q does not echo request", peer, resp.NextCursor)
+	}
+	return nil
+}
+
+// clampRegressiveCursor keeps the cursor monotonic when request and
+// response cursors are comparable. UUIDs carry no order, so backward is
+// only observable in two shapes: a foreign id on an empty page is rejected
+// by validation, and an echo of the request cursor on a non-empty page is a
+// replay of already-held events. The replay keeps the current cursor with
+// a warn instead of failing: the events still apply idempotently, and the
+// caller's advance becomes a no-op instead of a rewind. It reports whether
+// the page was a replay.
+func clampRegressiveCursor(expected string, resp SyncResponse, logger *logs.Logger) (SyncResponse, bool) {
+	if len(resp.Events) == 0 {
+		return resp, false
+	}
+	want := normalizeCursor(expected)
+	if want == "" || resp.NextCursor != want {
+		return resp, false
+	}
+	logger.Warn("sync regressive cursor, keeping current",
+		logs.String("cursor", want),
+		logs.Int("events", len(resp.Events)),
+	)
+	return resp, true
 }
 
 // validateSyncEvent checks one page event: identity, clock, payload, dup.
@@ -245,11 +356,11 @@ func (c *Client) verifyResponder(expect Peer, raw []byte) error {
 }
 
 // dial opens the TCP connection with the caller's context and runs the IK
-// initiator handshake. DialContext carries cancellation; Timeout stays as the
-// fallback when the caller sets no deadline. Handshake deadlines and
-// cancel-abort live in dialHandshake.
+// initiator handshake. DialContext carries cancellation; the timeout read
+// under the mutex stays as the fallback when the caller sets no deadline.
+// Handshake deadlines and cancel-abort live in dialHandshake.
 func (c *Client) dial(ctx context.Context, peer netip.AddrPort, expect Peer) (*noiseConn, []byte, error) {
-	dialer := &net.Dialer{Timeout: c.timeout}
+	dialer := &net.Dialer{Timeout: c.getTimeout()}
 
 	addr := net.JoinHostPort(peer.Addr().String(), strconv.FormatUint(uint64(peer.Port()), 10))
 	conn, parcel, err := dialHandshake(ctx, dialer, addr, c.static, c.parcel, expect.Pub)
