@@ -40,12 +40,10 @@ func run() error {
 
 	// Leading flags belong to the daemon (currently only --anchor, which
 	// marks this node as a rendezvous anchor). Anything else goes
-	// to the CLI, including -h, -help, and --help as bare first args.
-	// Combined forms such as --anchor --help or --log-level debug --help
-	// still take the daemon path and fail as undefined flag: the daemon
-	// parser knows only --anchor and --log-level, and no combined
-	// daemon-plus-help parser is built.
-	if len(os.Args) == 1 || (strings.HasPrefix(os.Args[1], "-") && os.Args[1] != "-h" && os.Args[1] != "-help" && os.Args[1] != "--help") {
+	// to the CLI, including -h, -help, and --help in any position:
+	// a help flag anywhere routes to the CLI so combined forms such
+	// as --anchor --help show help instead of failing as undefined.
+	if len(os.Args) == 1 || (strings.HasPrefix(os.Args[1], "-") && !hasHelpFlag(os.Args[1:])) {
 		return runDaemon(ctx, os.Args[1:])
 	}
 
@@ -54,6 +52,16 @@ func run() error {
 	}
 
 	return nil
+}
+
+// hasHelpFlag reports whether any arg requests help.
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "-help" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 // runDaemon provisions anchor mode when flagged, then starts the node.

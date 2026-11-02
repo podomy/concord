@@ -59,4 +59,28 @@ func TestParseDaemonFlagsInvalid(t *testing.T) {
 	if _, err := parseDaemonFlags([]string{"workload"}); err == nil {
 		t.Fatal("expected error for positional args")
 	}
+	if _, err := parseDaemonFlags([]string{"--log-level", "verbose"}); err == nil {
+		t.Fatal("expected error for invalid log level")
+	}
+}
+
+// Equals form and combined flags parse the same as space form.
+func TestParseDaemonFlagsForms(t *testing.T) {
+	t.Parallel()
+
+	got, err := parseDaemonFlags([]string{"--log-level=warn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.logLevel != "warn" {
+		t.Fatalf("expected warn level, got %q", got.logLevel)
+	}
+
+	got, err = parseDaemonFlags([]string{"--anchor", "--log-level", "error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.anchor || got.logLevel != "error" {
+		t.Fatalf("expected anchor plus error level, got %+v", got)
+	}
 }

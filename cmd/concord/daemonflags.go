@@ -34,6 +34,11 @@ func parseDaemonFlags(args []string) (daemonFlags, error) {
 	if fs.NArg() > 0 {
 		return daemonFlags{}, fmt.Errorf("unexpected daemon arguments: %v", fs.Args())
 	}
+	switch flags.logLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return daemonFlags{}, fmt.Errorf("unknown log level %q: want debug, info, warn, or error", flags.logLevel)
+	}
 	return flags, nil
 }
 
