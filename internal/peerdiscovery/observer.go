@@ -37,7 +37,6 @@ func ObserveMemberlistPeers(
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Error("context cancelation", logs.Error(ctx.Err()))
 			return
 		case <-ticker.C:
 			current, err := pollPeerChanges(ctx, logger, localNodeID, memberService, j, views, previous)
