@@ -76,12 +76,9 @@ func mustReadResponse(t *testing.T, init *IKInitiator, msg []byte) ([]byte, *Tra
 }
 
 // mustRekey rekeys a transport or fails the test.
-func mustRekey(t *testing.T, tr *Transport, what string) {
+func mustRekey(t *testing.T, tr *Transport, _ string) {
 	t.Helper()
-	err := tr.Rekey()
-	if err != nil {
-		t.Fatalf("%s: %v", what, err)
-	}
+	tr.Rekey()
 }
 
 // mustEncrypt encrypts plaintext or fails the test.

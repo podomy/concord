@@ -88,12 +88,11 @@ func (t *Transport) Decrypt(out, ad, ciphertext []byte) ([]byte, error) {
 // Rekey replaces the transport key with the first output of Noise
 // HKDF-SHA256 keyed by the current key over empty input. The nonce is
 // unchanged, so rekey points must be agreed by the application; both mesh
-// peers run this code and derive the same next key.
-func (t *Transport) Rekey() error {
+// peers run this code and derive the same next key. It cannot fail for
+// these fixed inputs, so it returns nothing.
+func (t *Transport) Rekey() {
 	next, _ := hkdfSHA256(t.key[:], nil)
 	t.key = next
-
-	return nil
 }
 
 // IKInitiator runs the dialing side of IK. The responder static key comes
