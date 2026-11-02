@@ -6,6 +6,7 @@ package journalview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 
@@ -53,10 +54,15 @@ func RecordEvent(ctx context.Context, j journal.Journal, views []View, event jou
 		return fmt.Errorf("append event: %w", err)
 	}
 
+	var applyErr error
 	for _, view := range views {
-		if err := view.Apply(ctx, event); err != nil {
-			return fmt.Errorf("apply event to view: %w", err)
+		err := view.Apply(ctx, event)
+		if err != nil {
+			applyErr = errors.Join(applyErr, fmt.Errorf("apply event to view: %w", err))
 		}
+	}
+	if applyErr != nil {
+		return fmt.Errorf("apply event to views: %w", applyErr)
 	}
 
 	return nil
@@ -72,8 +78,9 @@ func RecordEventAndLog(
 	message string,
 	fields ...logs.Attr,
 ) error {
-	if err := RecordEvent(ctx, j, views, event); err != nil {
-		return err
+	err := RecordEvent(ctx, j, views, event)
+	if err != nil {
+		return fmt.Errorf("record event: %w", err)
 	}
 
 	fields = append(fields,

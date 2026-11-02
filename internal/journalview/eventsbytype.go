@@ -228,6 +228,9 @@ func (e *EventsByType) List(ctx context.Context, eventType string) ([]journal.Ev
 		c := b.Cursor()
 
 		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("list cancelled: %w", cerr)
+			}
 			var event journal.Event
 			err := json.Unmarshal(v, &event)
 			if err != nil {

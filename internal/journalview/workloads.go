@@ -278,6 +278,9 @@ func (e *Workloads) List(ctx context.Context) ([]workload.Spec, error) {
 		c := b.Cursor()
 
 		for _, v := c.First(); v != nil; _, v = c.Next() {
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("list cancelled: %w", cerr)
+			}
 			var spec workload.Spec
 			err := json.Unmarshal(v, &spec)
 			if err != nil {

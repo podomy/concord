@@ -216,6 +216,9 @@ func (e *EventsByID) List(ctx context.Context) ([]journal.Event, error) {
 		c := b.Cursor()
 
 		for _, v := c.First(); v != nil; _, v = c.Next() {
+			if cerr := ctx.Err(); cerr != nil {
+				return fmt.Errorf("list cancelled: %w", cerr)
+			}
 			var event journal.Event
 			err := json.Unmarshal(v, &event)
 			if err != nil {
