@@ -42,16 +42,17 @@ type PullResult struct {
 }
 
 // Pull fetches the image, resolves the platform, and extracts layers
-// into the rootfs directory under bundleDir. A stale rootfs from a
-// previous attempt is removed first so a failed start retries cleanly
-// instead of wedging every later tick on an already-exists error.
-// A failed extraction also removes the partial rootfs for the same
-// reason.
+// into the rootfs directory under bundleDir. Every failure path removes
+// the rootfs best effort: a stale rootfs from a previous attempt is
+// removed first, pre-extract failures clear it so a failed start retries
+// cleanly instead of wedging later ticks, and a failed extraction removes
+// the partial rootfs for the same reason.
 func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullResult, error) {
 	rootfs := filepath.Join(bundleDir, "rootfs")
 
 	parsed, err := parseImageReference(ref)
 	if err != nil {
+		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort stale cleanup on every error path
 		return nil, fmt.Errorf("parse image reference: %w", err)
 	}
 
@@ -59,11 +60,13 @@ func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullRes
 
 	configDigest, layerDigests, err := fetchImageManifest(ctx, client, parsed)
 	if err != nil {
+		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort stale cleanup on every error path
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
 
 	cfg, err := fetchImageConfig(ctx, client, parsed, configDigest)
 	if err != nil {
+		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort stale cleanup on every error path
 		return nil, fmt.Errorf("image config file: %w", err)
 	}
 
@@ -74,6 +77,7 @@ func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullRes
 
 	err = os.MkdirAll(rootfs, 0o700)
 	if err != nil {
+		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort partial cleanup
 		return nil, fmt.Errorf("create rootfs: %w", err)
 	}
 

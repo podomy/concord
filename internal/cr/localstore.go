@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,7 +57,12 @@ type rawBlobDir struct {
 	root string
 }
 
-// Has reports whether digest names a raw blob file on disk.
+// Has reports whether digest names a raw blob file on disk. Existence
+// only: it follows symlinks and accepts non-regular files, so a true
+// result never proves the bytes are servable. Open rechecks with Lstat
+// and requires a regular file, and every read is re-hashed against the
+// digest, so drift can only cause misses (and an HTTP fallback), never
+// bad bytes.
 func (s rawBlobDir) Has(digest string) bool {
 	path, err := s.blobPath(digest)
 	if err != nil {
@@ -70,10 +76,20 @@ func (s rawBlobDir) Has(digest string) bool {
 }
 
 // Open streams the raw blob bytes for digest. The caller closes it.
+// It Lstats first and requires a regular file, failing closed on FIFOs,
+// sockets, and symlinks so a planted non-regular file can neither block
+// the reader nor redirect it; the caller falls back to HTTP on any error.
 func (s rawBlobDir) Open(digest string) (io.ReadCloser, error) {
 	path, err := s.blobPath(digest)
 	if err != nil {
 		return nil, fmt.Errorf("resolve local blob: %w", err)
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat local blob: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("local blob %q is not a regular file", digest)
 	}
 	f, err := os.Open(path) //nolint:gosec // path is built from a validated digest under the store root
 	if err != nil {
@@ -82,14 +98,39 @@ func (s rawBlobDir) Open(digest string) (io.ReadCloser, error) {
 	return f, nil
 }
 
-// blobPath maps digest to its raw chunk file, rejecting anything
-// that is not a canonical lowercase sha256 digest so crafted
-// references cannot escape the store root. Canonical form is sha256
-// plus 64 lowercase hex, matching blob.Store and
-// transport.ValidBlobDigest; uppercase input is rejected instead of
-// normalized. The filename is re-encoded from decoded bytes, never
-// from the raw string, so separators and case tricks cannot smuggle
-// in a path.
+// quarantine removes the local file for digest after an end-to-end
+// verified-read mismatch. The bytes proved corrupt against their digest,
+// so keeping them only poisons future fast paths; HTTP fallback covers
+// the gap and the next push restores the file. Same-digest removal is
+// safe under concurrency because content addressing makes any
+// same-digest bytes identical. Best effort and silent by design: this
+// package stays logger-free and the caller already surfaces the mismatch
+// error to the operator.
+func (s rawBlobDir) quarantine(digest string) {
+	path, err := s.blobPath(digest)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(path) //nolint:errcheck // best-effort quarantine
+}
+
+// quarantineLocalDigest removes the local file for digest after a
+// verified-read mismatch, when the holder is this node's store dir.
+// Foreign holders are ignored: only rawBlobDir paths are safe to remove.
+func quarantineLocalDigest(store localBlobStore, digest string) {
+	dir, ok := store.(rawBlobDir)
+	if !ok {
+		return
+	}
+	dir.quarantine(digest)
+}
+
+// blobPath maps digest to its raw chunk file, accepting any hex case then
+// lowercasing to canonical form. Crafted references still cannot escape
+// the store root: the filename is re-encoded from decoded bytes, never
+// from the raw string, so separators and case tricks cannot smuggle in
+// a path. Canonical form stays sha256 plus 64 lowercase hex, matching
+// blob.Store and transport.ValidBlobDigest.
 func (s rawBlobDir) blobPath(digest string) (string, error) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok {
@@ -98,14 +139,15 @@ func (s rawBlobDir) blobPath(digest string) (string, error) {
 	if len(hexPart) != 64 {
 		return "", fmt.Errorf("digest length mismatch for %q", digest)
 	}
-	for i := range len(hexPart) {
-		c := hexPart[i]
+	lower := strings.ToLower(hexPart)
+	for i := range len(lower) {
+		c := lower[i]
 		ok := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 		if !ok {
 			return "", fmt.Errorf("invalid digest %q", digest)
 		}
 	}
-	raw, err := hex.DecodeString(hexPart)
+	raw, err := hex.DecodeString(lower)
 	if err != nil {
 		return "", fmt.Errorf("invalid digest %q: %w", digest, err)
 	}
@@ -165,6 +207,12 @@ func readLocalConfig(ctx context.Context, store localBlobStore, digest string) (
 		return nil, fmt.Errorf("read local config: exceeds %d bytes", maxConfigBytes)
 	}
 	if err := verifyDigest(body, digest); err != nil {
+		// The bytes proved corrupt against their digest: quarantine the
+		// local copy so the next pull starts from a clean miss. Other
+		// errors above are misses, not corruption, and keep the file.
+		if errors.Is(err, errDigestMismatch) {
+			quarantineLocalDigest(store, digest)
+		}
 		return nil, err
 	}
 	var cfg ConfigFile
@@ -189,6 +237,13 @@ func extractLocalLayer(ctx context.Context, store localBlobStore, digest, rootfs
 	}()
 
 	if err := extractBlobStream(ctx, rc, digest, rootfs); err != nil {
+		// The bytes proved corrupt against their digest: quarantine the
+		// local copy so the next pull starts from a clean miss and HTTP
+		// fallback serves fresh bytes. Tar and I/O errors are not
+		// corruption and keep the file.
+		if errors.Is(err, errDigestMismatch) {
+			quarantineLocalDigest(store, digest)
+		}
 		return err
 	}
 	return nil

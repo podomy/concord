@@ -220,14 +220,15 @@ func WantedFromSpecs(specs []workload.Spec) []string {
 	var out []string
 	for _, spec := range specs {
 		for _, file := range spec.Files {
-			if !transport.ValidBlobDigest(file.Digest) {
+			norm, ok := normalizeBlobDigest(file.Digest)
+			if !ok {
 				continue
 			}
-			if _, ok := seen[file.Digest]; ok {
+			if _, ok := seen[norm]; ok {
 				continue
 			}
-			seen[file.Digest] = struct{}{}
-			out = append(out, file.Digest)
+			seen[norm] = struct{}{}
+			out = append(out, norm)
 		}
 	}
 	return out
@@ -249,14 +250,15 @@ func WantedWithImages(specs []workload.Spec, imageDigests []string) []string {
 		out = append(out, digest)
 	}
 	for _, digest := range imageDigests {
-		if !transport.ValidBlobDigest(digest) {
+		norm, ok := normalizeBlobDigest(digest)
+		if !ok {
 			continue
 		}
-		if _, ok := seen[digest]; ok {
+		if _, ok := seen[norm]; ok {
 			continue
 		}
-		seen[digest] = struct{}{}
-		out = append(out, digest)
+		seen[norm] = struct{}{}
+		out = append(out, norm)
 	}
 	return out
 }
@@ -374,33 +376,55 @@ func (b *BlobSyncer) peerRepoTags(ctx context.Context, peer blobPeer, repo strin
 	return out
 }
 
-// filterValidDigests keeps well formed digests in order.
+// normalizeBlobDigest lowercases a user-supplied digest to canonical form.
+// Canonical sync shape is strict lowercase (transport.ValidBlobDigest has
+// no case folding); user input in any hex case is accepted here so every
+// entry point agrees on one key, while byte verification stays exact
+// downstream.
+func normalizeBlobDigest(s string) (string, bool) {
+	hexPart, ok := strings.CutPrefix(s, "sha256:")
+	if !ok {
+		return "", false
+	}
+	lower := "sha256:" + strings.ToLower(hexPart)
+	if !transport.ValidBlobDigest(lower) {
+		return "", false
+	}
+	return lower, true
+}
+
+// filterValidDigests keeps well formed digests in order, lowercasing any
+// hex case to canonical form. Unshaped entries are skipped: peer listings
+// are untrusted input, not caller bugs.
 func filterValidDigests(tags []string) []string {
 	clean := make([]string, 0, len(tags))
 	for _, digest := range tags {
-		if !transport.ValidBlobDigest(digest) {
+		norm, ok := normalizeBlobDigest(digest)
+		if !ok {
 			continue
 		}
-		clean = append(clean, digest)
+		clean = append(clean, norm)
 	}
 	return clean
 }
 
-// cleanDigests dedups digests preserving first seen order. Any malformed
-// entry fails the whole call: digests come from the journal, and a bad
-// one is a caller bug to fix, not to skip silently.
+// cleanDigests dedups digests preserving first seen order, lowercasing any
+// hex case to canonical form. Any malformed entry fails the whole call:
+// digests come from the journal, and a bad one is a caller bug to fix,
+// not to skip silently.
 func cleanDigests(digests []string) ([]string, error) {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, digest := range digests {
-		if !transport.ValidBlobDigest(digest) {
+		norm, ok := normalizeBlobDigest(digest)
+		if !ok {
 			return nil, fmt.Errorf("invalid blob digest %q", digest)
 		}
-		if _, ok := seen[digest]; ok {
+		if _, ok := seen[norm]; ok {
 			continue
 		}
-		seen[digest] = struct{}{}
-		out = append(out, digest)
+		seen[norm] = struct{}{}
+		out = append(out, norm)
 	}
 	return out, nil
 }
@@ -460,10 +484,11 @@ func liveDigests(specs []workload.Spec) map[string]struct{} {
 			continue
 		}
 		for _, file := range spec.Files {
-			if !transport.ValidBlobDigest(file.Digest) {
+			norm, ok := normalizeBlobDigest(file.Digest)
+			if !ok {
 				continue
 			}
-			live[file.Digest] = struct{}{}
+			live[norm] = struct{}{}
 		}
 	}
 	return live
@@ -1049,10 +1074,22 @@ func (b *BlobSyncer) fetchManifestRoot(ctx context.Context, peer blobPeer, root 
 	// identical chunk list outside a hash collision, so the saved offset
 	// stays valid only when roots match. A different root or a saved
 	// offset past the current chunk count resets to zero; HasRaw skips
-	// chunks already stored. Equal length alone never reuses the offset.
+	// chunks already stored, so a regressive offset never rewinds real
+	// progress. Equal length alone never reuses the offset. Restarts log
+	// at Warn so a flapping cursor is visible.
 	if m.Root != root {
+		if start != 0 {
+			b.logger.Warn("blob cursor root changed, restarting blob",
+				logs.String("digest", root),
+				logs.String("peer_id", peer.id.String()),
+			)
+		}
 		start = 0
 	} else if start > uint64(len(m.Chunks)) {
+		b.logger.Warn("blob cursor past chunk count, restarting blob",
+			logs.String("digest", root),
+			logs.String("peer_id", peer.id.String()),
+		)
 		start = 0
 	}
 	ferr := b.fetchMissingChunks(ctx, peer, m.Chunks[start:], start, root)

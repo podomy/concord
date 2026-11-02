@@ -195,7 +195,9 @@ func checkHexPart(hx, what string) error {
 	return nil
 }
 
-// verifyDigest checks sha256:hex form and returns the hex part.
+// verifyDigest checks sha256:hex form and returns the hex part. Matching
+// stays strict lowercase; callers normalize user-supplied digests at the
+// edge (registry parseDigest, peersync normalizeBlobDigest) before reaching here.
 func verifyDigest(digest string) (string, error) {
 	if !strings.HasPrefix(digest, digestPrefix) {
 		return "", fmt.Errorf("blob: bad digest prefix in %q", digest)
@@ -1051,6 +1053,8 @@ func (s *Store) GetRawCapped(digest string, ceiling int64) ([]byte, error) {
 // PutTag binds repo and tag to a digest.
 // Tags starting with a dot are rejected to avoid collision with
 // .tmp-* temp files removed by SweepTmp and hidden from ListTags.
+// Tags accumulate without bound and are never garbage collected;
+// pruning stays operator owned.
 func (s *Store) PutTag(repo, tag, digest string) error {
 	_, err := verifyDigest(digest)
 	if err != nil {

@@ -465,9 +465,15 @@ func isHexDigit(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 }
 
-// canonicalDigestHex validates digest as canonical lowercase sha256
-// and returns the lowercase hex part. Canonical form matches
-// blob.Store and transport.ValidBlobDigest; uppercase is rejected.
+// errDigestMismatch marks a hash verification failure: the bytes do not
+// hash to their digest. Pull paths match it with errors.Is to tell
+// corruption (quarantine the local copy) from transport or decode errors.
+var errDigestMismatch = errors.New("digest mismatch")
+
+// canonicalDigestHex validates digest as sha256 and returns the lowercase
+// hex part. Uppercase hex is accepted then lowercased so user-supplied
+// digests agree on one key; byte comparison against decoded bytes stays
+// exact downstream.
 func canonicalDigestHex(digest string) (string, error) {
 	hexPart, ok := strings.CutPrefix(digest, "sha256:")
 	if !ok {
@@ -482,16 +488,12 @@ func canonicalDigestHex(digest string) (string, error) {
 			return "", fmt.Errorf("invalid digest %q", digest)
 		}
 	}
-	if hexPart != lower {
-		return "", fmt.Errorf("non-canonical digest %q: want lowercase", digest)
-	}
 	return lower, nil
 }
 
-// verifyDigest checks body against a canonical lowercase sha256 digest.
-// Canonical form is sha256 plus 64 lowercase hex, matching blob.Store
-// and transport.ValidBlobDigest. Uppercase input is rejected instead of
-// normalized so every layer agrees on one key.
+// verifyDigest checks body against a sha256 digest, accepting any hex case
+// then lowercasing to canonical form. Canonical form is sha256 plus 64
+// lowercase hex, matching blob.Store and transport.ValidBlobDigest.
 func verifyDigest(body []byte, digest string) error {
 	lower, err := canonicalDigestHex(digest)
 	if err != nil {
@@ -507,7 +509,7 @@ func verifyDigest(body []byte, digest string) error {
 	}
 	for i := range sum {
 		if sum[i] != want[i] {
-			return fmt.Errorf("digest mismatch for %q", digest)
+			return fmt.Errorf("%w for %q", errDigestMismatch, digest)
 		}
 	}
 	return nil
@@ -641,16 +643,15 @@ func extractGzipTar(ctx context.Context, buf *bufio.Reader, rootfs string) error
 }
 
 // checkLayerDigest compares the streamed hash against digest, which
-// must be a canonical lowercase sha256 digest naming the exact blob
-// bytes. Uppercase input is rejected to match blob.Store and
-// transport.ValidBlobDigest.
+// names the exact blob bytes in sha256 form. Any hex case is accepted
+// then lowercased to canonical form; byte comparison stays exact.
 func checkLayerDigest(sum []byte, digest string) error {
 	lower, err := canonicalDigestHex(digest)
 	if err != nil {
 		return err
 	}
 	if hex.EncodeToString(sum) != lower {
-		return fmt.Errorf("layer digest mismatch for %q", digest) // digest is context
+		return fmt.Errorf("layer %w for %q", errDigestMismatch, digest) // digest is context
 	}
 	return nil
 }

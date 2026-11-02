@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Repo is the registry repository holding file artifacts.
@@ -152,6 +153,64 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 	return blobDigest, nil
 }
 
+// pullStaleTempAge bounds temp sweep mercy: files younger than this may
+// belong to a concurrent in-flight pull in the same dir and are kept.
+const pullStaleTempAge = time.Hour
+
+// sweepPullTemps removes stale .pull-*.part files in dir left by crashed
+// pulls, before a new pull creates its own temp. Same-dir prefix match is
+// enough because every pull temp is created as .pull-*.part in the dest
+// dir. Only files older than pullStaleTempAge are removed so a concurrent
+// pull sharing the dir keeps its temp; vanished or stubborn entries are
+// ignored. Best effort.
+func sweepPullTemps(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, ".pull-") || !strings.HasSuffix(name, ".part") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) < pullStaleTempAge {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, name)) //nolint:errcheck // best-effort stale temp sweep
+	}
+}
+
+// normalizePullDigest lowercases a user-supplied digest to canonical form.
+// Garbage input reports false so the server still answers 400 for it.
+func normalizePullDigest(s string) (string, bool) {
+	hexPart, ok := strings.CutPrefix(s, "sha256:")
+	if !ok || len(hexPart) != 64 {
+		return "", false
+	}
+	lower := strings.ToLower(hexPart)
+	for i := range len(lower) {
+		c := lower[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+	return "sha256:" + lower, true
+}
+
+// normalizedPullDigest lowercases a normalizable digest and passes
+// garbage through so the server still answers 400 for it.
+func normalizedPullDigest(s string) string {
+	if norm, ok := normalizePullDigest(s); ok {
+		return norm
+	}
+	return s
+}
+
 // PullTo streams a blob to dest, verifying the hash before the rename.
 // Memory stays flat no matter the blob size: bytes flow from the socket
 // through the hasher into a temp file, and only a verified complete file
@@ -159,7 +218,10 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 // the temp file lives beside dest so the rename never crosses devices.
 // Cancelling the context aborts the copy and removes the temp file,
 // so a later retry starts clean and converges on identical bytes.
+// Stale .part files from crashed pulls are swept at start.
 func (c *Client) PullTo(ctx context.Context, digest, dest string) error {
+	digest = normalizedPullDigest(digest)
+	sweepPullTemps(filepath.Dir(dest))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/blobs/"+digest, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)

@@ -699,6 +699,24 @@ func checkUploadDisk(w http.ResponseWriter, dir string, contentLength int64) boo
 	return true
 }
 
+// checkManifestPutDisk fails a manifest PUT early when the declared body
+// exceeds the manifest cap or free space cannot hold it. Unknown lengths
+// require one manifest worth of free space via checkUploadDisk, matching
+// the blob upload guard. Status matches readManifestBody so early and
+// late rejections agree on 413.
+func checkManifestPutDisk(w http.ResponseWriter, r *Registry, req *http.Request) bool {
+	if req.ContentLength > maxManifestBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "MANIFEST_INVALID", "manifest too large")
+		return false
+	}
+	dir := r.storeDirFor()
+	if dir == "" {
+		writeError(w, http.StatusInternalServerError, "MANIFEST_INVALID", "store dir")
+		return false
+	}
+	return checkUploadDisk(w, dir, req.ContentLength)
+}
+
 // createUploadTemp creates a temp file for one upload in dir.
 func createUploadTemp(w http.ResponseWriter, dir string) (*os.File, string, bool) {
 	tmp, err := os.CreateTemp(dir, ".tmp-upload-*")
@@ -709,13 +727,82 @@ func createUploadTemp(w http.ResponseWriter, dir string) (*os.File, string, bool
 	return tmp, tmp.Name(), true
 }
 
+// uploadProgressInterval bounds streaming between disk space rechecks so
+// an unknown-length upload notices a filling disk before the final byte.
+// checkUploadDisk only guarantees one manifest worth of free space for
+// unknown lengths, so a multi-gigabyte body can still exhaust the disk.
+const uploadProgressInterval = 4 << 20
+
+// uploadReserveBytes is the free-space floor kept while streaming an
+// upload. Dropping below it fails the upload 413 so the final rename and
+// fsync still have headroom.
+const uploadReserveBytes = 1 << 20
+
+// errUploadNoSpace marks disk exhaustion mid-upload. It maps to 413,
+// unlike other stream errors which map to 400.
+var errUploadNoSpace = errors.New("insufficient disk space")
+
+// progressWriter counts bytes into dst and rechecks disk space every
+// interval. It translates ENOSPC from the underlying write into
+// errUploadNoSpace so the caller can fail 413 instead of 400.
+type progressWriter struct {
+	dst       *os.File
+	written   int64
+	nextCheck int64
+	// check rechecks disk space; checkTempSpace in production, swapped
+	// in tests to simulate a full disk without filling one.
+	check func(string) error
+}
+
+// writeChunk writes p and rechecks disk space when due.
+func (w *progressWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	if err != nil {
+		if errors.Is(err, syscall.ENOSPC) {
+			return n, fmt.Errorf("write upload temp: %w", errUploadNoSpace)
+		}
+		return n, fmt.Errorf("write upload temp: %w", err)
+	}
+	w.written += int64(n)
+	if w.written < w.nextCheck {
+		return n, nil
+	}
+	w.nextCheck = w.written + uploadProgressInterval
+	if derr := w.check(w.dst.Name()); derr != nil {
+		return n, derr
+	}
+	return n, nil
+}
+
+// checkTempSpace reports errUploadNoSpace when the filesystem holding
+// tmpName keeps less than uploadReserveBytes free. Statfs failure fails
+// open so a transient stat error never aborts a healthy upload.
+func checkTempSpace(tmpName string) error {
+	var st syscall.Statfs_t
+	statErr := syscall.Statfs(tmpName, &st)
+	if statErr == nil && st.Bsize > 0 && st.Bavail*uint64(st.Bsize) < uploadReserveBytes {
+		return fmt.Errorf("upload temp filesystem full: %w", errUploadNoSpace)
+	}
+	return nil
+}
+
 // copyUploadBody streams the request body to tmp and verifies the digest.
 // It closes tmp on all paths and reports whether the body was accepted.
+// The temp file is caller owned: serveBlobUpload removes it on every path,
+// so this function only closes. The 32GB cap (maxBlobBytes) is enforced at
+// the LimitReader below plus the post-copy size recheck; periodic statfs
+// rechecks guard unknown lengths that passed the small initial disk check.
+// ENOSPC maps to 413, other stream errors to 400.
 func copyUploadBody(w http.ResponseWriter, req *http.Request, tmp *os.File, digest string) bool {
 	sum := sha256.New()
-	n, err := io.Copy(tmp, io.TeeReader(io.LimitReader(req.Body, maxBlobBytes+1), sum))
+	pw := &progressWriter{dst: tmp, nextCheck: uploadProgressInterval, check: checkTempSpace}
+	n, err := io.Copy(pw, io.TeeReader(io.LimitReader(req.Body, maxBlobBytes+1), sum))
 	if err != nil {
 		_ = tmp.Close() //nolint:errcheck // close error folded into read error
+		if errors.Is(err, errUploadNoSpace) {
+			writeError(w, http.StatusRequestEntityTooLarge, "BLOB_UPLOAD_INVALID", "insufficient disk space")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", "read upload body")
 		return false
 	}
@@ -764,10 +851,15 @@ func (r *Registry) storeSmallUpload(w http.ResponseWriter, ctx context.Context, 
 	return true
 }
 
-// storeLargeUpload installs a large temp file by rename.
+// storeLargeUpload installs a large temp file by rename. A digest
+// mismatch fails 400 without installing; other install errors stay 500.
 func (r *Registry) storeLargeUpload(w http.ResponseWriter, digest, tmpName string) bool {
 	err := r.installRaw(tmpName, digest)
 	if err != nil {
+		if errors.Is(err, errRawHashMismatch) {
+			writeError(w, http.StatusBadRequest, "DIGEST_INVALID", "digest mismatch")
+			return false
+		}
 		writeError(w, http.StatusInternalServerError, "BLOB_UPLOAD_INVALID", "store blob")
 		return false
 	}
@@ -884,14 +976,23 @@ func (r *Registry) serveBlob(w http.ResponseWriter, req *http.Request, repo, rem
 	r.serveRawGet(w, digest)
 }
 
-// writeChunkedBlob streams a chunked blob with headers.
+// writeChunkedBlob streams a chunked blob with headers. A mid-stream
+// verification failure aborts the connection like serveRawLarge: headers
+// already committed 200, so the status cannot change and the client must
+// treat a body short of Content-Length as failure and retry. Its own
+// digest check fails the same way when it fetched a full corrupt body.
 func (r *Registry) writeChunkedBlob(w http.ResponseWriter, rc io.ReadCloser, digest string, size int64) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, rc) //nolint:errcheck // best effort blob body
-	_ = rc.Close()        //nolint:errcheck // close chunk reader
+	_, err := io.Copy(w, rc)
+	_ = rc.Close() //nolint:errcheck // close chunk reader
+	if err != nil {
+		r.logger.Error("registry serve chunked", logs.String("digest", digest), logs.Error(err))
+		abortRawStream(w)
+		return
+	}
 }
 
 // serveBlobHead answers blob HEAD with the same headers as GET.
@@ -1017,7 +1118,10 @@ func (r *Registry) serveRawSmall(w http.ResponseWriter, digest string) {
 // status. On mismatch the handler logs at Error and aborts the
 // connection, and the client sees a truncated body short of
 // Content-Length or failing its own digest check. Already-sent bytes
-// are not retracted.
+// are not retracted. The handler never deletes the corrupt file:
+// concurrent readers share it and an upload may be mid-rename, so
+// quarantine happens only on the pull side after an end-to-end
+// verified-read failure (see cr quarantine).
 func (r *Registry) serveRawLarge(w http.ResponseWriter, digest, dest string) {
 	f, err := os.Open(dest) //nolint:gosec // dest is a validated digest path under the store dir
 	if err != nil {
@@ -1059,7 +1163,10 @@ func (r *Registry) serveRawLarge(w http.ResponseWriter, digest, dest string) {
 // abortRawStream closes the connection after a mid-stream failure.
 // Headers already committed 200, so the status cannot change. Closing
 // truncates the body short of Content-Length so the client detects the
-// failure on length or digest check.
+// failure on length or digest check and retries. When hijack is
+// unavailable (tests, HTTP/2) there is nothing to close: net/http still
+// ends the response short of Content-Length, which the client must treat
+// as failure and retry. Already-sent bytes are not retracted.
 func abortRawStream(w http.ResponseWriter) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -1182,7 +1289,16 @@ func (r *Registry) writeManifestPutHeaders(w http.ResponseWriter, repo, tag, dig
 }
 
 // serveManifestPut stores a manifest under a tag or verifies a digest PUT.
+// It shares the blob upload concurrency bound and disk precheck: excess
+// PUTs fail fast 503 and a full disk fails 413 before any body is read.
 func (r *Registry) serveManifestPut(w http.ResponseWriter, req *http.Request, repo, tag, digest string, isDigest bool) {
+	if !tryAcquireUploadSlot(w) {
+		return
+	}
+	defer releaseUploadSlot()
+	if !checkManifestPutDisk(w, r, req) {
+		return
+	}
 	raw, ok := readManifestBody(w, req)
 	if !ok {
 		return
@@ -1254,9 +1370,19 @@ func (r *Registry) serveTagsList(w http.ResponseWriter, req *http.Request, repo 
 	r.writeTagsList(w, repo)
 }
 
+// maxTagsServe caps one tags list response. The store keeps every tag
+// unbounded (sync replicates through tags), but one HTTP reply stays
+// bounded so a tag-spammed repo cannot grow a response without limit.
+// Peersync caps discovery below this cap, so sync is unaffected.
+const maxTagsServe = 4096
+
 // writeTagsList encodes the tag list for repo.
 func (r *Registry) writeTagsList(w http.ResponseWriter, repo string) {
 	tags := r.store.ListTags(repo)
+	if len(tags) > maxTagsServe {
+		r.logger.Warn("registry tags truncated", logs.String("repo", repo), logs.Int("listed", len(tags)), logs.Int("kept", maxTagsServe))
+		tags = tags[:maxTagsServe]
+	}
 	if tags == nil {
 		tags = []string{}
 	}
@@ -1320,20 +1446,32 @@ func syncStoreDir(dir string) error {
 	return nil
 }
 
+// errRawHashMismatch marks a temp file that does not hash to its digest.
+// storeLargeUpload maps it to 400 DIGEST_INVALID; other install errors
+// stay 500.
+var errRawHashMismatch = errors.New("raw hash mismatch")
+
 // installRaw moves a verified temp file to its raw location. The temp
 // file must already hold the digest bytes and be synced and closed.
-// Rename keeps memory flat and stays on one filesystem because the
-// temp file lives inside the store dir. After rename the dest file is
-// re-hashed by streaming so bytes swapped between the upload hash and
-// the rename cannot bypass verification. The dir chain up to the store
-// root is fsynced, matching blob Store durability.
+// Verification runs BEFORE the rename so a corrupt temp never becomes
+// visible to concurrent readers: a mismatch fails with no install and
+// the caller removes the temp file. Rename keeps memory flat and stays
+// on one filesystem because the temp file lives inside the store dir.
+// The dir chain up to the store root is fsynced, matching blob Store
+// durability. No post-rename delete exists by design: only verified bytes
+// are ever renamed, so there is no corrupt dest to clean and no window
+// where a delete could remove another upload's just-installed bytes.
 func (r *Registry) installRaw(tmpName, digest string) error {
 	storeDir := r.storeDirFor()
 	dest, ok := rawBlobPath(storeDir, digest)
 	if !ok {
 		return fmt.Errorf("bad digest for raw install: %s", digest)
 	}
-	err := os.MkdirAll(filepath.Dir(dest), 0o700)
+	err := verifyRawFile(tmpName, digest)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(filepath.Dir(dest), 0o700)
 	if err != nil {
 		return fmt.Errorf("create raw parent: %w", err)
 	}
@@ -1341,16 +1479,7 @@ func (r *Registry) installRaw(tmpName, digest string) error {
 	if err != nil {
 		return fmt.Errorf("rename raw file: %w", err)
 	}
-	err = syncRawChain(filepath.Dir(dest), storeDir)
-	if err != nil {
-		return err
-	}
-	err = verifyRawFile(dest, digest)
-	if err != nil {
-		_ = os.Remove(dest) //nolint:errcheck // best effort cleanup of bad install
-		return err
-	}
-	return nil
+	return syncRawChain(filepath.Dir(dest), storeDir)
 }
 
 // syncRawChain fsyncs dir and each parent up to stop inclusive. It
@@ -1404,7 +1533,7 @@ func verifyRawFile(path, digest string) error {
 	}
 	computed := "sha256:" + hex.EncodeToString(sum.Sum(nil))
 	if computed != digest {
-		return fmt.Errorf("raw hash mismatch: %s", digest)
+		return fmt.Errorf("%w: %s", errRawHashMismatch, digest)
 	}
 	return nil
 }
