@@ -1099,7 +1099,8 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 		args = fallback
 	}
 
-	env := result.Config.Config.Env
+	env := make([]string, 0, len(result.Config.Config.Env)+len(spec.Env))
+	env = append(env, result.Config.Config.Env...)
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
 	}
@@ -1235,7 +1236,7 @@ func adoptOneSpec(ctx context.Context, logger *logs.Logger, nodeID uuid.UUID,
 
 	status, err := ctr.Status()
 	if err != nil || status != libcontainer.Running {
-		destroyLeftoverTombstone(logger, spec, ctr)
+		destroyLeftoverContainer(logger, spec, ctr)
 		return false
 	}
 
@@ -1309,13 +1310,10 @@ func retryAdopts(
 	}
 }
 
-// destroyLeftoverTombstone destroys a dead-but-loaded container for a
-// removed spec so no state dir lingers. Live specs keep their stopped
-// containers untouched: the next start recreates them.
-func destroyLeftoverTombstone(logger *logs.Logger, spec workload.Spec, ctr *libcontainer.Container) {
-	if !spec.Removed {
-		return
-	}
+// destroyLeftoverContainer destroys a dead-but-loaded container so no
+// state dir lingers and the next start recreates cleanly. Removed specs
+// must not leave state behind; live specs must not collide on Create.
+func destroyLeftoverContainer(logger *logs.Logger, spec workload.Spec, ctr *libcontainer.Container) {
 	if err := ctr.Destroy(); err != nil {
 		logger.Error("destroy leftover tombstoned container", logs.String("id", spec.ID.String()), logs.Error(err))
 		return

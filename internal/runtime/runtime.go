@@ -407,6 +407,7 @@ func startWorkloadInfrastructure(
 	//nolint:contextcheck // failure-path cleanup runs detached: Stop owns a 5s shutdown timeout and the caller ctx may already be cancelled
 	defer func() {
 		if failed {
+			reconciler.SetBlobEnsurer(nil)
 			syncCancel()
 			ocireg.Stop()
 		}
