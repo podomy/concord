@@ -274,6 +274,11 @@ func extractFile(ctx context.Context, tr *tar.Reader, path string, hdr *tar.Head
 	if err != nil {
 		return fmt.Errorf("create file %q: %w", path, err)
 	}
+	err = f.Chmod(safeMode(hdr.Mode))
+	if err != nil {
+		_ = f.Close() //nolint:errcheck // best-effort close on chmod error
+		return fmt.Errorf("chmod file %q: %w", path, err)
+	}
 
 	_, err = io.Copy(f, tr)
 	if err != nil {
@@ -350,12 +355,15 @@ func extractHardLink(path string, hdr *tar.Header, root string) error {
 	if err != nil {
 		return err
 	}
-	_, err = os.Lstat(linkPath)
+	fi, err := os.Lstat(linkPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("hardlink target %q not found", hdr.Linkname)
 		}
 		return fmt.Errorf("lstat hardlink target %q: %w", linkPath, err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("hardlink target %q is symlink", hdr.Linkname)
 	}
 
 	err = os.Link(linkPath, path)

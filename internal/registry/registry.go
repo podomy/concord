@@ -40,6 +40,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,6 +63,14 @@ const maxManifestBytes = 10 << 20
 // single blob can exhaust disk. Chunked blobs stream via OpenBlob
 // and never sit fully in RAM.
 const maxBlobBytes = 32 << 30
+
+// maxConcurrentUploads bounds simultaneous monolithic blob uploads.
+// The semaphore keeps large temp files and rename churn flat under
+// burst push load. Excess uploads fail fast with 503.
+const maxConcurrentUploads = 4
+
+// uploadSlots is the package-level semaphore for blob uploads.
+var uploadSlots = make(chan struct{}, maxConcurrentUploads)
 
 // Registry serves the OCI distribution subset over plain HTTP.
 type Registry struct {
@@ -646,6 +655,50 @@ func checkUploadRequest(w http.ResponseWriter, req *http.Request, repo string) (
 	return digest, true
 }
 
+// tryAcquireUploadSlot takes one upload slot without blocking.
+// Excess uploads fail fast with 503 so bursts shed load.
+func tryAcquireUploadSlot(w http.ResponseWriter) bool {
+	select {
+	case uploadSlots <- struct{}{}:
+		return true
+	default:
+		writeError(w, http.StatusServiceUnavailable, "BLOB_UPLOAD_INVALID", "too many uploads")
+		return false
+	}
+}
+
+// releaseUploadSlot frees one upload slot.
+func releaseUploadSlot() {
+	<-uploadSlots
+}
+
+// checkUploadDisk fails 413 early when free space cannot hold the
+// declared body. Unknown lengths require one manifest worth of free
+// space; declared lengths compare directly against free bytes. Statfs
+// failure fails open so a transient stat error never blocks uploads.
+func checkUploadDisk(w http.ResponseWriter, dir string, contentLength int64) bool {
+	var st syscall.Statfs_t
+	err := syscall.Statfs(dir, &st)
+	if err != nil {
+		return true
+	}
+	if st.Bsize <= 0 {
+		return true
+	}
+	free := st.Bavail * uint64(st.Bsize)
+	var want uint64
+	if contentLength < 0 {
+		want = uint64(maxManifestBytes)
+	} else {
+		want = uint64(contentLength)
+	}
+	if want > free {
+		writeError(w, http.StatusRequestEntityTooLarge, "BLOB_UPLOAD_INVALID", "insufficient disk space")
+		return false
+	}
+	return true
+}
+
 // createUploadTemp creates a temp file for one upload in dir.
 func createUploadTemp(w http.ResponseWriter, dir string) (*os.File, string, bool) {
 	tmp, err := os.CreateTemp(dir, ".tmp-upload-*")
@@ -758,6 +811,10 @@ func (r *Registry) serveBlobUpload(w http.ResponseWriter, req *http.Request, rep
 	if !ok {
 		return
 	}
+	if !tryAcquireUploadSlot(w) {
+		return
+	}
+	defer releaseUploadSlot()
 	dir := r.storeDirFor()
 	if dir == "" {
 		writeError(w, http.StatusInternalServerError, "BLOB_UPLOAD_INVALID", "store dir")
@@ -766,6 +823,9 @@ func (r *Registry) serveBlobUpload(w http.ResponseWriter, req *http.Request, rep
 	err := os.MkdirAll(dir, 0o700)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "BLOB_UPLOAD_INVALID", "temp dir")
+		return
+	}
+	if !checkUploadDisk(w, dir, req.ContentLength) {
 		return
 	}
 	tmp, tmpName, ok := createUploadTemp(w, dir)

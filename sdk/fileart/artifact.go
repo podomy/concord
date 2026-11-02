@@ -233,26 +233,102 @@ func Materialize(ctx context.Context, rootfs string, files []File, fetch func(ct
 	return nil
 }
 
+// rejectSymlinkPrefix fails when any existing component of path under
+// root is a symlink. Missing prefixes are safe because deeper entries
+// cannot exist without them. This duplicates internal/cr/puller.go
+// rejectSymlinkPrefix locally so fileart stays stdlib-only.
+func rejectSymlinkPrefix(path, root string) error {
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	if cleanPath != cleanRoot && !strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator)) {
+		return fmt.Errorf("file path %q escapes root", cleanPath)
+	}
+	rel, err := filepath.Rel(cleanRoot, cleanPath)
+	if err != nil {
+		return fmt.Errorf("resolve path %q: %w", cleanPath, err)
+	}
+	if rel == "." {
+		return nil
+	}
+	cur := cleanRoot
+	for part := range strings.SplitSeq(rel, string(os.PathSeparator)) {
+		if part == "." || part == "" {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("lstat %q: %w", cur, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("file path %q traverses symlink at %q", cleanPath, cur)
+		}
+	}
+	return nil
+}
+
 // resolveDests validates every path and mode, then creates parent dirs.
 // It returns the dest per file in input order.
 func resolveDests(rootfs string, files []File) ([]string, error) {
 	dests := make([]string, len(files))
 	for i, file := range files {
-		err := checkPath(file.Path)
+		dest, err := prepareDest(rootfs, file)
 		if err != nil {
 			return nil, err
 		}
-		_, err = validatedMode(file)
-		if err != nil {
-			return nil, err
-		}
-		dests[i] = filepath.Join(rootfs, filepath.Clean("/"+file.Path))
-		err = os.MkdirAll(filepath.Dir(dests[i]), 0o750)
-		if err != nil {
-			return nil, fmt.Errorf("create parent dirs: %w", err)
-		}
+		dests[i] = dest
 	}
 	return dests, nil
+}
+
+// prepareDest validates one file entry and creates its parent dir.
+// It returns the dest path inside rootfs.
+func prepareDest(rootfs string, file File) (string, error) {
+	err := checkPath(file.Path)
+	if err != nil {
+		return "", err
+	}
+	_, err = validatedMode(file)
+	if err != nil {
+		return "", err
+	}
+	dest := filepath.Join(rootfs, filepath.Clean("/"+file.Path))
+	err = rejectSymlinkPrefix(filepath.Dir(dest), rootfs)
+	if err != nil {
+		return "", err
+	}
+	err = os.MkdirAll(filepath.Dir(dest), 0o750)
+	if err != nil {
+		return "", fmt.Errorf("create parent dirs: %w", err)
+	}
+	err = checkDestReady(dest, rootfs)
+	if err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// checkDestReady rechecks the parent prefix after mkdir and rejects a
+// dest that is itself a symlink.
+func checkDestReady(dest, rootfs string) error {
+	err := rejectSymlinkPrefix(filepath.Dir(dest), rootfs)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Lstat(dest)
+	if err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("file path %q traverses symlink", dest)
+		}
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return fmt.Errorf("lstat dest: %w", err)
 }
 
 // fetchAll pulls each digest into its dest and applies the file mode.

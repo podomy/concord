@@ -1184,11 +1184,22 @@ func (b *BlobSyncer) fetchRawDigest(ctx context.Context, peer blobPeer, root str
 
 // publishTag records the manifest digest under the root hex tag in the
 // local store, which both marks completion and publishes for peers.
+// A republish that moves a tag to a different digest logs at Warn with
+// repo, tag, old, and new, mirroring the registry audit contract.
 func (b *BlobSyncer) publishTag(root, dm string) error {
 	tag := strings.TrimPrefix(root, "sha256:")
+	old, ok := b.store.ResolveTag(blobSyncRepo, tag)
 	err := b.store.PutTag(blobSyncRepo, tag, dm)
 	if err != nil {
 		return fmt.Errorf("publish manifest tag %s: %w", root, err)
+	}
+	if ok && old != dm {
+		b.logger.Warn("blob tag overwrite",
+			logs.String("repo", blobSyncRepo),
+			logs.String("tag", tag),
+			logs.String("old_digest", old),
+			logs.String("new_digest", dm),
+		)
 	}
 	return nil
 }
