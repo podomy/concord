@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"strings"
@@ -207,21 +208,21 @@ func registryScheme(registry string) string {
 
 // isPrivateIPv4 reports whether host is an RFC1918 IPv4 address.
 func isPrivateIPv4(host string) bool {
-	var a, b, c, d int
-	n, err := fmt.Sscanf(host, "%d.%d.%d.%d", &a, &b, &c, &d)
+	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false
 	}
-	if n != 4 {
+	if !addr.Is4() {
 		return false
 	}
-	if a == 10 {
+	a := addr.As4()
+	if a[0] == 10 {
 		return true
 	}
-	if a == 172 && b >= 16 && b <= 31 {
+	if a[0] == 172 && a[1] >= 16 && a[1] <= 31 {
 		return true
 	}
-	if a == 192 && b == 168 {
+	if a[0] == 192 && a[1] == 168 {
 		return true
 	}
 	return false
@@ -291,7 +292,7 @@ func fetchImageManifest(ctx context.Context, client *http.Client, ref imageRefer
 
 	resp, err := doGet(ctx, client, url, manifestAcceptHeader)
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("fetch manifest %s: %w", url, err)
 	}
 	defer func() {
 		_ = resp.Body.Close() //nolint:errcheck // read-only body close
@@ -305,6 +306,14 @@ func fetchImageManifest(ctx context.Context, client *http.Client, ref imageRefer
 	body, err := readLimitedBody(resp, maxManifestBytes)
 	if err != nil {
 		return "", nil, fmt.Errorf("read manifest: %w", err)
+	}
+
+	if ref.isDigest {
+		sum := sha256.Sum256(body)
+		got := "sha256:" + hex.EncodeToString(sum[:])
+		if got != ref.reference {
+			return "", nil, fmt.Errorf("manifest digest mismatch: want %s", ref.reference)
+		}
 	}
 
 	var parsed ociManifest
@@ -382,7 +391,8 @@ func imageLayers(parsed ociManifest) (string, []string, error) {
 }
 
 // pickIndexEntry selects the child digest matching the local platform,
-// falling back to linux/amd64 and then to the first entry.
+// falling back to linux/amd64. No match is an error: pulling the wrong
+// architecture would fail confusingly at run time.
 func pickIndexEntry(entries []ociIndexEntry) (string, error) {
 	if len(entries) == 0 {
 		return "", fmt.Errorf("image index has no manifests") //nolint:perfsprint // plain error, no wrap target
@@ -403,7 +413,7 @@ func pickIndexEntry(entries []ociIndexEntry) (string, error) {
 			return entry.Digest, nil
 		}
 	}
-	return entries[0].Digest, nil
+	return "", fmt.Errorf("image index has no entry for %s/%s or linux/amd64", runtime.GOOS, runtime.GOARCH)
 }
 
 // fetchImageConfig downloads and parses the image config blob, verifying

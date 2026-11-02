@@ -84,7 +84,7 @@ func (p *ImagePuller) Pull(ctx context.Context, ref, bundleDir string) (*PullRes
 	err = extractLayers(ctx, client, parsed, layerDigests, rootfs)
 	if err != nil {
 		_ = os.RemoveAll(rootfs) //nolint:errcheck // best-effort cleanup so the next tick retries
-		return nil, err
+		return nil, fmt.Errorf("extract layers %s: %w", parsed.repository, err)
 	}
 
 	return &PullResult{RootFS: rootfs, Config: cfg}, nil
