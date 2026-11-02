@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -549,11 +550,13 @@ func printWorkloadLogsHelp(w io.Writer) {
 	var tail int
 	var follow bool
 	_, docs := newWorkloadLogsFlagSet(&tail, &follow)
-	_, _ = fmt.Fprintln(w, "Show captured container output for a workload") //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "Usage:")                                        //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  concord workload logs <id>")                  //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "")                                              //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Show captured container output for a workload")                                //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                             //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Usage:")                                                                       //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload logs <id>")                                                 //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                             //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Follow tracks (timestamp, count): lines sharing a timestamp print once each.") //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "")                                                                             //nolint:errcheck // CLI output
 	printFlagDocs(w, docs)
 }
 
@@ -654,8 +657,9 @@ func handleWorkloadUpdate(ctx context.Context, stdout io.Writer, idArg, image st
 
 // handleWorkloadLogs prints captured output lines oldest-first. Follow
 // polls the snapshot every second and prints lines newer than the last
-// printed timestamp; ring overwrites can only drop older lines, never
-// reorder or duplicate, so timestamp comparison is exact.
+// printed timestamp; lines sharing the last timestamp print once each,
+// tracked by count, so same-timestamp batches never drop or repeat.
+// Ring overwrites can only drop older lines, never reorder or duplicate.
 func handleWorkloadLogs(ctx context.Context, stdout io.Writer, idArg string, tail int, follow bool) error {
 	client, closeFn, err := dialIPCClient()
 	if err != nil {
@@ -668,7 +672,7 @@ func handleWorkloadLogs(ctx context.Context, stdout io.Writer, idArg string, tai
 		return err
 	}
 
-	printed, err := printLogLines(ctx, client, stdout, targetID, tail, time.Time{})
+	printed, seen, err := printLogLines(ctx, client, stdout, targetID, tail, time.Time{}, 0)
 	if err != nil {
 		return err
 	}
@@ -683,7 +687,7 @@ func handleWorkloadLogs(ctx context.Context, stdout io.Writer, idArg string, tai
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			printed, err = printLogLines(ctx, client, stdout, targetID, 0, printed)
+			printed, seen, err = printLogLines(ctx, client, stdout, targetID, 0, printed, seen)
 			if err != nil {
 				return err
 			}
@@ -692,22 +696,65 @@ func handleWorkloadLogs(ctx context.Context, stdout io.Writer, idArg string, tai
 }
 
 // printLogLines prints lines newer than since and returns the newest
-// printed timestamp. Tail applies only to the first (snapshot) call:
-// follow-up polls fetch everything and filter by timestamp.
-func printLogLines(ctx context.Context, client sdk.Client, stdout io.Writer, targetID uuid.UUID, tail int, since time.Time) (time.Time, error) {
+// printed timestamp plus how many printed lines share it. Tail applies
+// only to the first (snapshot) call: follow-up polls fetch everything
+// and filter by (timestamp, count), so lines stamped equal to the last
+// printed one are skipped only up to the already-printed count.
+func printLogLines(ctx context.Context, client sdk.Client, stdout io.Writer, targetID uuid.UUID, tail int, since time.Time, seenAtSince int) (time.Time, int, error) {
 	lines, err := client.Logs(ctx, targetID, tail)
 	if err != nil {
-		return since, fmt.Errorf("get workload logs %s: %w", targetID, err)
+		return since, seenAtSince, fmt.Errorf("get workload logs %s: %w", targetID, err)
 	}
 
+	printed := selectNewLines(stdout, lines, since, seenAtSince)
+	if len(printed) == 0 {
+		return since, seenAtSince, nil
+	}
+	stamp, count := newestStamp(lines, since, seenAtSince, len(printed))
+	return stamp, count, nil
+}
+
+// selectNewLines prints lines newer than since, skipping up to seenAtSince
+// lines stamped exactly at since, and returns the printed lines.
+func selectNewLines(stdout io.Writer, lines []sdk.LogLine, since time.Time, seenAtSince int) []sdk.LogLine {
+	var printed []sdk.LogLine
+	skipped := 0
 	for _, line := range lines {
-		if !line.At.After(since) {
+		if line.At.Before(since) {
+			continue
+		}
+		if !line.At.After(since) && skipped < seenAtSince {
+			skipped++
 			continue
 		}
 		_, _ = fmt.Fprintln(stdout, line.Line) //nolint:errcheck // CLI output
-		since = line.At
+		printed = append(printed, line)
 	}
-	return since, nil
+	return printed
+}
+
+// newestStamp returns the newest timestamp at or after since and how many
+// printed lines share it. Callers pass the already-seen count and the
+// printed count so the next poll can skip exactly the already-printed
+// same-stamp lines.
+func newestStamp(lines []sdk.LogLine, since time.Time, seen, printed int) (time.Time, int) {
+	newSince := since
+	for _, line := range slices.Backward(lines) {
+		if !line.At.Before(since) {
+			newSince = line.At
+			break
+		}
+	}
+	if !newSince.After(since) {
+		return since, seen + printed
+	}
+	count := 0
+	for _, line := range lines {
+		if line.At.Equal(newSince) {
+			count++
+		}
+	}
+	return newSince, count
 }
 
 func handleWorkloadStats(ctx context.Context, stdout io.Writer, idArg string) error {
