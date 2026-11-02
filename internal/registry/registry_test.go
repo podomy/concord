@@ -65,7 +65,7 @@ func TestPing(t *testing.T) {
 	reg := newTestRegistry(t)
 	rec := serve(t, reg, http.MethodGet, "/v2/", nil)
 	requireCode(t, rec, http.StatusOK)
-	if rec.Header().Get("Docker-Distribution-API-Version") != "registry/2.0" {
+	if rec.Header().Get("Docker-Distribution-Api-Version") != "registry/2.0" {
 		t.Fatal("missing distribution version header")
 	}
 	if rec.Body.String() != "{}" {

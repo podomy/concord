@@ -626,7 +626,7 @@ func (r *Registry) servePing(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
 		return
 	}
-	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 	w.WriteHeader(http.StatusOK)
 	if req.Method == http.MethodGet {
 		_, _ = w.Write([]byte("{}")) //nolint:errcheck // best effort version body
