@@ -33,7 +33,7 @@ import (
 func WriteCA() error {
 	caDER, _, caKey, err := createCA()
 	if err != nil {
-		return err
+		return fmt.Errorf("generate CA: %w", err)
 	}
 
 	paths, err := DefaultPaths()
@@ -41,11 +41,13 @@ func WriteCA() error {
 		return fmt.Errorf("default paths: %w", err)
 	}
 
-	if err := backupCAFile(paths.CA); err != nil {
-		return err
+	err = backupCAFile(paths.CA)
+	if err != nil {
+		return fmt.Errorf("backup CA cert: %w", err)
 	}
-	if err := backupCAFile(paths.CAKey); err != nil {
-		return err
+	err = backupCAFile(paths.CAKey)
+	if err != nil {
+		return fmt.Errorf("backup CA key: %w", err)
 	}
 	if err = writePEM(paths.CA, "CERTIFICATE", caDER); err != nil {
 		return fmt.Errorf("write pem: %w", err)
