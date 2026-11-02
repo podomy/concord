@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/podomy/concord/internal/clock"
 	"github.com/podomy/concord/internal/geo"
 )
 
@@ -234,7 +235,7 @@ func (s *Sampler) RecordPosition(pos geo.Point) {
 		s.mu.Unlock()
 		return
 	}
-	now := time.Now()
+	now := clock.Now()
 	s.path.add(trailPoint{At: now, Pos: pos})
 	track := s.track
 	s.mu.Unlock()
@@ -287,7 +288,7 @@ func (s *Sampler) Workloads() map[uuid.UUID]WorkloadSample {
 func (s *Sampler) CaptureTrend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
+	now := clock.Now()
 	for id, sample := range s.samples {
 		hist, ok := s.workTrends[id]
 		if !ok {
@@ -459,6 +460,9 @@ func readDiskPercent() (uint8, error) {
 	serr := syscall.Statfs(filepath.Join(dir, "concord"), &stat)
 	if serr != nil {
 		return 0, fmt.Errorf("statfs: %w", serr)
+	}
+	if stat.Blocks == 0 || stat.Bavail > stat.Blocks {
+		return 0, fmt.Errorf("statfs returned impossible block counts: blocks=%d bavail=%d", stat.Blocks, stat.Bavail)
 	}
 	var used uint64
 	if stat.Bavail <= stat.Blocks {
