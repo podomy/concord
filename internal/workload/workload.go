@@ -70,7 +70,10 @@ const (
 
 // Rank orders classes for placement and preemption. Empty and unknown
 // values rank zero: unspecified work stays best-effort, and a misspelled
-// class fails open instead of failing placed.
+// class fails open instead of failing placed. Invariant: the journalview
+// Apply path must drop invalid specs before the scheduler ever ranks
+// them, and submit must reject them, so Rank only sees unknown values
+// from hand-written lines that slipped past validation.
 func (q QoS) Rank() int {
 	switch q {
 	case QoSGuaranteed:
@@ -98,36 +101,67 @@ func (q QoS) Valid() bool {
 // CheckNoCycle rejects a spec whose dependency chain loops back to
 // itself through live specs. Unknown IDs have no dependencies, so only
 // known specs participate; the existing graph is assumed acyclic because
-// every submit passed this same check. Self-dependencies are rejected
+// every submit passed this same check. Removed (tombstoned) specs are
+// excluded from the graph, matching the reconciler's depsReady which
+// never waits on them. Self-dependencies are rejected
 // here at submit; the reconciler's depsReady also skips a self edge at
 // runtime, so both layers agree and a hand-written journal line can
 // stall nothing. Defense in depth, either layer alone suffices.
 func CheckNoCycle(live []Spec, newSpec Spec) error {
+	byID := depGraph(live, newSpec)
+	state := cycleState{graph: byID, visiting: make(map[uuid.UUID]bool), done: make(map[uuid.UUID]bool)}
+	err := state.visit(newSpec.ID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// depGraph builds the dependency adjacency for cycle checking.
+func depGraph(live []Spec, newSpec Spec) map[uuid.UUID][]uuid.UUID {
 	byID := make(map[uuid.UUID][]uuid.UUID, len(live)+1)
 	for _, spec := range live {
+		if spec.Removed {
+			continue
+		}
 		byID[spec.ID] = spec.DependsOn
 	}
-	byID[newSpec.ID] = newSpec.DependsOn
+	if !newSpec.Removed {
+		byID[newSpec.ID] = newSpec.DependsOn
+	} else {
+		byID[newSpec.ID] = nil
+	}
+	return byID
+}
 
-	visiting := make(map[uuid.UUID]bool)
-	var visit func(id uuid.UUID) error
-	visit = func(id uuid.UUID) error {
-		if visiting[id] {
-			return fmt.Errorf("dependency cycle at workload %s", id)
-		}
-		visiting[id] = true
-		for _, dep := range byID[id] {
-			if _, ok := byID[dep]; !ok {
-				continue
-			}
-			if err := visit(dep); err != nil {
-				return err
-			}
-		}
-		delete(visiting, id)
+// cycleState tracks one depth-first search over the dependency graph.
+type cycleState struct {
+	graph    map[uuid.UUID][]uuid.UUID
+	visiting map[uuid.UUID]bool
+	done     map[uuid.UUID]bool
+}
+
+// visit walks the dependency chain from id.
+func (s *cycleState) visit(id uuid.UUID) error {
+	if s.done[id] {
 		return nil
 	}
-	return visit(newSpec.ID)
+	if s.visiting[id] {
+		return fmt.Errorf("dependency cycle at workload %s", id)
+	}
+	s.visiting[id] = true
+	deps := s.graph[id]
+	for _, dep := range deps {
+		if _, ok := s.graph[dep]; !ok {
+			continue
+		}
+		if err := s.visit(dep); err != nil {
+			return err
+		}
+	}
+	delete(s.visiting, id)
+	s.done[id] = true
+	return nil
 }
 
 // HealthAction selects what the supervisor does when a workload turns unhealthy.
