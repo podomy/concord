@@ -421,8 +421,8 @@ func TestHandshakeErrorUnwrap(t *testing.T) {
 	if !errors.Is(wrapped, sentinel) {
 		t.Fatal("errors.Is does not reach wrapped cause")
 	}
-	var target *handshakeError
-	if !errors.As(wrapped, &target) {
+	target, ok := errors.AsType[*handshakeError](wrapped)
+	if !ok || target == nil {
 		t.Fatal("errors.As does not find handshakeError")
 	}
 	if !wrapped.Temporary() {
