@@ -395,7 +395,7 @@ func readMemPercent() (uint8, error) {
 		avail = mem.free + mem.buffers + mem.cached
 	}
 	if avail > mem.total {
-		avail = mem.total
+		return 0, fmt.Errorf("meminfo available %d exceeds total %d: corrupt reading", avail, mem.total)
 	}
 	return percentOf(mem.total-avail, mem.total), nil
 }

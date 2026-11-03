@@ -59,6 +59,11 @@ func newLogRing(stream string) *LogRing {
 	return &LogRing{pts: make([]LogLine, 0, logRingSize), stream: stream}
 }
 
+// maxPendingBytes caps one stream's unterminated tail. Completed lines
+// truncate at 4KB each; a tail past 64KB with no newline is a runaway
+// writer, so the oldest bytes drop instead of growing without bound.
+const maxPendingBytes = 64 << 10
+
 // Write appends bytes, flushing complete newline-terminated lines into
 // the ring. Partial lines wait in pending for the next write; a stream
 // that never terminates its last line keeps it pending, never loses it.
@@ -67,6 +72,9 @@ func (r *LogRing) Write(p []byte) (int, error) {
 	defer r.mu.Unlock()
 
 	r.pending = append(r.pending, p...)
+	if len(r.pending) > maxPendingBytes {
+		r.pending = append([]byte(nil), r.pending[len(r.pending)-maxPendingBytes:]...)
+	}
 	for {
 		i := bytes.IndexByte(r.pending, '\n')
 		if i < 0 {

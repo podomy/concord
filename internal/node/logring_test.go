@@ -34,6 +34,28 @@ func TestLogRingPartialLines(t *testing.T) {
 	}
 }
 
+// A tail past the pending cap drops its oldest bytes instead of
+// growing without bound: a writer that never emits a newline cannot
+// pin memory.
+func TestLogRingPendingBounded(t *testing.T) {
+	t.Parallel()
+
+	r := newLogRing(LogStdout)
+	huge := strings.Repeat("x", maxPendingBytes+1024)
+	if _, err := r.Write([]byte(huge)); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	n := len(r.pending)
+	r.mu.Unlock()
+	if n > maxPendingBytes {
+		t.Fatalf("pending = %d bytes, want at most %d", n, maxPendingBytes)
+	}
+	if len(r.lines()) != 0 {
+		t.Fatalf("uncapped tail flushed early: %+v", r.lines())
+	}
+}
+
 // Carriage returns strip and long lines truncate at the cap.
 func TestLogRingTruncates(t *testing.T) {
 	t.Parallel()
