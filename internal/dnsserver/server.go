@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/miekg/dns"
 
@@ -40,6 +41,35 @@ const dnsTTL = 10
 // handler implements dns.Handler to serve Concord peer discovery records.
 type handler struct {
 	memberService *peerdiscovery.MemberService
+
+	mu       sync.Mutex
+	cached   []peerdiscovery.Node
+	cachedAt time.Time
+}
+
+// membersCacheTTL bounds how long one memberlist snapshot serves DNS
+// queries. Membership churns on a 5s beat while floods arrive in
+// milliseconds; without this each UDP query would take the memberlist
+// lock. Staleness is capped at one second, far below the 10s record
+// TTL clients already cache.
+const membersCacheTTL = time.Second
+
+// members returns the cached snapshot when fresh, refreshing under the
+// mutex otherwise. Only successful snapshots cache; errors always
+// reach the caller so a transient failure never pins stale data.
+func (h *handler) members() ([]peerdiscovery.Node, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cached != nil && time.Since(h.cachedAt) < membersCacheTTL {
+		return h.cached, nil
+	}
+	nodes, err := h.memberService.Members()
+	if err != nil {
+		return nil, fmt.Errorf("list members: %w", err)
+	}
+	h.cached = nodes
+	h.cachedAt = time.Now()
+	return nodes, nil
 }
 
 // ServeDNS responds to DNS queries for Concord's peer mesh. It handles three
@@ -80,7 +110,7 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	nodes, err := h.memberService.Members()
+	nodes, err := h.members()
 	if err != nil {
 		msg.Rcode = dns.RcodeServerFailure
 		_ = w.WriteMsg(&msg) //nolint:errcheck // best-effort write
