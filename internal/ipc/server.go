@@ -77,6 +77,19 @@ func NewServer(
 	}
 }
 
+// restrictSocket locks the bound socket to owner-only access, cleaning
+// up the file when chmod fails so a world-readable socket never lingers.
+func restrictSocket(logger *logs.Logger, l net.Listener, socketPath string) error {
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = l.Close() //nolint:errcheck // error during cleanup after failed chmod
+		if rerr := os.Remove(socketPath); rerr != nil && !os.IsNotExist(rerr) {
+			logger.Debug("cleaning up socket file after chmod failure", logs.Error(rerr))
+		}
+		return fmt.Errorf("chmod socket file: %w", err)
+	}
+	return nil
+}
+
 // resolveSocketPath fills the default path and enforces the unix
 // sun_path length so overlong XDG homes fail here, not in listen.
 func resolveSocketPath(socketPath string) (string, error) {
@@ -129,11 +142,8 @@ func (s *Server) Start(ctx context.Context, socketPath string) error {
 		return fmt.Errorf("listen on unix socket %s: %w", socketPath, err)
 	}
 
-	// Restrict permissions to owner-only access.
-	if err := os.Chmod(socketPath, 0o600); err != nil {
-		_ = l.Close() //nolint:errcheck // error during cleanup after failed chmod
-		_ = os.Remove(socketPath)
-		return fmt.Errorf("chmod socket file: %w", err)
+	if err := restrictSocket(s.logger, l, socketPath); err != nil {
+		return err
 	}
 
 	mux := http.NewServeMux()

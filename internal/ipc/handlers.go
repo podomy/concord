@@ -46,6 +46,15 @@ type submitResponse struct {
 // one spec; anything past 1MB is a client bug, answered 400.
 const maxRequestBodyBytes = 1 << 20
 
+// maxServeWorkloads and maxServeNodes bound list responses. The fleet is
+// hundreds of nodes and thousands of workloads at most; past 10k entries
+// a response would OOM the daemon while serializing, so the handlers
+// fail loudly instead of serving a truncated lie.
+const (
+	maxServeWorkloads = 10000
+	maxServeNodes     = 10000
+)
+
 // decodeBody decodes one JSON request body with unknown fields rejected
 // and the size capped. Both ends ship from this repo, so an unknown
 // field is always a version mismatch worth failing loudly. Trailing
@@ -185,6 +194,12 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		active = append(active, internalToSDKWorkload(spec))
+	}
+	if len(active) > maxServeWorkloads {
+		s.logger.Error("workload list over cap, refusing to serialize",
+			logs.Int("count", len(active)), logs.Int("cap", maxServeWorkloads))
+		writeError(w, http.StatusInternalServerError, "too many workloads to list")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, listResponse{Workloads: active})
@@ -505,6 +520,12 @@ func (s *Server) handleListNodes(w http.ResponseWriter, _ *http.Request) {
 			Lon:                m.Metadata.Lon,
 			Anchor:             m.Metadata.Anchor,
 		})
+	}
+	if len(nodes) > maxServeNodes {
+		s.logger.Error("node list over cap, refusing to serialize",
+			logs.Int("count", len(nodes)), logs.Int("cap", maxServeNodes))
+		writeError(w, http.StatusInternalServerError, "too many nodes to list")
+		return
 	}
 
 	writeJSON(w, http.StatusOK, nodesResponse{Nodes: nodes})
