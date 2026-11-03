@@ -50,9 +50,11 @@ func TestClient_ListNodesStatusMapping(t *testing.T) {
 	}{
 		{"list 400", "/v1/workloads", http.StatusBadRequest, sdk.ErrValidation},
 		{"list 422", "/v1/workloads", http.StatusUnprocessableEntity, sdk.ErrValidation},
+		{"list 404", "/v1/workloads", http.StatusNotFound, sdk.ErrNotFound},
 		{"list 500", "/v1/workloads", http.StatusInternalServerError, sdk.ErrUnavailable},
 		{"list 503", "/v1/workloads", http.StatusServiceUnavailable, sdk.ErrUnavailable},
 		{"nodes 400", "/v1/nodes", http.StatusBadRequest, sdk.ErrValidation},
+		{"nodes 404", "/v1/nodes", http.StatusNotFound, sdk.ErrNotFound},
 		{"nodes 503", "/v1/nodes", http.StatusServiceUnavailable, sdk.ErrUnavailable},
 	}
 	for _, tc := range cases {

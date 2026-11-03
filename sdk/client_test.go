@@ -322,6 +322,26 @@ func TestClient_Stop_NotFound(t *testing.T) {
 	}
 }
 
+// A 404 with a server message keeps both the sentinel and the text.
+func TestClient_Stop_NotFoundMessage(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/workloads/", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONResponse(t, w, http.StatusNotFound, map[string]string{"error": "workload gone"})
+	})
+
+	client := dialMockClient(t, mux)
+
+	err := client.Stop(context.Background(), uuid.New())
+	if !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "workload gone") {
+		t.Fatalf("server message lost: %v", err)
+	}
+}
+
 func TestClient_Get_Success(t *testing.T) {
 	t.Parallel()
 

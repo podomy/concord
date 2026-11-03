@@ -160,6 +160,17 @@ func validationError(body []byte) error {
 	return fmt.Errorf("%w: %s", ErrValidation, msg)
 }
 
+// notFoundError maps an HTTP 404 body to ErrNotFound, preserving the
+// server message. Empty bodies keep the bare sentinel so errors.Is
+// callers never depend on message text.
+func notFoundError(body []byte) error {
+	msg := bytes.TrimSpace(body)
+	if len(msg) == 0 {
+		return ErrNotFound //nolint:wrapcheck // sentinel error
+	}
+	return fmt.Errorf("%w: %s", ErrNotFound, string(msg))
+}
+
 // requestError maps a non-2xx status with its body to an error, routing
 // 400 and 422 through ErrValidation, any 5xx through ErrUnavailable,
 // and leaving every other status unstructured. All 5xx map to
@@ -188,12 +199,15 @@ func unavailableError(body []byte) error {
 }
 
 // listError maps a List or Nodes non-2xx status to a sentinel: 400 and
-// 422 arrive as ErrValidation, any 5xx as ErrUnavailable, both preserving
-// the server message. Other statuses stay unstructured so auth or rate
-// limits never misreport as validation.
+// 422 arrive as ErrValidation, 404 as ErrNotFound, any 5xx as
+// ErrUnavailable, all preserving the server message. Other statuses
+// stay unstructured so auth or rate limits never misreport.
 func listError(status int, body []byte) error {
 	if status == 400 || status == 422 {
 		return validationError(body)
+	}
+	if status == http.StatusNotFound {
+		return notFoundError(body)
 	}
 	if status >= 500 && status < 600 {
 		return unavailableError(body)
@@ -253,7 +267,11 @@ func (c *unixClient) Stop(ctx context.Context, id uuid.UUID) error {
 	defer resp.Body.Close() //nolint:errcheck // best-effort response close
 
 	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound //nolint:wrapcheck // sentinel error
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("%w: workload not found", ErrNotFound)
+		}
+		return notFoundError(body)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
@@ -283,7 +301,11 @@ func (c *unixClient) Get(ctx context.Context, id uuid.UUID) (*Workload, error) {
 	defer resp.Body.Close() //nolint:errcheck // best-effort response close
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("%w: workload not found", ErrNotFound)
+		}
+		return nil, notFoundError(body)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -320,7 +342,11 @@ func (c *unixClient) Stats(ctx context.Context, id uuid.UUID) (*WorkloadStats, e
 	defer resp.Body.Close() //nolint:errcheck // best-effort response close
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("%w: workload not found", ErrNotFound)
+		}
+		return nil, notFoundError(body)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -422,7 +448,7 @@ func (c *unixClient) Logs(ctx context.Context, id uuid.UUID, tail int) ([]LogLin
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrNotFound //nolint:wrapcheck // sentinel error
+		return nil, notFoundError(body)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, requestError(resp.StatusCode, body)
@@ -464,7 +490,7 @@ func (c *unixClient) UpdateImage(ctx context.Context, id uuid.UUID, image string
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound //nolint:wrapcheck // sentinel error
+		return notFoundError(body)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return requestError(resp.StatusCode, body)

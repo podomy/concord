@@ -129,11 +129,12 @@ func (c *Client) Push(ctx context.Context, data []byte) (string, error) {
 	configDigest := digestOf(config)
 	exists, err = c.blobExists(ctx, configDigest)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("check blob %s: %w", configDigest, err)
 	}
 	if !exists {
-		if err := c.uploadBlob(ctx, configDigest, config); err != nil {
-			return "", err
+		err = c.uploadBlob(ctx, configDigest, config)
+		if err != nil {
+			return "", fmt.Errorf("upload blob %s: %w", configDigest, err)
 		}
 	}
 
