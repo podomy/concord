@@ -67,6 +67,21 @@ func TestNowInvalidOffset(t *testing.T) {
 	}
 }
 
+// TestNowClampsHugeOffset pins that an absurd offset clamps to thirty
+// days instead of overflowing the Duration conversion and wrapping.
+func TestNowClampsHugeOffset(t *testing.T) {
+	t.Setenv("CONCORD_CLOCK_OFFSET", "9999999999")
+
+	before := time.Now()
+	got := Now()
+	after := time.Now()
+	low := before.Add(30*24*time.Hour - nowTolerance)
+	high := after.Add(30*24*time.Hour + nowTolerance)
+	if got.Before(low) || got.After(high) {
+		t.Fatalf("Now() = %v, want within %v of +30d", got, nowTolerance)
+	}
+}
+
 // TestNowMonotonic pins that successive Now calls never go backwards.
 func TestNowMonotonic(t *testing.T) {
 	t.Setenv("CONCORD_CLOCK_OFFSET", "")
