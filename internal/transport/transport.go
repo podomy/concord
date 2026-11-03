@@ -68,10 +68,12 @@ func Start(
 	}
 
 	// Stop when runtime shuts down. WithoutCancel keeps a live parent after ctx ends
-	// so Shutdown can finish in-flight requests within the timeout.
+	// so Shutdown can finish in-flight requests within the timeout. The
+	// bound covers one full Noise handshake plus margin: shorter would
+	// abandon stalled handshakes to linger past shutdown.
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("transport shutdown", logs.Error(err))

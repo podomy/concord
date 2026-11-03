@@ -169,6 +169,10 @@ func (r *Registry) Start(ctx context.Context, memberService *peerdiscovery.Membe
 
 // shutdown stops the server with a timeout derived from ctx.
 // Caller ctx may already be cancelled, so WithoutCancel isolates the timeout.
+// Blob transfers are unbounded by design, so shutdown abandons in-flight
+// uploads and downloads past the bound: the content protocol is idempotent
+// and the peer retries. Five seconds stays because no bound covers a
+// gigabyte transfer; waiting longer would stall shutdown, not save work.
 func (r *Registry) shutdown(ctx context.Context) {
 	r.stopOnce.Do(func() {
 		if r.srv == nil {

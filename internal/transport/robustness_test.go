@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -606,5 +608,77 @@ func TestGenerationRollbackAdmitted(t *testing.T) {
 	// must reject it; transport alone admits.
 	if err := verify(id, 0, pub, sig0); err != nil {
 		t.Fatalf("rollback gen0 rejected at transport (pinning seam owns this): %v", err)
+	}
+}
+
+// countListener counts accepted TCP connections so reuse tests can prove
+// one handshake served many pages.
+type countListener struct {
+	net.Listener
+	accepts *atomic.Int32
+}
+
+// Accept counts successful accepts and passes the connection through.
+func (l *countListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, fmt.Errorf("accept: %w", err)
+	}
+	l.accepts.Add(1)
+	return conn, nil
+}
+
+// Two Sync pages to one peer reuse a single Noise session: one TCP accept
+// serves both pages and the pool holds one verified session.
+func TestClientSyncReusesSession(t *testing.T) {
+	fx := newHandshakeFixture(t)
+	caCert, err := LoadCACert(fx.caFile)
+	if err != nil {
+		t.Fatalf("load ca: %v", err)
+	}
+	serverVerify := CAVerifier(caCert)
+	clientVerify := CAVerifier(caCert)
+
+	raw := testListen(t)
+	var accepts atomic.Int32
+	listener := &noiseListener{
+		Listener: &countListener{Listener: raw, accepts: &accepts},
+		static:   fx.staticB,
+		parcel:   fx.parcelB,
+		verify:   serverVerify,
+		logger:   logs.NewNop(),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+SyncPath, func(w http.ResponseWriter, r *http.Request) {
+		serveSyncPage(w, r, nil, logs.NewNop())
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		_ = srv.Serve(listener) //nolint:errcheck // test server ends with test
+	}()
+	t.Cleanup(func() {
+		_ = srv.Close() //nolint:errcheck // test cleanup
+	})
+
+	addr, err := netip.ParseAddrPort(raw.Addr().String())
+	if err != nil {
+		t.Fatalf("parse addr: %v", err)
+	}
+	client := NewClient(fx.staticA, fx.parcelA, clientVerify)
+	expect := Peer{ID: fx.idB, Pub: fx.staticB.Public}
+	for i := range 2 {
+		if _, err := client.Sync(context.Background(), addr, expect, SyncRequest{Limit: 10}); err != nil {
+			t.Fatalf("sync %d: %v", i, err)
+		}
+	}
+
+	if got := accepts.Load(); got != 1 {
+		t.Fatalf("accepted %d connections, want 1 shared session", got)
+	}
+	client.sessMu.Lock()
+	n := len(client.sessions)
+	client.sessMu.Unlock()
+	if n != 1 {
+		t.Fatalf("pooled %d sessions, want 1", n)
 	}
 }

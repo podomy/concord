@@ -29,9 +29,16 @@ const SyncPath = "/v1/sync"
 // It presents this node's static key and parcel, dials peers whose static
 // key arrives via gossip, and verifies each responder's parcel before syncing.
 //
-// Client is safe for concurrent Sync. timeout and the adaptive page budget
-// (curLimit) are guarded by mu; timeout is otherwise set once at
-// construction (tests may assign it before first use).
+// Sessions to a peer are pooled and reused across Sync calls: one TCP+IK
+// handshake serves many pages until the session ages out, errors, or the
+// peer's key changes. Verification runs once per session establishment,
+// not per page; the 60s age cap bounds how long a stale trust decision
+// survives rotation.
+//
+// Client is safe for concurrent Sync. All pool state lives behind sessMu;
+// timeout and the adaptive page budget (curLimit) are guarded by mu;
+// timeout is otherwise set once at construction (tests may assign it
+// before first use).
 type Client struct {
 	static  StaticKey
 	parcel  []byte
@@ -41,7 +48,33 @@ type Client struct {
 
 	mu       sync.RWMutex
 	curLimit int
+
+	sessMu   sync.Mutex
+	sessions map[string]*pooledSession
 }
+
+// pooledSession is one verified Noise session to a peer, reused across
+// Sync pages. refs counts in-flight requests; eviction skips sessions
+// with refs above zero so a sweep never yanks a live request.
+type pooledSession struct {
+	key         string
+	conn        *noiseConn
+	transport   *http.Transport
+	pub         [32]byte
+	established time.Time
+	refs        int
+}
+
+// maxSessionAge bounds reuse of one Noise session. Rotation propagates
+// through gossip in seconds; sixty seconds caps how long a stale
+// verification survives a key or generation change. Age is checked on
+// every Sync, so a quiet peer's session expires before its next page.
+const maxSessionAge = 60 * time.Second
+
+// sessionIdleTimeout closes a pooled transport idle past this bound,
+// below the server's 120s idle timeout so the client always hangs up
+// first instead of writing into a server-closed connection.
+const sessionIdleTimeout = 90 * time.Second
 
 // minSyncLimit floors the adaptive page budget: decode failures halve the
 // requested limit down to here, never below, so progress continues on
@@ -58,6 +91,7 @@ func NewClient(static StaticKey, parcel []byte, verify Verifier) *Client {
 		verify:   verify,
 		timeout:  10 * time.Second,
 		curLimit: defaultSyncLimit,
+		sessions: make(map[string]*pooledSession),
 	}
 }
 
@@ -106,7 +140,7 @@ func (c *Client) noteDecodeSuccess() {
 }
 
 // Sync pulls one page of events from peer (unary HTTP POST to /v1/sync over a
-// fresh Noise session).
+// pooled Noise session, dialed on first use).
 //
 // peer is the peer's transport address (advertise IP + Port, usually 8443),
 // not the memberlist gossip port. expect is the peer's gossiped Noise
@@ -121,6 +155,10 @@ func (c *Client) noteDecodeSuccess() {
 // This call does not push our journal to the peer; it only asks for theirs.
 // The peer responds with Events (after the cursor, up to limit) and
 // NextCursor to store for the next Sync.
+//
+// Sessions are pooled per peer and reused across pages until they age
+// out, error, or the peer's key changes; a transport failure evicts the
+// session and retries the page once over a fresh handshake.
 func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req SyncRequest) (SyncResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return SyncResponse{}, fmt.Errorf("context cancelled: %w", err)
@@ -132,78 +170,188 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req
 		return SyncResponse{}, fmt.Errorf("peer public key must be 32 bytes, got %d", len(expect.Pub))
 	}
 
-	conn, parcel, err := c.dial(ctx, peer, expect)
+	resp, evicted, err := c.doSync(ctx, peer, expect, req)
+	if err == nil || !evicted {
+		return resp, err
+	}
+	resp, _, err = c.doSync(ctx, peer, expect, req)
+	return resp, err
+}
+
+// doSync runs one page over the pooled session. It reports whether the
+// session was evicted: only transport failures evict and merit a retry.
+// Validation failures leave a healthy session pooled and never retry,
+// since the same page would fail identically.
+func (c *Client) doSync(ctx context.Context, peer netip.AddrPort, expect Peer, req SyncRequest) (SyncResponse, bool, error) {
+	sess, err := c.session(ctx, peer, expect)
 	if err != nil {
-		return SyncResponse{}, err
+		return SyncResponse{}, false, err
+	}
+	defer c.release(sess)
+
+	httpReq, err := c.newSyncRequest(ctx, peer, req)
+	if err != nil {
+		return SyncResponse{}, false, err
 	}
 
-	err = c.verifyResponder(expect, parcel)
+	status, body, err := c.roundTrip(sess, httpReq)
 	if err != nil {
-		_ = conn.Close() //nolint:errcheck // best-effort close on failed verify
-		return SyncResponse{}, fmt.Errorf("verify responder %s: %w", peer, err)
+		c.evict(sess)
+		return SyncResponse{}, true, fmt.Errorf("sync %s: %w", peer, err)
 	}
+	resp, err := c.decodeResponse(peer, status, body, req.Cursor)
+	if err != nil {
+		return SyncResponse{}, false, err
+	}
+	return resp, false, nil
+}
 
+// newSyncRequest encodes one sync page request. Encoding touches no
+// session state, so a retry rebuilds the request from the same SyncRequest.
+func (c *Client) newSyncRequest(ctx context.Context, peer netip.AddrPort, req SyncRequest) (*http.Request, error) {
 	var buf bytes.Buffer
 	req.Limit = c.limitFor(req.Limit)
-	if err = json.NewEncoder(&buf).Encode(req); err != nil {
-		_ = conn.Close() //nolint:errcheck // best-effort close on encode error
-		return SyncResponse{}, fmt.Errorf("marshal sync request: %w", err)
+	err := json.NewEncoder(&buf).Encode(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal sync request: %w", err)
 	}
 
 	hostport := net.JoinHostPort(peer.Addr().String(), strconv.FormatUint(uint64(peer.Port()), 10))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+hostport+SyncPath, &buf)
 	if err != nil {
-		_ = conn.Close() //nolint:errcheck // best-effort close on request error
-		return SyncResponse{}, fmt.Errorf("new request: %w", err)
+		return nil, fmt.Errorf("new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-
-	return c.exchange(conn, peer, httpReq, req.Cursor)
+	return httpReq, nil
 }
 
-// exchange performs one HTTP request over an established Noise session and
-// decodes the sync response. The connection closes after the body is consumed.
-// expectedCursor is the request cursor the empty page must echo; see
-// validateSyncResponse. A regressive NextCursor keeps the current cursor
-// with a warn instead of failing; see clampRegressiveCursor.
-func (c *Client) exchange(conn *noiseConn, peer netip.AddrPort, httpReq *http.Request, expectedCursor string) (SyncResponse, error) {
-	// Deferred first so it runs last: body first, connection after.
-	defer func() {
-		_ = conn.Close() //nolint:errcheck // session done, nothing to report
-	}()
+// session returns the pooled session for a peer, dialing and verifying
+// a fresh one when none is cached, the cached key differs, or the cached
+// session aged out. Idle expired sessions are swept on the way through.
+// The handshake may hold the pool mutex; it is bounded by the handshake
+// timeout and Sync callers already serialize per peer per tick.
+func (c *Client) session(ctx context.Context, peer netip.AddrPort, expect Peer) (*pooledSession, error) {
+	c.sessMu.Lock()
+	defer c.sessMu.Unlock()
+	c.sweepSessionsLocked()
 
-	// One connection per Sync: dial-once transport with keep-alives off.
-	transport := &http.Transport{
+	key := expect.ID.String()
+	var pub [32]byte
+	copy(pub[:], expect.Pub)
+	if sess, ok := c.sessions[key]; ok && sess.pub == pub && time.Since(sess.established) < maxSessionAge {
+		sess.refs++
+		return sess, nil
+	}
+	return c.dialLocked(ctx, peer, expect, key, pub)
+}
+
+// dialLocked handshakes a fresh session and pools it, replacing any
+// older session for the peer. The caller holds sessMu.
+func (c *Client) dialLocked(ctx context.Context, peer netip.AddrPort, expect Peer, key string, pub [32]byte) (*pooledSession, error) {
+	conn, parcel, err := c.dial(ctx, peer, expect)
+	if err != nil {
+		return nil, err
+	}
+
+	err = c.verifyResponder(expect, parcel)
+	if err != nil {
+		_ = conn.Close() //nolint:errcheck // best-effort close on failed verify
+		return nil, fmt.Errorf("verify responder %s: %w", peer, err)
+	}
+
+	if old, ok := c.sessions[key]; ok {
+		delete(c.sessions, key)
+		_ = old.conn.Close() //nolint:errcheck // replaced session, best-effort close
+		old.transport.CloseIdleConnections()
+	}
+
+	sess := &pooledSession{
+		key:         key,
+		conn:        conn,
+		pub:         pub,
+		established: time.Now(),
+		refs:        1,
+	}
+	sess.transport = &http.Transport{
 		DialContext: func(context.Context, string, string) (net.Conn, error) {
 			return conn, nil
 		},
-		DisableKeepAlives: true,
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     sessionIdleTimeout,
 	}
-	client := &http.Client{Timeout: c.getTimeout(), Transport: transport}
-	defer transport.CloseIdleConnections()
+	c.sessions[key] = sess
+	return sess, nil
+}
 
+// release drops one in-flight reference. Sessions stay pooled until
+// eviction, expiry, or key change.
+func (c *Client) release(sess *pooledSession) {
+	c.sessMu.Lock()
+	defer c.sessMu.Unlock()
+	sess.refs--
+}
+
+// evict drops a session from the pool and closes it, but only when it
+// is still the pooled one: a concurrent Sync may already have replaced
+// it, and the replacement must survive.
+func (c *Client) evict(sess *pooledSession) {
+	c.sessMu.Lock()
+	defer c.sessMu.Unlock()
+	c.evictLocked(sess)
+}
+
+// evictLocked drops and closes sess when pooled. The caller holds sessMu.
+func (c *Client) evictLocked(sess *pooledSession) {
+	if current, ok := c.sessions[sess.key]; !ok || current != sess {
+		return
+	}
+	delete(c.sessions, sess.key)
+	_ = sess.conn.Close() //nolint:errcheck // evicted session, best-effort close
+	sess.transport.CloseIdleConnections()
+}
+
+// sweepSessionsLocked closes idle sessions past the age cap. Sessions
+// with in-flight requests are skipped; they age out on a later Sync.
+func (c *Client) sweepSessionsLocked() {
+	for _, sess := range c.sessions {
+		if sess.refs == 0 && time.Since(sess.established) >= maxSessionAge {
+			c.evictLocked(sess)
+		}
+	}
+}
+
+// roundTrip runs one HTTP request over a pooled session and returns the
+// capped body. The transport stays open for the next page; eviction owns
+// every close. Reading the body here keeps ownership local: nothing
+// unclosed crosses function boundaries.
+func (c *Client) roundTrip(sess *pooledSession, httpReq *http.Request) (int, []byte, error) {
+	client := &http.Client{Timeout: c.getTimeout(), Transport: sess.transport}
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		return SyncResponse{}, fmt.Errorf("sync %s: %w", peer, err)
+		return 0, nil, fmt.Errorf("do sync request: %w", err)
 	}
 	defer func() {
-		if err := httpResp.Body.Close(); err != nil {
-			// Best-effort close after read; primary error is already returned.
-			_ = err
-		}
+		_ = httpResp.Body.Close() //nolint:errcheck // body fully read below
 	}()
 
-	limited := io.LimitReader(httpResp.Body, 1<<20) // 1 MiB.
-	if httpResp.StatusCode != http.StatusOK {
-		msg, readErr := io.ReadAll(limited)
-		if readErr != nil {
-			return SyncResponse{}, fmt.Errorf("sync %s: status %d", peer, httpResp.StatusCode)
-		}
-		return SyncResponse{}, fmt.Errorf("sync %s: status %d: %s", peer, httpResp.StatusCode, bytes.TrimSpace(msg))
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20)) // 1 MiB.
+	if err != nil {
+		return 0, nil, fmt.Errorf("read sync response: %w", err)
+	}
+	return httpResp.StatusCode, body, nil
+}
+
+// decodeResponse validates one capped sync page body.
+// expectedCursor is the request cursor the empty page must echo; see
+// validateSyncResponse. A regressive NextCursor keeps the current cursor
+// with a warn instead of failing; see clampRegressiveCursor.
+func (c *Client) decodeResponse(peer netip.AddrPort, status int, body []byte, expectedCursor string) (SyncResponse, error) {
+	if status != http.StatusOK {
+		return SyncResponse{}, fmt.Errorf("sync %s: status %d: %s", peer, status, bytes.TrimSpace(body))
 	}
 
 	var resp SyncResponse
-	if err := json.NewDecoder(limited).Decode(&resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		c.noteDecodeFailure()
 		return SyncResponse{}, fmt.Errorf("decode sync response: %w", err)
 	}
