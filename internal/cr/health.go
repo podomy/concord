@@ -124,6 +124,12 @@ func checkTCP(ctx context.Context, logger *logs.Logger, spec workload.Spec) bool
 	return true
 }
 
+// outcome carries one exec probe exit across the wait boundary.
+type outcome struct {
+	code int
+	err  error
+}
+
 // checkExec runs the spec command inside the container and returns true on
 // exit code zero. Output discards: probe chatter stays out of log rings.
 // The run is bounded by the probe timeout with SIGKILL escalation, so a
@@ -152,10 +158,6 @@ func checkExec(ctx context.Context, logger *logs.Logger, spec workload.Spec, ctr
 		return false
 	}
 
-	type outcome struct {
-		code int
-		err  error
-	}
 	done := make(chan outcome, 1)
 	go func() {
 		state, err := proc.Wait()
@@ -179,12 +181,30 @@ func checkExec(ctx context.Context, logger *logs.Logger, spec workload.Spec, ctr
 	case out := <-done:
 		return out.err == nil && out.code == 0
 	case <-timeout.C:
-		logger.Debug("exec probe timed out, killing", logs.Strings("command", spec.HealthCommand))
-		if err := proc.Signal(syscall.SIGKILL); err != nil {
-			logger.Debug("exec probe kill failed", logs.Error(err))
-		}
-		out := <-done
+		return killAndReap(logger, spec, proc, done)
+	}
+}
+
+// reapTimeout bounds the post-SIGKILL wait for a timed-out probe. A
+// process that ignores SIGKILL (unkillable D-state) must not stall the
+// 500ms beat behind it: expiry skips the beat and the reaped exit, if
+// any, is observed on a later tick.
+const reapTimeout = 5 * time.Second
+
+// killAndReap SIGKILLs a timed-out probe and waits for its exit up to
+// reapTimeout, reporting healthy only on a zero exit before the bound.
+func killAndReap(logger *logs.Logger, spec workload.Spec, proc *libcontainer.Process, done <-chan outcome) bool {
+	logger.Debug("exec probe timed out, killing", logs.Strings("command", spec.HealthCommand))
+	if err := proc.Signal(syscall.SIGKILL); err != nil {
+		logger.Debug("exec probe kill failed", logs.Error(err))
+	}
+	select {
+	case out := <-done:
 		return out.err == nil && out.code == 0
+	case <-time.After(reapTimeout):
+		logger.Warn("exec probe unreaped after SIGKILL, skipping beat",
+			logs.Strings("command", spec.HealthCommand))
+		return false
 	}
 }
 
