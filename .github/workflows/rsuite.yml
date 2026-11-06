@@ -89,7 +89,10 @@ jobs:
         run: |
           sudo apt-get install -y strace
           sudo timeout 120 strace -f -e trace=open,openat,flock -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || true
-          grep -E "resonance-runs|resonance-run|EACCES|EPERM|ENOSYS|EWOULDBLOCK|ENOENT" /tmp/strace-acquire.log | tail -n 40 || true
+          TRACE=$(grep -E "resonance-runs|resonance-run|EACCES|EPERM|ENOSYS|EWOULDBLOCK|ENOENT" /tmp/strace-acquire.log | tail -n 40 || true)
+          echo "$TRACE"
+          ESC=$(printf '%s' "$TRACE" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=rsuite-strace::$ESC"
         working-directory: resonance
 
       - name: Run regression suite
