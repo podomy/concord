@@ -1,0 +1,78 @@
+name: rsuite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Long suite: cancel superseded runs on the same ref so a fast
+# push train does not stack 40-minute runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    # Worst files budget 800s; 33 files at --jobs 4 usually land
+    # well inside this. Raise if the suite grows, never lower
+    # below the slowest file's timeout.
+    timeout-minutes: 120
+    env:
+      # Pinned runner. Bump deliberately when concord's YAMLs need
+      # a newer runner behavior; never float this.
+      RESONANCE_SHA: 1b38c72b2753704f1195d784379760c99107c807
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: podomy/resonance
+          ref: ${{ env.RESONANCE_SHA }}
+          path: resonance
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build rsuite runner
+        run: make -C resonance bin/rsuite
+
+      # The SUT always comes from the concord tree under test,
+      # never from an artifact or a reference checkout.
+      - name: Build concord SUT
+        run: go build -trimpath -o resonance/bin/concord ./cmd/concord
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Build test images
+        run: make -C resonance img-build
+
+      - name: Doctor
+        run: ./bin/rsuite doctor
+        working-directory: resonance
+
+      - name: Lint scenarios
+        run: ./bin/rsuite lint ../rsuite/*.yaml
+        working-directory: resonance
+
+      # Needs root for netns plus TUN. Workload scenarios pull
+      # nginx:alpine from Docker Hub; anonymous Hub limits on
+      # shared runners can flake those files with 429s.
+      - name: Run regression suite
+        run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml
+        working-directory: resonance
+
+      - name: Collect logs on failure
+        if: failure()
+        run: sudo tar -czf /tmp/rsuite-logs.tar.gz /var/tmp/resonance-* || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: rsuite-logs
+          path: /tmp/rsuite-logs.tar.gz
+          if-no-files-found: ignore
+          retention-days: 30
