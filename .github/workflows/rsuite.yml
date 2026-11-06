@@ -85,66 +85,13 @@ jobs:
       # acquire leaves no errno anywhere. Tracing open/flock on a
       # single fast file captures the exact failing call.
       # Diagnostic only: never fails the job.
-      # Strace the failing shape: the single-file control above
-      # acquires fine, so the trigger needs concurrency. Trace the
-      # full matrix and keep only allocator and flock lines: failing
-      # children produce tiny traces, passing ones are bounded by
-      # the timeout. Diagnostic only: never fails the job.
       - name: Trace allocator syscalls
         run: |
           sudo apt-get install -y strace
           sudo timeout 120 strace -f -e trace=open,openat,flock -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || true
           TRACE1=$(grep -E "flock\(|resonance-run" /tmp/strace-acquire.log | tail -n 40 || true)
           echo "$TRACE1"
-          sudo timeout 300 strace -f -e trace=open,openat,flock -o /tmp/strace-matrix.log ./bin/rsuite run --jobs 4 ../rsuite/*.yaml || true
-          TRACE2=$(python3 - <<'PYEOF' || true
-          import re, collections
-          wins = 0
-          losses = collections.Counter()
-          maxid = 0
-          pids = set()
-          cur = {}
-          curg = {}
-          glob = collections.Counter()
-          pat = re.compile(r'^\s*(\d+)\s+(.*)$')
-          try:
-              fh = open('/tmp/strace-matrix.log', errors='replace')
-          except OSError as e:
-              print('no trace log: %s' % e)
-          else:
-              with fh:
-                  for line in fh:
-                      m = pat.match(line)
-                      if not m:
-                          continue
-                      pid, rest = m.group(1), m.group(2)
-                      pids.add(pid)
-                      mo = re.search(r'resonance-run-(\d+)\.lock', rest)
-                      if mo:
-                          cur[pid] = int(mo.group(1))
-                          if 'O_CREAT' not in rest:
-                              maxid = max(maxid, int(mo.group(1)))
-                      mo = re.search(r'LOCK_NB\)\s+=\s+0', rest)
-                      if mo and pid in cur:
-                          wins += 1
-                          cur.pop(pid, None)
-                          continue
-                      mo = re.search(r'LOCK_NB\)\s+=\s+-1', rest)
-                      if mo and pid in cur:
-                          losses[cur[pid]] += 1
-                          continue
-                      mo = re.search(r'flock\(\d+, LOCK_EX\)\s+=\s+(-\d+|\d+)', rest)
-                      if mo and 'NB' not in rest:
-                          glob[mo.group(0).split('=')[-1].strip()] += 1
-          print('global flock results:', dict(glob))
-          print('per-id wins:', wins)
-          print('per-id losses by id (top):', dict(sorted(losses.items())[:12]))
-          print('max id file touched:', maxid)
-          print('distinct pids seen:', len(pids))
-          PYEOF
-          )
-          echo "$TRACE2"
-          ESC=$(printf '%s\n%s' "$TRACE1" "$TRACE2" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          ESC=$(printf '%s' "$TRACE1" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-strace::$ESC"
         working-directory: resonance
 
@@ -221,9 +168,7 @@ jobs:
       - name: Surface child diagnostics
         if: failure()
         run: |
-          LOGS=$(sudo ls /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | wc -l)
-          HITS=$(sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | wc -l)
-          DIAG=$(printf 'per-file logs: %s\nlines matching "sim:": %s' "$LOGS" "$HITS"; sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | sort | uniq -c | head -n 10 || true)
+          DIAG=$(printf 'simplest per-file log tail:\n'; sudo tail -n 40 /var/tmp/resonance-rsuite-*/concord_two.yaml.log 2>&1 | head -n 40 || true)
           echo "$DIAG"
           ESC=$(printf '%s' "$DIAG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-childerr::$ESC"
