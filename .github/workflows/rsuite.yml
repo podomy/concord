@@ -152,6 +152,18 @@ jobs:
           echo "::error title=rsuite-acquire::$ESC"
         working-directory: resonance
 
+      # Child stderr (including any "sim:" allocator diagnostics)
+      # lands in the per-file logs. Surface it: exhaustion text
+      # means the open path failed, silence means flock failed.
+      - name: Surface child diagnostics
+        if: failure()
+        run: |
+          DIAG=$(sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | sort | uniq -c | head -n 20 || true)
+          echo "$DIAG"
+          ESC=$(printf '%s' "$DIAG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=rsuite-childerr::$ESC"
+        working-directory: resonance
+
       - name: Collect logs on failure
         if: failure()
         run: sudo tar -czf /tmp/rsuite-logs.tar.gz /var/tmp/resonance-* || true
