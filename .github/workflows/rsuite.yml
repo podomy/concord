@@ -88,9 +88,9 @@ jobs:
       - name: Trace allocator syscalls
         run: |
           sudo apt-get install -y strace
-          sudo timeout 120 strace -f -e trace=process,open,openat,flock,execve -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || echo "traced run exit: $?"
-          echo "--- tail of single-file trace ---"
-          TRACE1=$(grep -v "LC_\|locale" /tmp/strace-acquire.log | tail -n 45 || true)
+          sudo timeout 120 strace -f -e trace=process,open,openat,execve,flock -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || echo "traced run exit: $?"
+          echo "--- execs and exits ---"
+          TRACE1=$(grep -E "execve|exited|LOCK" /tmp/strace-acquire.log | grep -v "ENOENT" | tail -n 40 || true)
           echo "$TRACE1"
           ESC=$(printf '%s' "$TRACE1" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-strace::$ESC"
