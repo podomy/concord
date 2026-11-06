@@ -77,6 +77,16 @@ jobs:
         run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml
         working-directory: resonance
 
+      # Allocator forensics: acquire fails silently on lock I/O,
+      # loudly only on id exhaustion. The runner's view (lock
+      # files, root doctor) tells which one bit.
+      - name: Diagnose allocator on failure
+        if: failure()
+        run: |
+          sudo ./bin/rsuite doctor
+          sudo ls -la /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock || true
+        working-directory: resonance
+
       - name: Collect logs on failure
         if: failure()
         run: sudo tar -czf /tmp/rsuite-logs.tar.gz /var/tmp/resonance-* || true
