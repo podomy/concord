@@ -37,8 +37,14 @@ jobs:
           go-version: stable
           cache: true
 
+      # Resonance builds strict C23, which needs GCC 14+. The
+      # runner default gcc predates -std=c23, so install it
+      # explicitly rather than floating on the image default.
+      - name: Install C toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-14
+
       - name: Build rsuite runner
-        run: make -C resonance bin/rsuite
+        run: make -C resonance CC=gcc-14 bin/rsuite
 
       # The SUT always comes from the concord tree under test,
       # never from an artifact or a reference checkout.
