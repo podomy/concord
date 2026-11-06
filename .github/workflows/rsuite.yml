@@ -37,14 +37,15 @@ jobs:
           go-version: stable
           cache: true
 
-      # Resonance builds strict C23, which needs GCC 14+. The
-      # runner default gcc predates -std=c23, so install it
-      # explicitly rather than floating on the image default.
+      # Resonance builds strict C23. The runner default gcc predates
+      # -std=c23, and GCC 14 rejects the codebase's (void)system()
+      # idiom under -Werror=unused-result, so the C build uses clang,
+      # which accepts both. Go's own CGO parts keep the default gcc.
       - name: Install C toolchain
-        run: sudo apt-get update && sudo apt-get install -y gcc-14
+        run: sudo apt-get update && sudo apt-get install -y clang
 
       - name: Build rsuite runner
-        run: make -C resonance CC=gcc-14 bin/rsuite
+        run: make -C resonance CC=clang bin/rsuite
 
       # The SUT always comes from the concord tree under test,
       # never from an artifact or a reference checkout.
