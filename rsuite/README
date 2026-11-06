@@ -18,6 +18,20 @@ Build (from the Resonance checkout)
   cd deps/concord && go build -o ../../bin/concord ./cmd/concord
   make img-build
 
+Test CA (test-only, never commit real keys): certs/ is gitignored
+local state, so a fresh checkout has none and every spawn fails
+on the silent cp. Generate one throwaway self-signed CA:
+
+  mkdir -p certs
+  openssl req -x509 -newkey rsa:2048 -keyout certs/ca.key \
+    -out certs/ca.crt -days 3650 -nodes -subj "/CN=concord-test-ca" \
+    -addext "basicConstraints=critical,CA:true" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+  chmod 600 certs/ca.key
+
+CI does this every run; nodes only need a shared public-key
+carrier, and a fresh CA is always inside its validity window.
+
 deps/concord is a reference checkout, never edited in place;
 the Makefile owns no Concord target. img-build needs Go and
 fills img/rootfs with probe, probe-check, and hog; img and

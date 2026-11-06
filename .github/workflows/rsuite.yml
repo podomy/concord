@@ -59,6 +59,24 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      # Provision test CA. The repo's certs/ is gitignored local
+      # state, so a fresh checkout has no CA and every spawn fails
+      # on the silent cp. Generate a throwaway self-signed CA per
+      # run: nodes only need a shared public key carrier, and a
+      # fresh CA is always inside its validity window.
+      # Never commit real keys; this CA is test-only and ephemeral.
+      - name: Provision test CA
+        run: |
+          mkdir -p resonance/certs
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout resonance/certs/ca.key \
+            -out resonance/certs/ca.crt \
+            -days 3650 -nodes -subj "/CN=concord-test-ca" \
+            -addext "basicConstraints=critical,CA:true" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          chmod 600 resonance/certs/ca.key
+          openssl x509 -in resonance/certs/ca.crt -noout -subject -issuer
+
       - name: Build test images
         run: make -C resonance img-build
 
