@@ -73,18 +73,30 @@ jobs:
       # Needs root for netns plus TUN. Workload scenarios pull
       # nginx:alpine from Docker Hub; anonymous Hub limits on
       # shared runners can flake those files with 429s.
+      # Stale allocator locks from a killed run pin every id until
+      # cleared; a fresh runner has none, so this is a no-op there.
+      # Never remove these while a suite is live: two runs would
+      # alias ids.
+      - name: Clear stale run locks
+        run: sudo rm -f /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock
+
       - name: Run regression suite
         run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml
         working-directory: resonance
 
       # Allocator forensics: acquire fails silently on lock I/O,
       # loudly only on id exhaustion. The runner's view (lock
-      # files, root doctor) tells which one bit.
+      # files, root doctor) tells which one bit. The summary goes
+      # to an annotation, which is readable without log access.
       - name: Diagnose allocator on failure
         if: failure()
         run: |
-          sudo ./bin/rsuite doctor
-          sudo ls -la /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock || true
+          DIAG="$(sudo ./bin/rsuite doctor 2>&1; echo '--- locks ---'; sudo ls -la /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock 2>&1; echo '--- self ---'; id -u; df -h /var/tmp | tail -n 1)"
+          echo "$DIAG"
+          ESC="${DIAG//%/\%25}"
+          ESC="${ESC//$'\r'/%0D}"
+          ESC="${ESC//$'\n'/%0A}"
+          echo "::error title=rsuite-acquire::$ESC"
         working-directory: resonance
 
       - name: Collect logs on failure
