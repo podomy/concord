@@ -176,7 +176,7 @@ jobs:
       - name: Surface child diagnostics
         if: failure()
         run: |
-          DIAG=$(printf 'simplest per-file log tail:\n'; sudo tail -n 40 /var/tmp/resonance-rsuite-*/concord_two.yaml.log 2>&1 | head -n 40 || true)
+          DIAG=$(for f in $(grep "^not ok" /tmp/tap.log | head -n 3 | awk '{print $4}' | xargs -n1 basename 2>/dev/null); do echo "=== $f ==="; sudo tail -n 30 /var/tmp/resonance-rsuite-*/"$f" 2>/dev/null | head -n 35; done)
           echo "$DIAG"
           ESC=$(printf '%s' "$DIAG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-childerr::$ESC"
