@@ -90,7 +90,7 @@ jobs:
           sudo apt-get install -y strace
           sudo timeout 120 strace -f -e trace=process,open,openat,execve,mkdir,mkdirat,flock -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || echo "traced run exit: $?"
           echo "--- failures and execs ---"
-          TRACE1=$(grep -E "Permission denied|No such file| = -1 |execve\(|_exit\(|exited with [^0]" /tmp/strace-acquire.log | grep -v "ENOENT.*\(ld.so\|gconv\|locale" | tail -n 40 || true)
+          TRACE1=$(grep -E "Permission denied|No such file| = -1 |execve\(|_exit\(|exited with [^0]" /tmp/strace-acquire.log | grep -v "ENOENT.*\(ld.so\|gconv\|locale" | head -n 40 || true)
           echo "$TRACE1"
           ESC=$(printf '%s' "$TRACE1" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-strace::$ESC"
