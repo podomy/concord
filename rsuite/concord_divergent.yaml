@@ -1,0 +1,42 @@
+# concord-divergent: one submitted
+# per side of a split, all arrive after reunion.
+name: concord-divergent
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 210
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: split
+    do:
+      - drop:
+          - 2
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: a
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: b
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      present:
+        workload: a
+        on: all
+    timeout_s: 60
+  - name: converged
+    until:
+      present:
+        workload: b
+        on: all
+    timeout_s: 60

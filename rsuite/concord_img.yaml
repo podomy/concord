@@ -1,0 +1,32 @@
+# concord-img: build, push, query, pull, and
+# start form one chain. Gap, stated honestly: YAML has no img_push verb,
+# so the registry push plus catalog readback plus running-instance event
+# have no equivalent here; this file proves the tail of the chain, that a
+# submitted image assigns and converges everywhere.
+name: concord-img
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 600
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: supply
+    do:
+      - submit:
+          node: 0
+          image: probe
+          as: img0
+    until:
+      assigned:
+        workload: img0
+    timeout_s: 120
+  - name: running
+    until:
+      present:
+        workload: img0
+        on: all
+    timeout_s: 180

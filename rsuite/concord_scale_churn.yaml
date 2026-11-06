@@ -1,0 +1,45 @@
+# concord-scale-churn: a SIGKILLED
+# node restarted fresh resyncs full journals and rejoins the 5-node mesh.
+name: concord-scale-churn
+version: 1
+sut: concord
+nodes: 5
+timeout_s: 360
+phases:
+  - name: mesh
+    until:
+      peers: 5
+      on: all
+    timeout_s: 60
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: s0
+    until:
+      present:
+        workload: s0
+        on: all
+    timeout_s: 60
+  - name: lively
+    until:
+      mesh_count: 5
+    timeout_s: 30
+  - name: churn
+    do:
+      - kill:
+          node: 4
+          signal: KILL
+      - restart:
+          node: 4
+          durability: fresh
+    until:
+      mesh_count: 5
+    timeout_s: 120
+  - name: converged
+    until:
+      present:
+        workload: s0
+        on: all
+    timeout_s: 60

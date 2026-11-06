@@ -1,0 +1,62 @@
+# concord-splitbrain: three isolated
+# nodes, one workload each, all three everywhere after heal.
+name: concord-splitbrain
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 300
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: load
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: n0
+      - submit:
+          node: 1
+          image: nginx:alpine
+          as: n1
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: n2
+    until:
+      present:
+        workload: n0
+        on: all
+    timeout_s: 60
+  - name: split
+    do:
+      - drop: all
+    sustain:
+      mesh_count: 3
+    timeout_s: 15
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: first
+    until:
+      present:
+        workload: n0
+        on: all
+    timeout_s: 45
+  - name: second
+    until:
+      present:
+        workload: n1
+        on: all
+    timeout_s: 45
+  - name: third
+    until:
+      present:
+        workload: n2
+        on: all
+    timeout_s: 45

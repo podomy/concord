@@ -1,0 +1,61 @@
+# concord-flap: three isolate and restore
+# cycles, mesh returns to peers 3 after every one.
+name: concord-flap
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 330
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: flap1-split
+    do:
+      - drop:
+          - 2
+    until:
+      mesh_count: 2
+    hold_s: 10
+    timeout_s: 45
+  - name: flap1-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: flap2-split
+    do:
+      - drop:
+          - 2
+    until:
+      mesh_count: 2
+    hold_s: 10
+    timeout_s: 45
+  - name: flap2-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: flap3-split
+    do:
+      - drop:
+          - 2
+    until:
+      mesh_count: 2
+    hold_s: 10
+    timeout_s: 45
+  - name: flap3-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45

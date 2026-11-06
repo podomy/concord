@@ -1,0 +1,57 @@
+# concord-failover: after a member
+# is SIGKILLED, scheduling continues on the survivors and the assignment
+# converges everywhere once the member rejoins. Gap: the C elects the
+# lowest-UUID leader dynamically; here node 0 is the pinned victim, and
+# the rejoin step exists because global agree needs every journal.
+# Node liveness comes from the survivors logs because a dead node
+# answers no CLI.
+name: concord-failover
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 330
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: down
+    do:
+      - kill:
+          node: 0
+          signal: KILL
+    until:
+      peers: 2
+      on:
+        - 1
+        - 2
+    timeout_s: 90
+  - name: submit
+    do:
+      - submit:
+          node: 1
+          image: nginx:alpine
+          as: f0
+    until:
+      present:
+        workload: f0
+        on:
+          - 1
+          - 2
+    timeout_s: 60
+  - name: rejoin
+    do:
+      - restart:
+          node: 0
+          durability: fresh
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60
+  - name: settled
+    until:
+      agree:
+        workload: f0
+    timeout_s: 60

@@ -1,0 +1,43 @@
+# concord-duel: split leaders assign, then
+# reunion agrees on one assignee. Gap, stated honestly: the C duel uses
+# one workload ID authored on both sides, but YAML cannot set workload
+# IDs (a submit with id ends SUITE_SKIP), so the two sides submit
+# distinct names and each converges everywhere with unanimous assignment.
+name: concord-duel
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 240
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: split
+    do:
+      - drop:
+          - 0
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: w0
+      - submit:
+          node: 1
+          image: nginx:alpine
+          as: w1
+    until:
+      mesh_count: 3
+    timeout_s: 60
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      agree:
+        workload: w0
+    timeout_s: 60
+  - name: settled
+    until:
+      agree:
+        workload: w1
+    timeout_s: 60

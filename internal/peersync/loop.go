@@ -233,6 +233,7 @@ func syncOne(
 			logger.Warn("peer sync failed",
 				logs.String("peer_id", member.ID.String()),
 				logs.String("addr", addr.String()),
+				logs.String("cursor", req.Cursor),
 				logs.Error(err),
 			)
 			return page > 0

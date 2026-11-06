@@ -1,0 +1,12 @@
+# concord-two: two-node mesh, no workload.
+name: concord-two
+version: 1
+sut: concord
+nodes: 2
+timeout_s: 45
+phases:
+  - name: mesh
+    until:
+      peers: 2
+      on: all
+    timeout_s: 45

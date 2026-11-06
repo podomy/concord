@@ -1,0 +1,52 @@
+Regression Suites
+
+33 YAML scenarios run by the Resonance runner, not by this
+repo itself. Each file's header comment states what it proves.
+
+Paths
+
+  Runner plus SUT binaries live in a Resonance checkout:
+  <resonance>/bin/rsuite, <resonance>/bin/concord, plus
+  <resonance>/certs seeded per node and <resonance>/img/rootfs
+  for pushed test images. Scenarios live here:
+  <concord>/rsuite/*.yaml. Logs land under /var/tmp in a fresh
+  per-run dir and persist; see <resonance>/docs/layout.
+
+Build (from the Resonance checkout)
+
+  make bin/rsuite
+  cd deps/concord && go build -o ../../bin/concord ./cmd/concord
+  make img-build
+
+deps/concord is a reference checkout, never edited in place;
+the Makefile owns no Concord target. img-build needs Go and
+fills img/rootfs with probe, probe-check, and hog; img and
+preempt (hog push) need those bins at run time.
+
+Lint, list, doctor (no privileges, from Resonance checkout)
+
+  ./bin/rsuite lint <concord>/rsuite/*.yaml
+  ./bin/rsuite lint <concord>/rsuite/concord_two.yaml
+  ./bin/rsuite list <concord>/rsuite/*.yaml
+  ./bin/rsuite doctor
+
+make lint only covers Resonance suite/examples; Concord files
+need explicit paths as above.
+
+Run (needs root for netns plus TUN, from Resonance checkout)
+
+  sudo ./bin/rsuite run --jobs 4 <concord>/rsuite/*.yaml
+  sudo ./bin/rsuite run <concord>/rsuite/concord_two.yaml
+
+With sibling checkouts that reads:
+
+  sudo ./bin/rsuite run --jobs 4 ../concord/rsuite/*.yaml
+
+One child runs per file even at jobs 1. Flags precede files.
+Exit is 0 ok, 1 suite failure, 2 bad usage; skips never fail
+the run. Each run keeps per-file <base>.log plus report.html
+in its run dir; failed files copy journals plus node logs
+aside before the statedir wipe. Nothing cleans logs; remove
+them by hand when done. Post-mortem order plus cleanup live
+in <resonance>/docs/troubleshoot under post-mortem and the
+stale-state recipe.

@@ -179,9 +179,10 @@ func (c *Client) Sync(ctx context.Context, peer netip.AddrPort, expect Peer, req
 }
 
 // doSync runs one page over the pooled session. It reports whether the
-// session was evicted: only transport failures evict and merit a retry.
-// Validation failures leave a healthy session pooled and never retry,
-// since the same page would fail identically.
+// session was evicted: transport failures plus 503 transient evict and
+// merit one immediate retry over a fresh handshake. Other validation
+// failures leave a healthy session pooled and never retry, since the
+// same page would fail identically.
 func (c *Client) doSync(ctx context.Context, peer netip.AddrPort, expect Peer, req SyncRequest) (SyncResponse, bool, error) {
 	sess, err := c.session(ctx, peer, expect)
 	if err != nil {
@@ -198,6 +199,10 @@ func (c *Client) doSync(ctx context.Context, peer netip.AddrPort, expect Peer, r
 	if err != nil {
 		c.evict(sess)
 		return SyncResponse{}, true, fmt.Errorf("sync %s: %w", peer, err)
+	}
+	if status == http.StatusServiceUnavailable {
+		c.evict(sess)
+		return SyncResponse{}, true, fmt.Errorf("sync %s: transient %d: %s", peer, status, bytes.TrimSpace(body))
 	}
 	resp, err := c.decodeResponse(peer, status, body, req.Cursor)
 	if err != nil {

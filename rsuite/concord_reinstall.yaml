@@ -1,0 +1,49 @@
+# concord-reinstall: a node stopped,
+# wiped of journal plus kv store, and restarted under the same id and
+# Noise key rejoins cleanly and re-pulls full history.
+name: concord-reinstall
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 360
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: r0
+    until:
+      present:
+        workload: r0
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: r0
+    timeout_s: 30
+  - name: wipe
+    do:
+      - kill:
+          node: 2
+          signal: KILL
+      - restart:
+          node: 2
+          durability: wipe_state
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 90
+  - name: back
+    until:
+      present:
+        workload: r0
+        on: all
+    timeout_s: 60

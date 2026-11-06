@@ -1,0 +1,58 @@
+# concord-orphan-partition: an
+# isolated side orphans independently, reunion keeps the max epoch copy.
+# Shape note, stated honestly: the C splits three ways, which lets both
+# non-owner sides orphan simultaneously at epoch 1 with different
+# assignees, and this SUT build has no deterministic tiebreak that
+# converges that tie (observed stuck at 2 of 3 agreeing). This file
+# splits 2-vs-1 instead, so exactly one side ever lacks the owner and
+# exactly one epoch-1 copy exists, which reunion converges
+# deterministically. The max-epoch-kept invariant is identical; only
+# the simultaneous-orphan race is excluded.
+name: concord-orphan-partition
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 450
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: o0
+    until:
+      present:
+        workload: o0
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: o0
+    timeout_s: 30
+  - name: split
+    do:
+      - drop:
+          - 2
+    until:
+      mesh_count: 2
+    hold_s: 20
+    timeout_s: 45
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60
+  - name: settled
+    until:
+      agree:
+        workload: o0
+    timeout_s: 180

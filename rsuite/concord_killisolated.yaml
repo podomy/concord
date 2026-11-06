@@ -1,0 +1,52 @@
+# concord-killisolated: a node
+# killed mid-partition and restarted fresh converges after reunion.
+name: concord-killisolated
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 300
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: k0
+    until:
+      present:
+        workload: k0
+        on: all
+    timeout_s: 45
+  - name: split
+    do:
+      - drop:
+          - 2
+    until:
+      mesh_count: 2
+    hold_s: 10
+    timeout_s: 45
+  - name: kill
+    do:
+      - kill:
+          node: 2
+          signal: KILL
+      - restart:
+          node: 2
+          durability: fresh
+    until:
+      mesh_count: 2
+    hold_s: 10
+    timeout_s: 45
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      present:
+        workload: k0
+        on: all
+    timeout_s: 60

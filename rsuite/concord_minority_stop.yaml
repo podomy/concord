@@ -1,0 +1,49 @@
+# concord-minority-stop: stopped
+# on the lone side of a partition, stays stopped without quorum behind
+# it. Stop runs on the submit node, so the workload is submitted from
+# node 2 to make it the lone side.
+name: concord-minority-stop
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 210
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: m0
+    until:
+      present:
+        workload: m0
+        on: all
+    timeout_s: 45
+  - name: cut
+    do:
+      - drop:
+          - 2
+      - stop:
+          workload: m0
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: gone
+    sustain:
+      absent:
+        workload: m0
+        on: all
+    timeout_s: 30

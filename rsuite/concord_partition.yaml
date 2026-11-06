@@ -1,0 +1,33 @@
+# concord-partition: two-node mesh
+# survives drop and reunion with a peer.lost marker from the window.
+name: concord-partition
+version: 1
+sut: concord
+nodes: 2
+timeout_s: 180
+phases:
+  - name: mesh
+    until:
+      peers: 2
+      on: all
+    timeout_s: 45
+  - name: split
+    do:
+      - drop: all
+    until:
+      mesh_count: 1
+    hold_s: 10
+    timeout_s: 45
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      peers: 2
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: lost
+    until:
+      marker: peer.lost
+      on: any
+    timeout_s: 20

@@ -1,0 +1,54 @@
+# concord-orphan-stop: stopped on
+# an isolated owner beats the pair-side reassignment at a higher epoch.
+# Stop runs on the submit node, so the workload is submitted from node 0
+# and node 0 is the isolated side.
+name: concord-orphan-stop
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 240
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: v0
+    until:
+      present:
+        workload: v0
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: v0
+    timeout_s: 30
+  - name: cut
+    do:
+      - drop:
+          - 0
+      - stop:
+          workload: v0
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: gone
+    sustain:
+      absent:
+        workload: v0
+        on: all
+    timeout_s: 30

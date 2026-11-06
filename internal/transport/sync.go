@@ -53,6 +53,29 @@ func postSync(w http.ResponseWriter, r *http.Request, index *offsetIndex) {
 	serveSyncPage(w, r, index, nil)
 }
 
+// writeSyncLoadError reports a loadSyncPage failure. Transient
+// cancellations answer 503 so the caller retries over a fresh
+// session; anything else fails 500.
+func writeSyncLoadError(w http.ResponseWriter, logger *logs.Logger, cursor string, err error) {
+	msg := "sync failed"
+	code := http.StatusInternalServerError
+	trans := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	if trans {
+		msg = "sync unavailable"
+		code = http.StatusServiceUnavailable
+	}
+	if logger == nil {
+		http.Error(w, msg, code)
+		return
+	}
+	if trans {
+		logger.Warn("sync load transient", logs.Error(err), logs.String("cursor", cursor))
+	} else {
+		logger.Error("sync load failed", logs.Error(err), logs.String("cursor", cursor))
+	}
+	http.Error(w, msg, code)
+}
+
 // serveSyncPage serves one journal page after the request cursor with a
 // logger for outbound validation. A bad count or an unbound cursor with no
 // drops fails 500; malformed events are dropped with a warn count and the
@@ -98,7 +121,7 @@ func serveSyncPage(w http.ResponseWriter, r *http.Request, index *offsetIndex, l
 
 	events, nextCursor, err := loadSyncPage(r.Context(), index, req.Cursor, limit)
 	if err != nil {
-		http.Error(w, "sync failed", http.StatusInternalServerError)
+		writeSyncLoadError(w, logger, req.Cursor, err)
 		return
 	}
 

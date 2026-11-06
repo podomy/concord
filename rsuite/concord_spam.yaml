@@ -1,0 +1,155 @@
+# concord-spam: three beating rounds of
+# submit, stop, isolate, and SIGKILL. Rounds 0 and 1 stop their triple;
+# round 2 stays live. Simplification: the C stops the previous triple
+# after submitting the next; here each round stops its own triple
+# except the last, and the final phases verify live plus gone.
+name: concord-spam
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 800
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: r0-submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: t0
+          count: 3
+    until:
+      present:
+        workload: t0
+        on: all
+    timeout_s: 60
+  - name: r0-stop
+    do:
+      - stop:
+          workload: t0
+    until:
+      absent:
+        workload: t0
+        on: all
+    timeout_s: 30
+  - name: r0-split
+    do:
+      - drop:
+          - 0
+      - kill:
+          node: 1
+          signal: KILL
+      - restart:
+          node: 1
+          durability: fresh
+    until:
+      mesh_count: 3
+    timeout_s: 45
+  - name: r0-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 15
+    timeout_s: 45
+  - name: r1-submit
+    do:
+      - submit:
+          node: 1
+          image: nginx:alpine
+          as: t1
+          count: 3
+    until:
+      present:
+        workload: t1
+        on: all
+    timeout_s: 60
+  - name: r1-stop
+    do:
+      - stop:
+          workload: t1
+    until:
+      absent:
+        workload: t1
+        on: all
+    timeout_s: 30
+  - name: r1-split
+    do:
+      - drop:
+          - 1
+      - kill:
+          node: 2
+          signal: KILL
+      - restart:
+          node: 2
+          durability: fresh
+    until:
+      mesh_count: 3
+    timeout_s: 45
+  - name: r1-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 15
+    timeout_s: 45
+  - name: r2-submit
+    do:
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: t2
+          count: 3
+    until:
+      present:
+        workload: t2
+        on: all
+    timeout_s: 60
+  - name: r2-split
+    do:
+      - drop:
+          - 2
+      - kill:
+          node: 0
+          signal: KILL
+      - restart:
+          node: 0
+          durability: fresh
+    until:
+      peers: 3
+      on:
+        - 1
+        - 2
+    hold_s: 10
+    timeout_s: 60
+  - name: r2-back
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 15
+    timeout_s: 45
+  - name: final-live
+    until:
+      present:
+        workload: t2
+        on: all
+    timeout_s: 60
+  - name: final-gone0
+    sustain:
+      absent:
+        workload: t0
+        on: all
+    timeout_s: 15
+  - name: final-gone1
+    sustain:
+      absent:
+        workload: t1
+        on: all
+    timeout_s: 15

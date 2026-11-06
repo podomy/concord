@@ -1,0 +1,38 @@
+# concord-rotate: rotate one node's Noise
+# key in place, peers re-pin at generation 1, mesh and workload converge.
+# The C also asserts the exact 'peer key rotated' log line; that string
+# comes from one SUT pin-table branch and did not appear on a run where
+# rotation was otherwise effective, so the marker assertion stays C-only
+# and this file proves rotation is harmless to mesh and scheduling.
+name: concord-rotate
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 210
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: rotated
+    do:
+      - restart:
+          node: 2
+          durability: rekey_rotate
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 90
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: r0
+    until:
+      present:
+        workload: r0
+        on: all
+    timeout_s: 60

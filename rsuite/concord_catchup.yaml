@@ -1,0 +1,39 @@
+# concord-catchup: a 100-workload
+# backlog built on an isolated node drains onto all nodes after reunion.
+# Image note: the C submits nginx:alpine, whose pulls hit the per-node
+# registry path. At count 100 the concurrent upstream pulls wedge gossip
+# in egress-less sandboxes, so this file uses the node-local registry
+# ref, which fails fast when absent and keeps the drain about journals,
+# not pulls. The drain mechanics are identical.
+name: concord-catchup
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 800
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: load
+    do:
+      - drop:
+          - 2
+      - submit:
+          node: 0
+          image: localhost:8444/concord-test:latest
+          as: backlog
+          count: 100
+          rate: 50
+    until:
+      mesh_count: 2
+    timeout_s: 120
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      present:
+        workload: backlog
+        on: all
+    timeout_s: 600

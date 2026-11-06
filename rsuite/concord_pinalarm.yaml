@@ -1,0 +1,60 @@
+# concord-pinalarm: a fresh key at the
+# same generation is rejected fleet-wide with the pin sticking, then a
+# generation bump re-pins and workload converges everywhere.
+name: concord-pinalarm
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 330
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: p0
+    until:
+      present:
+        workload: p0
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: p0
+    timeout_s: 30
+  - name: wiped
+    do:
+      - restart:
+          node: 2
+          durability: key_wipe
+    until:
+      marker: pin mismatch
+      on: any
+    timeout_s: 45
+  - name: rotated
+    do:
+      - restart:
+          node: 2
+          durability: rekey_rotate
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60
+  - name: settled
+    until:
+      present:
+        workload: p0
+        on: all
+    timeout_s: 45
+  - name: pinned
+    until:
+      marker: peer key rotated
+      on: any
+    timeout_s: 30

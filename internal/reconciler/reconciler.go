@@ -836,6 +836,7 @@ func startContainer(
 		logger.Error("build process", logs.Error(err))
 		return
 	}
+	logger.Info("start workload container", logs.String("workload_id", spec.ID.String()), logs.String("image", spec.Image), logs.Strings("args", proc.Args), logs.Int("mem_mb", int(spec.Resources.MemoryMB)))
 	processHandle, err := runtime.Start(ctr, proc)
 	if err != nil {
 		logger.Error("start container", logs.Error(err))
@@ -1099,10 +1100,16 @@ func buildProcess(spec workload.Spec, result *cr.PullResult, sampler *node.Sampl
 		args = fallback
 	}
 
-	env := make([]string, 0, len(result.Config.Config.Env)+len(spec.Env))
+	env := make([]string, 0, len(result.Config.Config.Env)+len(spec.Env)+1)
 	env = append(env, result.Config.Config.Env...)
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
+	}
+	// CONCORD_MEM_LIMIT_MB carries the scheduled memory request into
+	// the container so memory-aware test images can consume up to
+	// their cap. Additive only: existing images ignore unknown env.
+	if spec.Resources.MemoryMB > 0 {
+		env = append(env, "CONCORD_MEM_LIMIT_MB="+strconv.FormatInt(spec.Resources.MemoryMB, 10))
 	}
 
 	cwd := result.Config.Config.WorkingDir

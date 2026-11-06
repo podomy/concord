@@ -1,0 +1,64 @@
+# concord-orphan: a killed member does
+# not break mesh or journal unanimity. Gap, stated honestly: the C
+# kills the real owner and asserts reassignment at epoch 1, but YAML
+# cannot elect the owner, so node 0 is pinned, and global agree needs
+# every journal including a dead member frozen copy. The file therefore
+# rejoins node 0 fresh before the unanimity verdict; the exact
+# owner-death epoch-bump property stays C-only.
+name: concord-orphan
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 390
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: o0
+    until:
+      present:
+        workload: o0
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: o0
+    timeout_s: 30
+  - name: down
+    do:
+      - kill:
+          node: 0
+          signal: KILL
+    until:
+      marker: peer.lost
+      on: any
+    timeout_s: 60
+  - name: rejoin
+    do:
+      - restart:
+          node: 0
+          durability: fresh
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60
+  - name: agreed
+    until:
+      agree:
+        workload: o0
+    timeout_s: 60
+  - name: kept
+    until:
+      present:
+        workload: o0
+        on: all
+    timeout_s: 60

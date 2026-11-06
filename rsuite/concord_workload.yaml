@@ -1,0 +1,34 @@
+# concord-workload: submitted on an
+# isolated node, shows up on the other two after reunion.
+name: concord-workload
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 150
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - drop:
+          - 2
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: w0
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      present:
+        workload: w0
+        on:
+          - 0
+          - 1
+    timeout_s: 60

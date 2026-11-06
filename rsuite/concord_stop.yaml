@@ -1,0 +1,47 @@
+# concord-stop: stopped on the majority
+# side of a partition, stays stopped everywhere after reunion.
+name: concord-stop
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 180
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: s0
+    until:
+      present:
+        workload: s0
+        on: all
+    timeout_s: 45
+  - name: cut
+    do:
+      - stop:
+          workload: s0
+      - drop:
+          - 2
+    until:
+      mesh_count: 3
+    timeout_s: 30
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45
+  - name: gone
+    sustain:
+      absent:
+        workload: s0
+        on: all
+    timeout_s: 30

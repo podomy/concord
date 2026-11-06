@@ -1,0 +1,29 @@
+# concord-anchor: node 0 serves as
+# anchor, all nodes carry it in config, multicast dropped from boot, so
+# mesh plus workload converge on the anchor path alone.
+name: concord-anchor
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 200
+spawn:
+  variant: anchor
+  node: 0
+phases:
+  - name: mesh
+    multicast: off
+    until:
+      peers: 3
+      on: all
+    timeout_s: 60
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: a0
+    until:
+      present:
+        workload: a0
+        on: all
+    timeout_s: 60

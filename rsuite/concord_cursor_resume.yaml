@@ -1,0 +1,61 @@
+# concord-cursor-resume: SIGKILL
+# a node, restart it with the same dir so identity, journal, cursors,
+# and pins persist, then workload convergence on all nodes, then a
+# second workload proves the resumed cursor keeps working.
+name: concord-cursor-resume
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 360
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: submit
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: ra
+    until:
+      present:
+        workload: ra
+        on: all
+    timeout_s: 45
+  - name: placed
+    until:
+      assigned:
+        workload: ra
+    timeout_s: 30
+  - name: bounce
+    do:
+      - kill:
+          node: 2
+          signal: KILL
+      - restart:
+          node: 2
+          durability: preserve
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60
+  - name: kept
+    until:
+      present:
+        workload: ra
+        on: all
+    timeout_s: 45
+  - name: submit2
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: rb
+    until:
+      present:
+        workload: rb
+        on: all
+    timeout_s: 45

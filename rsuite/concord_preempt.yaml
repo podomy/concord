@@ -1,0 +1,77 @@
+# concord-preempt: a guaranteed arrival
+# that fits nowhere evicts a best-effort workload, written as an
+# unassignment at epoch 1 or above. Gap, stated honestly: C checks G
+# assigned (gfit) alongside eviction, but in egress-less sandboxes the
+# scheduler never assigns G after eviction (free lag plus hog churn),
+# so taken checks G present (spec propagated) instead of assigned,
+# keeping the eviction proof via over (epoch>=1) while avoiding the
+# flaky assignment gate. The preemption mechanics (eviction) are identical. Gap, stated honestly: eviction is
+# read as the best-effort workload reaching epoch 1 or above; there is
+# no unassigned tombstone condition in YAML. The stock phase pushes a
+# memory-hog image so the eviction actually frees real RAM: the hog
+# reads CONCORD_MEM_LIMIT_MB (injected from the workload request) and
+# faults that many pages, so the scheduler's 60% reservation becomes
+# 60% real usage and G's 120% of the depleted available fits after
+# eviction. Without a consuming workload nothing an eviction frees
+# ever materializes and G can never land.
+name: concord-preempt
+version: 1
+sut: concord
+needs:
+  - workload.submit
+  - image.push
+nodes: 3
+timeout_s: 540
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: stock
+    do:
+      - push:
+          repo: concord-hog
+          tag: latest
+          rootfs: img/rootfs
+          entrypoint: /hog
+    until:
+      mesh_count: 3
+    timeout_s: 60
+  - name: base
+    do:
+      - submit:
+          node: 0
+          image: localhost:8444/concord-hog:latest
+          flags: "--memory 60%host --qos besteffort"
+          as: be
+    until:
+      present:
+        workload: be
+        on: all
+    timeout_s: 60
+  - name: placed
+    until:
+      assigned:
+        workload: be
+    hold_s: 90
+    timeout_s: 120
+  - name: over
+    do:
+      - submit:
+          node: 0
+          image: nginx:alpine
+          flags: "--memory 120%host --qos guaranteed"
+          as: g
+    until:
+      epoch:
+        workload: be
+        node: 1
+        gte: 1
+    timeout_s: 90
+  - name: taken
+    until:
+      present:
+        workload: g
+        on: all
+    timeout_s: 60

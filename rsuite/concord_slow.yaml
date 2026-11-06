@@ -1,0 +1,41 @@
+# concord-slow: converges over a laggy
+# link with suspect flapping tolerated. The lag is the QoS delay shape,
+# which keeps every packet flowing; the slow verb throttles to one drain
+# per N seconds and reads as a blackout, the opposite of the C
+# latency-batched pump that drains all every 2 s.
+name: concord-slow
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 360
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: laggy
+    do:
+      - drop:
+          nodes:
+            - 2
+          delay_ms: 50
+          jitter_ms: 5
+          dir: out
+      - submit:
+          node: 0
+          image: nginx:alpine
+          as: s0
+    until:
+      present:
+        workload: s0
+        on: all
+    timeout_s: 240
+  - name: healed
+    do:
+      - heal: all
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 45

@@ -1,0 +1,32 @@
+# concord-mobile: node 2 driven out of
+# radio range and back re-meshes with a peer.lost marker, no fd ever drops.
+name: concord-mobile
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 180
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: away
+    do:
+      - move:
+          node: 2
+          x_m: 7.0
+    until:
+      marker: peer.lost
+      on: any
+    timeout_s: 60
+  - name: back
+    do:
+      - move:
+          node: 2
+          x_m: 2.0
+    until:
+      peers: 3
+      on: all
+    hold_s: 10
+    timeout_s: 60

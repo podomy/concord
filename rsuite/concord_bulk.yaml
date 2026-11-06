@@ -1,0 +1,33 @@
+# concord-bulk: five submitted in
+# isolation all arrive after reunion.
+name: concord-bulk
+version: 1
+sut: concord
+nodes: 3
+timeout_s: 240
+phases:
+  - name: mesh
+    until:
+      peers: 3
+      on: all
+    timeout_s: 45
+  - name: load
+    do:
+      - drop:
+          - 2
+      - submit:
+          node: 2
+          image: nginx:alpine
+          as: bulk
+          count: 5
+    until:
+      mesh_count: 3
+    timeout_s: 45
+  - name: reunite
+    do:
+      - heal: all
+    until:
+      present:
+        workload: bulk
+        on: all
+    timeout_s: 120
