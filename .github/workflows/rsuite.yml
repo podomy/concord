@@ -80,6 +80,18 @@ jobs:
       - name: Clear stale run locks
         run: sudo rm -f /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock
 
+      # Strace one file before the matrix: the allocator failure
+      # is silent in C (only exhaustion prints), so a failing
+      # acquire leaves no errno anywhere. Tracing open/flock on a
+      # single fast file captures the exact failing call.
+      # Diagnostic only: never fails the job.
+      - name: Trace allocator syscalls
+        run: |
+          sudo apt-get install -y strace
+          sudo timeout 120 strace -f -e trace=open,openat,flock -o /tmp/strace-acquire.log ./bin/rsuite run ../rsuite/concord_two.yaml || true
+          grep -E "resonance-runs|resonance-run|EACCES|EPERM|ENOSYS|EWOULDBLOCK|ENOENT" /tmp/strace-acquire.log | tail -n 40 || true
+        working-directory: resonance
+
       - name: Run regression suite
         run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml
         working-directory: resonance
