@@ -98,11 +98,6 @@ jobs:
       - name: Clear stale run locks
         run: sudo rm -f /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock
 
-      # Strace one file before the matrix: the allocator failure
-      # is silent in C (only exhaustion prints), so a failing
-      # acquire leaves no errno anywhere. Tracing open/flock on a
-      # single fast file captures the exact failing call.
-      # Diagnostic only: never fails the job.
       - name: Run regression suite
         run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml 2>&1 | tee /tmp/tap.log; test ${PIPESTATUS[0]} -eq 0
         working-directory: resonance
