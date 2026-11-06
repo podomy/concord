@@ -149,8 +149,18 @@ jobs:
         working-directory: resonance
 
       - name: Run regression suite
-        run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml
+        run: sudo ./bin/rsuite run --jobs 4 ../rsuite/*.yaml 2>&1 | tee /tmp/tap.log; test ${PIPESTATUS[0]} -eq 0
         working-directory: resonance
+
+      # The TAP summary is the verdict. It goes to an annotation
+      # because the log itself is not fetchable.
+      - name: Report TAP summary
+        if: always()
+        run: |
+          SUM=$(grep -E "^(not ok|ok|# (pass|fail|skip))" /tmp/tap.log 2>&1 | tail -n 40 || true)
+          echo "$SUM"
+          ESC=$(printf '%s' "$SUM" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=rsuite-tap::$ESC"
 
       # Allocator forensics: acquire fails silently on lock I/O,
       # loudly only on id exhaustion. The runner's view (lock
@@ -211,7 +221,9 @@ jobs:
       - name: Surface child diagnostics
         if: failure()
         run: |
-          DIAG=$(sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | sort | uniq -c | head -n 20 || true)
+          LOGS=$(sudo ls /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | wc -l)
+          HITS=$(sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | wc -l)
+          DIAG=$(printf 'per-file logs: %s\nlines matching "sim:": %s' "$LOGS" "$HITS"; sudo grep -h "sim:" /var/tmp/resonance-rsuite-*/concord_*.log 2>&1 | sort | uniq -c | head -n 10 || true)
           echo "$DIAG"
           ESC=$(printf '%s' "$DIAG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-childerr::$ESC"
