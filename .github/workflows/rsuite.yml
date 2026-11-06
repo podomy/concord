@@ -91,11 +91,49 @@ jobs:
       - name: Diagnose allocator on failure
         if: failure()
         run: |
-          DIAG="$(sudo ./bin/rsuite doctor 2>&1; echo '--- locks ---'; sudo ls -la /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock 2>&1; echo '--- self ---'; id -u; df -h /var/tmp | tail -n 1)"
-          echo "$DIAG"
-          ESC="${DIAG//%/\%25}"
-          ESC="${ESC//$'\r'/%0D}"
-          ESC="${ESC//$'\n'/%0A}"
+          sudo ./bin/rsuite doctor > /tmp/alloc-diag.txt 2>&1 || true
+          echo '--- locks ---' >> /tmp/alloc-diag.txt
+          sudo ls -la /var/tmp/resonance-runs.lock /var/tmp/resonance-run-*.lock >> /tmp/alloc-diag.txt 2>&1 || true
+          echo '--- self ---' >> /tmp/alloc-diag.txt
+          id -u >> /tmp/alloc-diag.txt 2>&1
+          df -h /var/tmp 2>&1 | tail -n 1 >> /tmp/alloc-diag.txt
+          echo '--- live lock state (python fcntl probe) ---' >> /tmp/alloc-diag.txt
+          sudo python3 >> /tmp/alloc-diag.txt 2>&1 <<'PYEOF' || true
+          import fcntl, os
+          G = '/var/tmp/resonance-runs.lock'
+          try:
+              fd = os.open(G, os.O_RDWR | os.O_CREAT, 0o600)
+          except OSError as e:
+              print('global open failed: errno %d %s' % (e.errno, e.strerror))
+          else:
+              try:
+                  fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  print('global lock: FREE')
+              except OSError as e:
+                  print('global lock: HELD (errno %d %s)' % (e.errno, e.strerror))
+              os.close(fd)
+          held = 0
+          first_free = None
+          present = 0
+          for i in range(1, 155):
+              p = '/var/tmp/resonance-run-%d.lock' % i
+              try:
+                  fd = os.open(p, os.O_RDWR)
+              except OSError:
+                  continue
+              present += 1
+              try:
+                  fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  if first_free is None:
+                      first_free = i
+              except OSError:
+                  held += 1
+              finally:
+                  os.close(fd)
+          print('id files present: %d, locked: %d, first free: %s' % (present, held, first_free))
+          PYEOF
+          cat /tmp/alloc-diag.txt
+          ESC=$(sed -e 's/%/%25/g' /tmp/alloc-diag.txt | awk '{printf "%s%%0A", $0}')
           echo "::error title=rsuite-acquire::$ESC"
         working-directory: resonance
 
