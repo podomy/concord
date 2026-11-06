@@ -176,7 +176,10 @@ jobs:
       - name: Surface child diagnostics
         if: failure()
         run: |
-          DIAG=$(for f in $(grep "^not ok" /tmp/tap.log | head -n 3 | awk '{print $4}' | xargs -n1 basename 2>/dev/null); do echo "=== $f ==="; sudo tail -n 30 /var/tmp/resonance-rsuite-*/"$f" 2>/dev/null | head -n 35; done)
+          DIAG=$(for j in $(sudo find /var/tmp/resonance-* -path "*concord/journal.jsonl" 2>/dev/null | head -n 12); do
+            echo "--- $j ---"
+            sudo grep -o '"AssignedNodeID":"[^"]*","AssignmentEpoch":[0-9]*' "$j" 2>/dev/null | tail -n 6
+          done)
           echo "$DIAG"
           ESC=$(printf '%s' "$DIAG" | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
           echo "::notice title=rsuite-childerr::$ESC"
