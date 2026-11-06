@@ -8,11 +8,16 @@
 # exactly one epoch-1 copy exists, which reunion converges
 # deterministically. The max-epoch-kept invariant is identical; only
 # the simultaneous-orphan race is excluded.
+# Gate note: placed fires on any single node, which can precede sync.
+# Splitting then lets the isolated side initial-assign epoch 0 instead
+# of orphaning, forking two epoch-0 copies whose tails never align.
+# The synced gate below forces unanimity first, so the isolated side
+# always finds the assignment and takes the orphan path.
 name: concord-orphan-partition
 version: 1
 sut: concord
 nodes: 3
-timeout_s: 450
+timeout_s: 480
 phases:
   - name: mesh
     until:
@@ -33,6 +38,11 @@ phases:
   - name: placed
     until:
       assigned:
+        workload: o0
+    timeout_s: 30
+  - name: synced
+    until:
+      agree:
         workload: o0
     timeout_s: 30
   - name: split
