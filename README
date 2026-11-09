@@ -29,6 +29,21 @@ Scope
   in the diff proves nothing. Anything adding a flag, a verb, or a
   field is expansion, and the answer is no until the freeze lifts.
 
+Scale
+
+  Density caps, not headcount. Keep mutually reachable clusters
+  near tens, near 25 per radio cell. Movers carry omnis at 2-3 dBi,
+  stock link holds hundreds of meters with margin. Airtime fails
+  before protocol does.
+  Spread is epidemic: one reachable member hands over the mesh,
+  gossip repeats to random peers, and journal union carries unknown
+  events through intermediaries. One cell holds near 25 active omnis;
+  past 30 contention grows, past 60 split cells. Sessions pool to 60 s,
+  so handshakes amortize near 1 per 12 ticks. Calc: N=60 averages
+  59x15 ms / 12 about 74 ms per 5 s tick on handshakes plus 59 short
+  pulls and gossip. Airtime still caps cells before protocol caps
+  segments. Tables live in docs/scaling and docs/radio.
+
 Documentation
 
   Overview - /docs/overview
