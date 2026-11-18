@@ -2,6 +2,8 @@ Regression Suites
 
 33 YAML scenarios run by the Resonance runner, not by this
 repo itself. Each file's header comment states what it proves.
+Resonance is proprietary and available only to Podomy employees,
+so these scenarios run on employee machines and never in public CI.
 
 Paths
 
