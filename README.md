@@ -1,77 +1,78 @@
-<p align="center">
-  <img src="./assets/concordlogo-fb642af7.png" alt="Concord" height="120">
-</p>
+<h1 align="center">Concord</h1>
 
-Concord
+<p align="center">
+  <a href="https://github.com/podomy/concord/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/podomy/concord/ci.yml?label=linux" alt="Linux"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/podomy/concord" alt="License"></a>
+</p>
 
 License: GNU Affero General Public License v3.0 or later (/LICENSE)
 
-Concord is an AP distributed system, a runtime and coordination layer
+Concord is an **AP distributed system**, a runtime and coordination layer
 designed for robotic fleets. It gives you highest reliability from
-warehouse aisles to mines, factories, and space. It is a fleet brain
+warehouse aisles to mines, factories, and space. It is a **fleet brain**
 that coordinates the fleet, not a real-time controller. Motor,
 collision, and sensor loops run at the edge.
 
-Tested with a proprietary simulation suite. It is the primary way
+Tested with a **proprietary simulation suite**. It is the primary way
 we validate partition, reunion, and scheduling.
 
-Scope
+## Scope
 
-  Concord is consolidated, not expanding. Noise IK over :8443 is the
-  only transport and no others will be added. All work goes inward:
-  correctness, reliability, verification, and optimization of what
-  is already here. No new surface, fixes only.
+Concord is consolidated, not expanding. Noise IK over :8443 is the
+only transport and no others will be added. All work goes inward:
+correctness, reliability, verification, and optimization of what
+is already here. **No new surface, fixes only.**
 
-  The bar, same for every change: externally identical behavior.
-  Optimization needs a measurement before and after, not a hunch.
-  Replacement needs the same wire format, CLI surface, and journal
-  semantics, proven by the existing gate, not by reading the diff.
-  Fixes need a failing gate first, then the
-  smallest patch that turns it green without moving any other
-  number. Cleanup needs the full gate green on both sides; elegance
-  in the diff proves nothing. Anything adding a flag, a verb, or a
-  field is expansion, and the answer is no until the freeze lifts.
+The bar, same for every change: **externally identical behavior**.
+Optimization needs a measurement before and after, not a hunch.
+Replacement needs the same wire format, CLI surface, and journal
+semantics, proven by the existing gate, not by reading the diff.
+Fixes need a failing gate first, then the smallest patch that turns
+it green without moving any other number. Cleanup needs the full gate
+green on both sides; elegance in the diff proves nothing. Anything
+adding a flag, a verb, or a field is expansion, and the answer is no
+until the freeze lifts.
 
-Scale
+## Scale
 
-  Density caps, not headcount. Keep mutually reachable clusters
-  near tens, near 25 per radio cell. Movers carry omnis at 2-3 dBi,
-  stock link holds hundreds of meters with margin. Airtime fails
-  before protocol does.
-  Spread is epidemic: one reachable member hands over the mesh,
-  gossip repeats to random peers, and journal union carries unknown
-  events through intermediaries. One cell holds near 25 active omnis;
-  past 30 contention grows, past 60 split cells. Sessions pool to 60 s,
-  so handshakes amortize near 1 per 12 ticks. Calc: N=60 averages
-  59x15 ms / 12 about 74 ms per 5 s tick on handshakes plus 59 short
-  pulls and gossip. Airtime still caps cells before protocol caps
-  segments. Tables live in docs/scaling and docs/radio.
+Density caps, not headcount. Keep mutually reachable clusters
+near tens, near 25 per radio cell. Movers carry omnis at 2-3 dBi,
+stock link holds hundreds of meters with margin. **Airtime fails
+before protocol does.**
+Spread is epidemic: one reachable member hands over the mesh,
+gossip repeats to random peers, and journal union carries unknown
+events through intermediaries. One cell holds near 25 active omnis;
+past 30 contention grows, past 60 split cells. Sessions pool to 60 s,
+so handshakes amortize near 1 per 12 ticks. Calc: N=60 averages
+59x15 ms / 12 about 74 ms per 5 s tick on handshakes plus 59 short
+pulls and gossip. Airtime still caps cells before protocol caps
+segments. Tables live in docs/scaling and docs/radio.
 
-Documentation
+## Documentation
 
-  Overview - /docs/overview
-  Architecture - /docs/architecture
-  Noise Transport - /docs/noise
-  Journal Sync - /docs/cursors
-  Metrics and Pressure - /docs/metrics
-  Position Trail - /docs/trail
-  Files - /docs/files
-  Devices - /docs/devices
-  Nodev: filesystems that forbid devices - /docs/nodev
-  Startup Order - /docs/startup
-  QoS - /docs/qos
-  Health Checks - /docs/health
-  Scaling - /docs/scaling
-  Radio Planning - /docs/radio
-  IPC Reference - /docs/ipc
-  CLI Reference - /docs/cli
-  Go SDK Reference - /docs/sdk
-  Deployment Guide - /docs/deployment
+- [Overview](/docs/overview)
+- [Architecture](/docs/architecture)
+- [Noise Transport](/docs/noise)
+- [Journal Sync](/docs/cursors)
+- [Metrics and Pressure](/docs/metrics)
+- [Position Trail](/docs/trail)
+- [Files](/docs/files)
+- [Devices](/docs/devices)
+- [Nodev: filesystems that forbid devices](/docs/nodev)
+- [Startup Order](/docs/startup)
+- [QoS](/docs/qos)
+- [Health Checks](/docs/health)
+- [Scaling](/docs/scaling)
+- [Radio Planning](/docs/radio)
+- [IPC Reference](/docs/ipc)
+- [CLI Reference](/docs/cli)
+- [Go SDK Reference](/docs/sdk)
+- [Deployment Guide](/docs/deployment)
 
-Contributing
+## Contributing
 
-Concord takes no pull requests. Propose first, patch second,
-both by email to contact@podomy.com.
+**Concord takes no pull requests.** Propose first, patch second,
+both by email to [contact@podomy.com](mailto:contact@podomy.com).
 
 1. RFC: send a request for comments describing the problem,
    the approach, and why it stays inside the scope above.
@@ -83,13 +84,13 @@ both by email to contact@podomy.com.
 
 Announcements and engineering updates on distributed systems, consensus
 algorithms, and robotic fleet coordination are shared via our newsletter
-at https://podomy.com.
+at [https://podomy.com](https://podomy.com).
 
-  Commit message format - /COMMITS
-  Contributor license agreement - /CLA
-  Contributing - /CONTRIBUTING
+- Commit message format: [/COMMITS](/COMMITS)
+- Contributor license agreement: [/CLA](/CLA)
+- Contributing: [/CONTRIBUTING](/CONTRIBUTING)
 
-License
+## License
 
 Concord is distributed under the GNU Affero General Public License v3.0
-or later. See /LICENSE.
+or later. See [/LICENSE](/LICENSE).
