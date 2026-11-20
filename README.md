@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/concordlogo-fb642af7.png" alt="Concord" height="120">
+</p>
+
 Concord
 
 License: GNU Affero General Public License v3.0 or later (/LICENSE)
