@@ -11,10 +11,6 @@ Concord is the AP coordination runtime for robots that operate where links die. 
 
 Proven by a 33-scenario kill, partition, and reunion suite, green end to end.
 
-## Scope
-
-Consolidated, not expanding: Noise IK over :8443 is the only transport. No new surface, fixes only. Every change keeps behavior identical and is measured before and after.
-
 Full docs live in [docs/](/docs).
 
 ## Contributing
