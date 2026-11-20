@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -76,10 +77,17 @@ func readProcCPU() (float64, error) {
 	}
 	defer file.Close() //nolint:errcheck // best-effort file cleanup on read
 
+	return parseProcCPUFreq(file)
+}
+
+// parseProcCPUFreq sums the "cpu MHz" lines from a cpuinfo stream.
+// No frequency lines is ErrNoCPUMHzFound, never a zero sum: callers
+// must distinguish unknown hardware from an idle core.
+func parseProcCPUFreq(r io.Reader) (float64, error) {
 	var totalMHz float64
 	var coreCount int
 
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -102,7 +110,7 @@ func readProcCPU() (float64, error) {
 		}
 	}
 
-	err = scanner.Err()
+	err := scanner.Err()
 	if err != nil {
 		return 0, fmt.Errorf("scanner error: %w", err)
 	}

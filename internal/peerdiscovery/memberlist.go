@@ -317,11 +317,15 @@ func joinInitial(m *MemberService, join []netip.AddrPort) {
 }
 
 // sampleCapacity reads the static capacity snapshot gossiped as
-// NodeMetadata: CPU frequency and total memory.
+// NodeMetadata: CPU frequency and total memory. A missing cpu MHz
+// readout degrades to 0 (unknown) instead of failing startup: ARM,
+// s390x, and masked hypervisor cpuinfo carry no frequency lines, and
+// unknown capacity never blocks placement (see prefersNode). Memory
+// stays fatal: a Linux host without MemTotal cannot run workloads.
 func sampleCapacity() (float64, uint64, error) {
 	cpuMHz, err := nodepackage.GetCPUFreqMHz()
 	if err != nil {
-		return 0, 0, fmt.Errorf("get cpu freq: %w", err)
+		cpuMHz = 0
 	}
 
 	memoryMB, err := nodepackage.GetTotalMemoryMB()
