@@ -3,7 +3,7 @@
 # Build-only validation; the daemon runs on edge nodes and is deployed
 # manually, never restarted from CI.
 #
-#   docker build -t vc/concord .
+#   docker build -t ghcr.io/podomy/concord .
 #
 # CGO stays enabled: container init joins namespaces through
 # libcontainer's nsexec C constructor, and CGO_ENABLED=0 builds grow
