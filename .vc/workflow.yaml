@@ -1,0 +1,6 @@
+# Built by vc on every push. Build-only validation; the daemon runs
+# on edge nodes and is deployed manually, never restarted from CI.
+images:
+  - name: vc/concord
+    dockerfile: Dockerfile
+    context: .
