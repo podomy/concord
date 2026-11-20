@@ -1,7 +1,6 @@
 <h1 align="center">Concord</h1>
 
 <p align="center">
-  <a href="https://github.com/podomy/concord/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/podomy/concord/ci.yml?label=linux" alt="Linux"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/podomy/concord" alt="License"></a>
 </p>
 
