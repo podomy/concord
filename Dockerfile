@@ -1,4 +1,4 @@
-# Concord daemon image, built by Podomy VC on every push.
+# Concord daemon image.
 #
 # Build-only validation; the daemon runs on edge nodes and is deployed
 # manually, never restarted from CI.
