@@ -1,72 +1,10 @@
 Regression Suites
 
-33 YAML scenarios run by the Resonance runner, not by this
-repo itself. Each file's header comment states what it proves.
+The Concord reference matrix (33 YAML scenarios) lives with the
+runner at <resonance>/suite/concord/, not in this repo. Each file
+states what it proves and names the Concord build it was proven
+against in its header comment.
+
 Resonance is proprietary and available only to Podomy employees,
 so these scenarios run on employee machines and never in public CI.
-
-Paths
-
-  Runner plus SUT binaries live in a Resonance checkout:
-  <resonance>/bin/rsuite, <resonance>/bin/concord, plus
-  <resonance>/certs seeded per node and <resonance>/img/rootfs
-  for pushed test images. Scenarios live here:
-  <concord>/rsuite/*.yaml. Logs land under /var/tmp in a fresh
-  per-run dir and persist; see <resonance>/docs/layout.
-
-Build (from the Resonance checkout)
-
-  make bin/rsuite
-  cd deps/concord && go build -o ../../bin/concord ./cmd/concord
-  make img-build
-
-Test CA (test-only, never commit real keys): certs/ is gitignored
-local state, so a fresh checkout has none and every spawn fails
-on the silent cp. Generate one throwaway self-signed CA:
-
-  mkdir -p certs
-  openssl req -x509 -newkey rsa:2048 -keyout certs/ca.key \
-    -out certs/ca.crt -days 3650 -nodes -subj "/CN=concord-test-ca" \
-    -addext "basicConstraints=critical,CA:true" \
-    -addext "keyUsage=critical,keyCertSign,cRLSign"
-  chmod 600 certs/ca.key
-
-CI does this every run; nodes only need a shared public-key
-carrier, and a fresh CA is always inside its validity window.
-
-deps/concord is a reference checkout, never edited in place;
-the Makefile owns no Concord target. img-build needs Go and
-fills img/rootfs with probe, probe-check, and hog; img and
-preempt (hog push) need those bins at run time.
-
-Lint, list, doctor (no privileges, from Resonance checkout)
-
-  PATH/rsuite lint <concord>/rsuite/*.yaml
-  PATH/rsuite lint <concord>/rsuite/concord_two.yaml
-  PATH/rsuite list <concord>/rsuite/*.yaml
-  PATH/rsuite doctor
-
-make lint only covers Resonance suite/examples; Concord files
-need explicit paths as above.
-
-Run (needs root for netns plus TUN, from Resonance checkout)
-
-  sudo PATH/rsuite run --jobs 4 <concord>/rsuite/*.yaml
-  sudo PATH/rsuite run <concord>/rsuite/concord_two.yaml
-
-With sibling checkouts that reads:
-
-  sudo PATH/rsuite run --jobs 4 ../concord/rsuite/*.yaml
-
-With rsuite installed on PATH, from the concord root:
-
-  PATH/rsuite run --jobs 4 rsuite/*.yaml
-
-One child runs per file even at jobs 1. Flags precede files.
-Exit is 0 ok, 1 suite failure, 2 bad usage; skips never fail
-the run. Each run keeps per-file <base>.log plus report.html
-in its run dir; failed files copy journals plus node logs
-aside before the statedir wipe. Nothing cleans logs; remove
-them by hand when done. Post-mortem order plus cleanup live
-in <resonance>/docs/troubleshoot under post-mortem and the
-stale-state recipe.
+Build, lint, and run instructions live with the runner docs there.
