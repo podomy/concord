@@ -21,8 +21,8 @@ Scope
   The bar, same for every change: externally identical behavior.
   Optimization needs a measurement before and after, not a hunch.
   Replacement needs the same wire format, CLI surface, and journal
-  semantics, proven by the existing gate plus a Resonance run, not
-  by reading the diff. Fixes need a failing gate first, then the
+  semantics, proven by the existing gate, not by reading the diff.
+  Fixes need a failing gate first, then the
   smallest patch that turns it green without moving any other
   number. Cleanup needs the full gate green on both sides; elegance
   in the diff proves nothing. Anything adding a flag, a verb, or a
