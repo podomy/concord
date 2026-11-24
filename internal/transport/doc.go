@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package transport fetches blob manifests and bytes from peer registries.
 // PeerRegistryBase builds the v2 base URL from underlay IP and registry port.

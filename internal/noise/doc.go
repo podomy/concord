@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package noise is a clean-room Noise IK handshake for the Concord mesh.
 // IK hides the initiator static key until the responder authenticates,

@@ -124,7 +124,7 @@ linters:
     goheader:
       template: |-
         Copyright (C) {{ YEAR }} Podomy.
-        SPDX-License-Identifier: AGPL-3.0-or-later
+        SPDX-License-Identifier: BUSL-1.1
     gomoddirectives:
       replace-local: false
       retract-allow-no-explanation: false

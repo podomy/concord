@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Command hook runs the pre-commit verification: tidy, format, lint, test, and
 // checks that no files were modified by the formatters.

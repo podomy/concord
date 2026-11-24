@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package peersync replicates blobs peer to peer with want/have anti-entropy.
 // Wanted digests come from specs; peer tag listings show what each peer has.

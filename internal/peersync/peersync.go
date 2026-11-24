@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package peersync pulls journal state from peer nodes over the node
 // transport and applies it locally (data sync reconciler).

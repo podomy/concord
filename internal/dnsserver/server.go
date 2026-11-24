@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package dnsserver implements an embedded DNS server that serves Concord's
 // peer membership via SRV and A records. Other Concord nodes query this

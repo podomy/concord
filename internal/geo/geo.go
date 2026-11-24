@@ -1,5 +1,5 @@
 // Copyright (C) 2026 Podomy.
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 // Package geo holds geographic coordinates and distance math for anchor
 // selection. It is deliberately tiny: anchors need a position, a validity

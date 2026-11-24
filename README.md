@@ -1,7 +1,7 @@
 <h1 align="center">Concord</h1>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/podomy/concord" alt="License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BUSL--1.1-blue" alt="License: BUSL-1.1"></a>
 </p>
 
 Fleets that lose their network keep running.
@@ -26,4 +26,4 @@ Concord takes no pull requests or GitHub Issues. Propose first, patch second, bo
 
 ## License
 
-GNU Affero General Public License v3.0 or later. See [LICENSE](/LICENSE). Questions: [contact@podomy.com](mailto:contact@podomy.com).
+Business Source License 1.1, with Change License GNU Affero General Public License v3.0 or later and Change Date 2030-11-24. See [LICENSE](/LICENSE). Prior releases remain AGPLv3-or-later, see [LICENSE.AGPL-3.0-or-later](/LICENSE.AGPL-3.0-or-later). Production use requires a commercial license. See [podomy.com/projects](https://podomy.com/projects/) or contact [contact@podomy.com](mailto:contact@podomy.com).
