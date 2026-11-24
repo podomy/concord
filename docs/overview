@@ -27,5 +27,5 @@ Next Steps
 
 * Architecture - /docs/architecture -> How Concord works under the hood.
 * CLI Reference - /docs/cli -> Command line commands and usage.
-* Go SDK - /docs/sdk -> Programmatic workload management.
+* SDK - https://github.com/podomy/concord-sdk -> Programmatic workload management.
 * Deployment - /docs/deployment -> Running nodes and clustering.

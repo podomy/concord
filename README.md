@@ -14,7 +14,7 @@ Full docs live in [docs/](/docs).
 
 ## SDK
 
-The SDK lives in [podomy/concord-sdk](https://github.com/podomy/concord-sdk). It is licensed separately under Apache License 2.0. See [docs/sdk](/docs/sdk) for the reference.
+The SDK lives in [podomy/concord-sdk](https://github.com/podomy/concord-sdk), licensed separately under Apache License 2.0; client reference and examples live there.
 
 ## Contributing
 
