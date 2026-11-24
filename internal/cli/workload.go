@@ -18,9 +18,9 @@ import (
 
 	"github.com/google/uuid"
 
+	sdk "github.com/podomy/concord-sdk"
+	"github.com/podomy/concord-sdk/fileart"
 	"github.com/podomy/concord/internal/registry"
-	"github.com/podomy/concord/sdk"
-	"github.com/podomy/concord/sdk/fileart"
 )
 
 // dispatchWorkload routes concord workload subcommands.

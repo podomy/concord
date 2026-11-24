@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/podomy/concord/sdk"
+	sdk "github.com/podomy/concord-sdk"
 )
 
 var (

@@ -9,6 +9,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
+	github.com/podomy/concord-sdk v0.1.0
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.53.0

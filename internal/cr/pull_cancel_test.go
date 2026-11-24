@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/podomy/concord/sdk/fileart"
+	"github.com/podomy/concord-sdk/fileart"
 )
 
 // writeChunkedBody streams data in 32KB flushes with a delay between

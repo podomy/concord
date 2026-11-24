@@ -12,6 +12,10 @@ Proven by a 33-scenario kill, partition, and reunion suite, green end to end.
 
 Full docs live in [docs/](/docs).
 
+## SDK
+
+The Go client lives in [podomy/concord-sdk](https://github.com/podomy/concord-sdk). It is licensed separately under Apache License 2.0. Install with `go get github.com/podomy/concord-sdk@latest`; see [docs/sdk](/docs/sdk) for the reference.
+
 ## Contributing
 
 Concord takes no pull requests or GitHub Issues. Propose first, patch second, both by email to [contact@podomy.com](mailto:contact@podomy.com): an RFC describing the problem, then a `git format-patch` series.

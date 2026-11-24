@@ -14,12 +14,12 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	sdk "github.com/podomy/concord-sdk"
 	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/workload"
-	"github.com/podomy/concord/sdk"
 )
 
 // registerRoutes mounts the REST API endpoints onto the HTTP server mux.

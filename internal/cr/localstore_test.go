@@ -22,9 +22,9 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord-sdk/fileart"
 	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/registry"
-	"github.com/podomy/concord/sdk/fileart"
 )
 
 // testDigest returns the sha256 digest string for data.

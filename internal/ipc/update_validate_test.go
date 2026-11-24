@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/podomy/concord/sdk"
+	sdk "github.com/podomy/concord-sdk"
 )
 
 var errMissingBucket = errors.New("missing workloads bucket")

@@ -18,11 +18,11 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	sdk "github.com/podomy/concord-sdk"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
-	"github.com/podomy/concord/sdk"
 )
 
 var (

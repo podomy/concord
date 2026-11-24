@@ -22,6 +22,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	sdk "github.com/podomy/concord-sdk"
 	"github.com/podomy/concord/internal/geo"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
@@ -29,7 +30,6 @@ import (
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
-	"github.com/podomy/concord/sdk"
 )
 
 type testHarness struct {

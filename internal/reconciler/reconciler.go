@@ -31,6 +31,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord-sdk/fileart"
 	"github.com/podomy/concord/internal/clock"
 	"github.com/podomy/concord/internal/cn"
 	"github.com/podomy/concord/internal/cr"
@@ -40,7 +41,6 @@ import (
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/internal/workload"
-	"github.com/podomy/concord/sdk/fileart"
 )
 
 // ContainerAndProcess holds container state, process handle, stopping status, and exit status.

@@ -1,7 +1,10 @@
 Go SDK Reference
 
-  The SDK ships in this module, so there is no separate install step.
-  Import it as "github.com/podomy/concord/sdk".
+  The Go SDK lives in a separate module under Apache-2.0:
+  https://github.com/podomy/concord-sdk.
+  Install it with: go get github.com/podomy/concord-sdk@latest.
+  Import it as "github.com/podomy/concord-sdk" (package sdk)
+  and file artifacts as "github.com/podomy/concord-sdk/fileart".
 
 sdk.Dial() connects to ~/.config/concord/concord.sock.
 
@@ -49,4 +52,4 @@ API
 
 Builder methods: Image, Command, Env, Envs, Port, Resources, MemoryMB, CPUShares, Restart, HealthCheck, HealthProbe, DependsOn, QoS, File, StopTimeout, StopTimeoutSeconds, Build, MustBuild.
 
-File artifacts (sdk/fileart): push bytes with fileart.NewClient(addr).Push(ctx, data), reference the digest with File(path, digest, mode). Full workflow in docs/files.
+File artifacts (concord-sdk/fileart): push bytes with fileart.NewClient(addr).Push(ctx, data), reference the digest with File(path, digest, mode). Full workflow in docs/files.
