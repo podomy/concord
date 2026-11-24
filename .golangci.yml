@@ -123,7 +123,7 @@ linters:
       min-complexity: 15
     goheader:
       template: |-
-        Copyright (C) {{ YEAR }} Podomy.
+        Copyright (C) {{ YEAR }} Forge Universal LLC.
         SPDX-License-Identifier: BUSL-1.1
     gomoddirectives:
       replace-local: false
