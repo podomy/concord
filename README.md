@@ -26,4 +26,4 @@ Concord takes no pull requests or GitHub Issues. Propose first, patch second, bo
 
 ## License
 
-Business Source License 1.1, with Change License GNU Affero General Public License v3.0 or later and Change Date 2030-11-24. See [LICENSE](/LICENSE). Prior releases remain AGPLv3-or-later, see [LICENSE.AGPL](/LICENSE.AGPL). Production use requires a commercial license. See [podomy.com/projects](https://podomy.com/projects/) or contact [contact@podomy.com](mailto:contact@podomy.com).
+Business Source License 1.1, with Change License GNU Affero General Public License v3.0 or later. See [LICENSE](/LICENSE). Prior releases remain AGPLv3-or-later, see [LICENSE.AGPL](/LICENSE.AGPL). Production use requires a commercial license. See [podomy.com/projects](https://podomy.com/projects/) or contact [contact@podomy.com](mailto:contact@podomy.com).
