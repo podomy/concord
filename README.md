@@ -10,6 +10,10 @@ Concord is the AP coordination runtime for robots that operate where links die. 
 
 Proven by a 33-scenario kill, partition, and reunion suite, green end to end.
 
+## Commercial Licensing
+
+Commercial licenses are available. Contact [contact@podomy.com](mailto:contact@podomy.com).
+
 Full docs live in [docs/](/docs).
 
 ## SDK
