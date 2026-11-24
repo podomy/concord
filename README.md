@@ -14,7 +14,7 @@ Full docs live in [docs/](/docs).
 
 ## Commercial Licensing
 
-Commercial licenses are available. Contact [contact@podomy.com](mailto:contact@podomy.com).
+Commercial licenses are available. See [podomy.com/projects](https://podomy.com/projects/) for pricing, or contact [contact@podomy.com](mailto:contact@podomy.com).
 
 ## SDK
 
