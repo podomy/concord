@@ -10,7 +10,7 @@ Core Philosophy
 
 1. Local-first execution: A node always trusts its local journal to execute workloads, even with zero peers reachable.
 2. Deterministic reconciliation: State is an append-only event log. There is no central master or hidden database.
-3. Zero daemon bloat: Direct OCI/runc container execution with cgroups isolation.
+3. Zero daemon bloat: Host processes from staged binaries with no container runtime.
 4. Autonomous mesh: Encrypted peer-to-peer WireGuard mesh with SWIM gossip discovery.
 
 ---

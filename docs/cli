@@ -10,13 +10,13 @@ Starting the Daemon
   concord
 
 Log Verbosity
-  # Debug everything, including device rules and destroy lines
+  # Debug everything, including process start and destroy lines
   concord --log-level debug
 
 Levels are debug, info (the default), warn, error; anything
 else fails startup loudly instead of running quieter than asked.
-Debug is verbose by design: every container start logs its device
-rule summary, every destroy logs its initiation. Run it when
+Debug is verbose by design: every process start and every destroy
+logs its initiation. Run it when
 diagnosing, never in production.
 
 Serve as a Rendezvous Anchor
@@ -47,7 +47,7 @@ Flags:
   --health-cmd (default ""): exec probe command, split on whitespace
   --depends-on (default []): wait for this workload ID or prefix on the same node (repeatable)
   --qos (default besteffort): compute class besteffort, burstable, or guaranteed
-  --file (default []): stage a file: --file /container/path=/local/path[:mode] (repeatable; local path must not contain ':')
+  --file (default []): stage a file: --file /staged/path=/local/path[:mode] (repeatable; local path must not contain ':')
 
 Files push to the registry before submit: the spec carries digests
 only, and a failed push fails the run instead of submitting a workload

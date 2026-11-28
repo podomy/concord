@@ -43,7 +43,9 @@ lower-class running workload to make room:
   one is dropped from tracking. Without this the victim would run
   forever with nobody owning it.
 - Memory math is approximate: node free is real usage, requests are
-  reservations, and the overlap drains as the victim stops.
+  reservations, and the overlap drains as the victim stops. Memory
+  limits are advisory via CONCORD_MEM_LIMIT_MB with no cgroup
+  enforcement for now.
 
 Starvation is accepted and documented: under constant higher-class
 churn, best-effort waits indefinitely. No aging, no fairness

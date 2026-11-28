@@ -1,4 +1,4 @@
-Files: Getting Data Into Containers
+Files: Getting Data Into Workloads
 
 A workload that needs a config file, a calibration table, or a model
 has one path: the bytes become an artifact in the local blob store,
@@ -82,7 +82,7 @@ Modes default to 0600 (owner read-write). Pass an explicit mode for
 the case that needs it, entrypoint scripts needing the execute bit
 being the classic one. Anything above 0777 fails at submit.
 
-  # One flag per file: container path, local path, optional mode
+  # One flag per file: staged path, local path, optional mode
   concord workload run inference:latest --memory 2048 \
     --file /etc/model/config.yaml=./config.yaml \
     --file /entrypoint.sh=./entrypoint.sh:0755
@@ -118,7 +118,7 @@ Size, secrets, garbage: documented, not solved
   is trusted, so fleet credentials ride fine as-is. Anything with a
   narrower audience than the fleet (customer data, per-tenant keys)
   should be encrypted before the push and decrypted inside the
-  container at start: Concord stays a byte store that never sees the
+  workload at start: Concord stays a byte store that never sees the
   key, and the application owns its secrecy end to end.
 - Garbage. Stopped workloads leave their chunks; dedup softens it,
   cleanup is operator-owned like track rotation and journal archival.

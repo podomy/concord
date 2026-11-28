@@ -180,7 +180,7 @@ hardware. A parked truck can anchor for a shift, but holding still is
 operationally the hard part: the moment it drives off, every address
 pointing at it goes stale and newcomers dial nothing. Prefer anchors
 that cannot wander, the depot office, the rim relay mast, the site
-server container, and treat a wheeled anchor as a temporary one with an
+server host, and treat a wheeled anchor as a temporary one with an
 expiry, not a fixture.
 
 Concrete shape, an open-pit mine. The rim is the pit's top edge;
@@ -304,7 +304,7 @@ mechanism and five seconds is only its current tuning.
 A faster loop does not change this, it nests inside it. Health checks
 and watchdogs that need millisecond reactions run on a short local
 beat over the same running state, and they stay silent: the fast loop
-reads the journal never and writes it only on transitions, a container
+reads the journal never and writes it only on transitions, a workload
 crossing from healthy to sick, a restart decided. Raw observations stay
 in memory; only their edges converge. The slow tick keeps converging
 the world, the fast loop keeps the node alive between ticks.

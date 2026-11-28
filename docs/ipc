@@ -106,7 +106,7 @@ files[] (path, digest, mode).
 Validation (400, mapped to sdk.ErrValidation): unknown JSON fields are
 rejected, bodies are capped at 1MB (larger is a 400), restart must be a
 known policy, memory_mb must not be negative (0 or absent means
-unlimited: no cgroup limit is set and the scheduler always fits it),
+unlimited: no limit is enforced and the scheduler always fits it),
 health_action must be 0 or 1, health_probe must be http, tcp, or exec
 (exec requires a non-empty health_command), host_port and
 container_port must be set together, qos must be a known class, file
