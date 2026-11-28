@@ -17,6 +17,7 @@ import (
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/logs"
+	"github.com/podomy/concord/internal/node"
 )
 
 // hintPublishQueue caps queued outgoing hints. A full queue drops,
@@ -28,12 +29,15 @@ const hintPublishTimeout = 2 * time.Second
 
 // openHintBackend joins the weld bus for pull hints. It reports an
 // error when discovery cannot join, and the caller falls back to the
-// ticker alone. Discovery is scoped to localhost: hints stay on one
-// host by default so single host deployments need no network tuning.
-// Fleet deployments that span hosts must pass a wider range instead.
-func openHintBackend(ctx context.Context, participant string) (bus.Backend, error) {
+// ticker alone. Discovery is scoped to localhost when no anchors exist.
+// With anchors the first anchor IP becomes the DDS unicast peer so SPDP
+// plus later traffic fan out to that host in addition to loopback.
+func openHintBackend(ctx context.Context, participant string, anchors []node.AnchorEntry) (bus.Backend, error) {
 	cfg := bus.DefaultDDSConfig()
 	cfg.Range = bus.DiscoveryRangeLocalhost
+	if host := hintPeerHost(anchors); host != "" {
+		cfg.PeerAddress = host
+	}
 	info := bus.DiscoveryInfo{
 		ParticipantName: participant,
 		DomainID:        cfg.DomainID,
@@ -44,6 +48,27 @@ func openHintBackend(ctx context.Context, participant string) (bus.Backend, erro
 		return nil, fmt.Errorf("open hint backend: %w", err)
 	}
 	return backend, nil
+}
+
+// hintPeerHost returns the first valid anchor IP for DDS unicast.
+//
+// It returns empty when no anchors exist so the backend stays
+// loopback only.
+func hintPeerHost(anchors []node.AnchorEntry) string {
+	for _, a := range anchors {
+		if !a.Addr.IsValid() {
+			continue
+		}
+		ip := a.Addr.Addr()
+		if !ip.IsValid() {
+			continue
+		}
+		if ip.IsLoopback() {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
 }
 
 // startHintBus publishes local journal events as hints and relays bus
@@ -86,9 +111,10 @@ func attachHintBus(
 	runCtx context.Context,
 	logger *logs.Logger,
 	nodeID uuid.UUID,
+	anchors []node.AnchorEntry,
 	bg *sync.WaitGroup,
 ) (<-chan hints.Hint, func()) {
-	backend, err := openHintBackend(runCtx, "concord-"+nodeID.String())
+	backend, err := openHintBackend(runCtx, "concord-"+nodeID.String(), anchors)
 	if err != nil {
 		logger.Warn("hint bus unavailable, ticker only", logs.Error(err))
 		return nil, func() {}

@@ -135,7 +135,7 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		abort()
 		return err
 	}
-	hintCh, cleanupHints := attachHintBus(runCtx, logger, nodeConfig.ID, &bg)
+	hintCh, cleanupHints := attachHintBus(runCtx, logger, nodeConfig.ID, nodeConfig.Anchors, &bg)
 	defer cleanupHints()
 	// Peerdiscovery is split: ObserveMemberlistPeers is
 	// passive, it only polls the already-joined memberlist
