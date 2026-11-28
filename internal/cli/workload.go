@@ -63,7 +63,7 @@ func runWorkloadLeaf(ctx context.Context, stdout, stderr io.Writer, name string,
 
 // printWorkloadHelp writes workload group usage to w.
 func printWorkloadHelp(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Manage container workloads (run, list, inspect, stats, logs, update, stop)")    //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Manage workloads (run, list, inspect, stats, logs, update, stop)")              //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                                              //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "Usage:")                                                                        //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  concord workload [command]")                                                  //nolint:errcheck // CLI output
@@ -72,7 +72,7 @@ func printWorkloadHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  inspect     Display detailed specification for a workload")                   //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  list        List all active workloads (alias ls)")                            //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  logs        Show captured container output for a workload")                   //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  run         Deploy and run a new container workload")                         //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  run         Deploy and run a new host workload from staged files")            //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  stats       Display live utilization for a workload")                         //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  stop        Stop and remove a workload from the cluster")                     //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  update      Move a live workload to a new image keeping its identity")        //nolint:errcheck // CLI output
@@ -155,7 +155,7 @@ func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*fla
 	fs.StringVar(&rf.healthCmd, "health-cmd", "", "Exec probe command, split on whitespace")
 	fs.Var(depends, "depends-on", "Wait for this workload ID or prefix on the same node (repeatable)")
 	fs.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
-	fs.Var(files, "file", "Stage a file: --file /container/path=/local/path[:mode] (repeatable)")
+	fs.Var(files, "file", "Stage a file: --file /dest/path=/local/path[:mode] (repeatable; the binary is a staged file)")
 	docs := []flagDoc{
 		{long: "port", short: "p", kind: "string", def: `""`, usage: "Port mapping (host:container, e.g. 8080:80)"},
 		{long: "env", short: "e", kind: "stringArray", def: "[]", usage: "Environment variable in KEY=VALUE format (repeatable)"},
@@ -168,7 +168,7 @@ func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*fla
 		{long: "health-cmd", kind: "string", def: `""`, usage: "Exec probe command, split on whitespace"},
 		{long: "depends-on", kind: "stringArray", def: "[]", usage: "Wait for this workload ID or prefix on the same node (repeatable)"},
 		{long: "qos", kind: "string", def: `"besteffort"`, usage: "Compute class: 'besteffort', 'burstable', or 'guaranteed'"},
-		{long: "file", kind: "stringArray", def: "[]", usage: "Stage a file: --file /container/path=/local/path[:mode] (repeatable; local path must not contain ':')"},
+		{long: "file", kind: "stringArray", def: "[]", usage: "Stage a file: --file /dest/path=/local/path[:mode] (repeatable; local path must not contain ':'; the binary is a staged file)"},
 	}
 	return fs, docs
 }
@@ -179,10 +179,10 @@ func printWorkloadRunHelp(w io.Writer) {
 	var rf runFlags
 	var env, depends, files stringArray
 	_, docs := newWorkloadRunFlagSet(&rf, &env, &depends, &files)
-	_, _ = fmt.Fprintln(w, "Deploy and run a new container workload")                      //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Deploy and run a new host workload from staged files")         //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "Usage:")                                                       //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  concord workload run [flags] <image> [command...]")          //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  concord workload run [flags] [image] [command...]")          //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "Command after -- is passed verbatim and not parsed as flags.") //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                             //nolint:errcheck // CLI output
@@ -207,10 +207,52 @@ func runWorkloadRun(ctx context.Context, stdout, stderr io.Writer, args []string
 	rf.envFlags = []string(env)
 	rf.dependsOn = []string(depends)
 	rf.fileFlags = []string(files)
-	if len(positional) < 1 {
-		return fmt.Errorf("requires at least 1 arg(s), only %d received", len(positional))
+	image := ""
+	var command []string
+	if len(positional) > 0 {
+		image = positional[0]
+		command = positional[1:]
 	}
-	return handleWorkloadRun(ctx, stdout, &rf, positional[0], positional[1:])
+	if strings.TrimSpace(image) == "" && !hasStagedBinary(rf.fileFlags, command) {
+		return fmt.Errorf("workload run requires an image or a staged binary: pass [image] or stage a binary with --file") //nolint:perfsprint // plain error, no wrap target
+	}
+	return handleWorkloadRun(ctx, stdout, &rf, image, command)
+}
+
+// hasStagedBinary reports whether --file flags plus command resolve to a
+// binary the runtime can start. It mirrors proc.BinaryPath without needing
+// digests: a command naming a staged path wins, otherwise any executable
+// file counts as a candidate. Unparseable flags count as resolvable so the
+// later push surfaces the real parse error instead of a usage error.
+func hasStagedBinary(fileFlags, command []string) bool {
+	if len(fileFlags) == 0 {
+		return false
+	}
+	type staged struct {
+		container string
+		exec      bool
+	}
+	stagedFiles := make([]staged, 0, len(fileFlags))
+	for _, flag := range fileFlags {
+		container, _, mode, err := parseFileFlag(flag)
+		if err != nil {
+			return true
+		}
+		stagedFiles = append(stagedFiles, staged{container: container, exec: mode&0o111 != 0})
+	}
+	if len(command) > 0 {
+		for _, f := range stagedFiles {
+			if f.container == command[0] {
+				return true
+			}
+		}
+	}
+	for _, f := range stagedFiles {
+		if f.exec {
+			return true
+		}
+	}
+	return false
 }
 
 // parseHealthFlags validates the health flag trio into a probe, an action,
@@ -245,6 +287,33 @@ func parseHealthFlags(rf *runFlags) (sdk.HealthProbe, sdk.HealthAction, []string
 	return probe, action, strings.Fields(rf.healthCmd), nil
 }
 
+// placeholderImage returns a build-time image label for the SDK builder,
+// which still requires a non-empty image. Empty stays a placeholder here;
+// buildWorkloadSpec clears it back to empty after Build so the submitted
+// spec carries no label. The server accepts empty since the runtime
+// starts host processes from staged files, never from a fetch.
+func placeholderImage(image string) string {
+	if strings.TrimSpace(image) == "" {
+		return "placeholder:local"
+	}
+	return image
+}
+
+// parseQoSFlag maps the --qos flag to its SDK class, defaulting empty
+// to best effort.
+func parseQoSFlag(flag string) (sdk.QoS, error) {
+	switch strings.ToLower(strings.TrimSpace(flag)) {
+	case "besteffort", "":
+		return sdk.QoSBestEffort, nil
+	case "burstable":
+		return sdk.QoSBurstable, nil
+	case "guaranteed":
+		return sdk.QoSGuaranteed, nil
+	default:
+		return "", fmt.Errorf("invalid QoS class %q; must be 'besteffort', 'burstable', or 'guaranteed'", flag)
+	}
+}
+
 func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Workload, error) {
 	hostPort, containerPort, err := parsePortMapping(rf.port)
 	if err != nil {
@@ -261,20 +330,13 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 		return sdk.Workload{}, err
 	}
 
-	var qos sdk.QoS
-	switch strings.ToLower(strings.TrimSpace(rf.qos)) {
-	case "besteffort", "":
-		qos = sdk.QoSBestEffort
-	case "burstable":
-		qos = sdk.QoSBurstable
-	case "guaranteed":
-		qos = sdk.QoSGuaranteed
-	default:
-		return sdk.Workload{}, fmt.Errorf("invalid QoS class %q; must be 'besteffort', 'burstable', or 'guaranteed'", rf.qos)
+	qos, err := parseQoSFlag(rf.qos)
+	if err != nil {
+		return sdk.Workload{}, err
 	}
 
 	builder := sdk.NewWorkload().
-		Image(image).
+		Image(placeholderImage(image)).
 		Command(command...).
 		Restart(sdk.RestartPolicy(strings.ToLower(strings.TrimSpace(rf.restart)))).
 		CPUShares(rf.cpu).
@@ -294,6 +356,9 @@ func buildWorkloadSpec(rf *runFlags, image string, command []string) (sdk.Worklo
 	workload, err := builder.Build()
 	if err != nil {
 		return sdk.Workload{}, fmt.Errorf("build workload spec: %w", err)
+	}
+	if strings.TrimSpace(image) == "" {
+		workload.Image = ""
 	}
 
 	return workload, nil

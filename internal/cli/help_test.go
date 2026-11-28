@@ -53,7 +53,7 @@ func TestCLIHelpGolden(t *testing.T) {
 	}
 	run := stdout.String()
 	for _, want := range []string{
-		"run [flags] <image>",
+		"run [flags] [image]",
 		"--port",
 		"-p",
 		"--env",

@@ -26,7 +26,7 @@ func TestDxRootHelpWithArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--help workload failed: %v", err)
 	}
-	if !strings.Contains(workload, "Manage container workloads") {
+	if !strings.Contains(workload, "Manage workloads") {
 		t.Fatalf("--help workload missing group help:\n%s", workload)
 	}
 

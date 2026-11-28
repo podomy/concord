@@ -134,10 +134,6 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input.Image = strings.TrimSpace(input.Image)
-	if input.Image == "" {
-		writeError(w, http.StatusBadRequest, "workload image reference is required")
-		return
-	}
 
 	if input.ID == uuid.Nil {
 		input.ID = uuid.New()
@@ -325,11 +321,12 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, logsResponse{Logs: out})
 }
 
-// handleUpdateImage bumps a live workload to a new image without changing
+// handleUpdateImage bumps a live workload's image label without changing
 // its identity: same ID, same assignment, epoch plus one so the copy
 // deterministically supersedes the stored one (a plain resubmit could
-// lose to byte comparison). The node reconciles the drift by stopping
-// the old container and starting the new image; rollback is another bump.
+// lose to byte comparison). The image is a label only and no fetch
+// happens anywhere; the node reconciles the drift by restarting the host
+// process from staged files. Rollback is another bump.
 func (s *Server) handleUpdateImage(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := uuid.Parse(idStr)

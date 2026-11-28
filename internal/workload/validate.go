@@ -6,7 +6,6 @@ package workload
 import (
 	"fmt"
 	"slices"
-	"strings"
 )
 
 // Validate reports whether the spec is submittable. It is the single
@@ -15,6 +14,10 @@ import (
 // bad line never fails the apply loop or displaces a tombstone. The SDK
 // Builder validates client-side too, but the server never trusts it:
 // raw HTTP can send anything.
+//
+// Image is an optional label only: empty is allowed and no fetch happens
+// anywhere. The runtime starts host processes from staged file artifacts,
+// and specDrifted still compares the label so a label bump restarts.
 //
 // Memory: negative limits are rejected. Zero or unset means unlimited:
 // no cgroup limit is set (see cr.BundleBuilder) and the scheduler's
@@ -25,10 +28,6 @@ import (
 // passed through. Negative values cannot arrive typed; raw JSON
 // negatives fail decoding before they get here.
 func (s Spec) Validate() error {
-	if strings.TrimSpace(s.Image) == "" {
-		return fmt.Errorf("workload image reference is required") //nolint:perfsprint // plain error, no wrap target
-	}
-
 	err := validateRestart(s.Restart)
 	if err != nil {
 		return err

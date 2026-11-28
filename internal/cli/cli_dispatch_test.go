@@ -164,14 +164,15 @@ func TestDxNoArgsHelp(t *testing.T) {
 	}
 }
 
-// TestDxRunRequiresImage checks exact missing image text.
-func TestDxRunRequiresImage(t *testing.T) {
+// TestDxRunRequiresImageOrBinary checks the usage error when neither an
+// image nor a staged binary is given.
+func TestDxRunRequiresImageOrBinary(t *testing.T) {
 	t.Parallel()
 	_, _, err := dxRun([]string{"workload", "run"})
 	if err == nil {
 		t.Fatal("workload run without image: expected error, got nil")
 	}
-	want := `requires at least 1 arg(s), only 0 received`
+	want := `workload run requires an image or a staged binary: pass [image] or stage a binary with --file`
 	if err.Error() != want {
 		t.Errorf("workload run no image = %q, want %q", err.Error(), want)
 	}
@@ -478,7 +479,7 @@ func TestDxRepeatableFlags(t *testing.T) {
 	if errFile != nil && strings.Contains(errFile.Error(), "not defined") {
 		t.Errorf("repeatable file should parse, got %q", errFile.Error())
 	}
-	if errFile != nil && strings.Contains(errFile.Error(), "requires at least 1 arg") {
+	if errFile != nil && strings.Contains(errFile.Error(), "requires an image or a staged binary") {
 		t.Errorf("repeatable file consumed image positional: %v", errFile)
 	}
 }

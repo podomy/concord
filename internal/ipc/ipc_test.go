@@ -463,9 +463,11 @@ func TestIPCValidationErrors(t *testing.T) {
 	h := setupTestServer(t)
 	ctx := context.Background()
 
-	_, err := h.client.Submit(ctx, sdk.Workload{})
+	invalid := mustBuild(t, sdk.NewWorkload().Image("app:latest"))
+	invalid.Restart = "sometimes"
+	_, err := h.client.Submit(ctx, invalid)
 	if err == nil {
-		t.Fatalf("expected error submitting empty workload")
+		t.Fatalf("expected error submitting workload with bad restart")
 	}
 
 	_, err = h.client.Get(ctx, uuid.New())
@@ -679,14 +681,26 @@ func TestIPCSubmitRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// Whitespace-only images are rejected: the stored spec is always
-// trimmed, never padded.
-func TestIPCSubmitRejectsBlankImage(t *testing.T) {
+// Blank images are accepted: the image is a label only, so the stored
+// spec keeps an empty label and no fetch happens.
+func TestIPCSubmitAcceptsBlankImage(t *testing.T) {
 	h := setupTestServer(t)
+	ctx := context.Background()
 
 	status, body := postRawJSON(t, h, http.MethodPost, "/v1/workloads", `{"image":"   "}`)
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400, body %s", status, body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body %s", status, body)
+	}
+
+	list, err := h.client.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 workload, got %d", len(list))
+	}
+	if list[0].Image != "" {
+		t.Fatalf("stored image = %q, want empty", list[0].Image)
 	}
 }
 

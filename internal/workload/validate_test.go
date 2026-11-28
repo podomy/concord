@@ -11,7 +11,7 @@ import (
 )
 
 // Valid specs pass: defaults, zero memory as unlimited, zero CPU as
-// kernel default, empty probe as HTTP.
+// kernel default, empty probe as HTTP, and empty image as no label.
 func TestSpecValidateAcceptsDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -21,6 +21,19 @@ func TestSpecValidateAcceptsDefaults(t *testing.T) {
 	}
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
+	}
+}
+
+// Empty and blank images are valid: the image is a label only and the
+// runtime starts host processes from staged files, never from a fetch.
+func TestSpecValidateAcceptsEmptyImage(t *testing.T) {
+	t.Parallel()
+
+	for _, image := range []string{"", "   "} {
+		spec := Spec{ID: uuid.New(), Image: image}
+		if err := spec.Validate(); err != nil {
+			t.Fatalf("Validate(%q) = %v, want nil", image, err)
+		}
 	}
 }
 
@@ -35,7 +48,6 @@ func TestSpecValidateRejects(t *testing.T) {
 		name   string
 		mutate func(*Spec)
 	}{
-		{"blank image", func(s *Spec) { s.Image = "   " }},
 		{"bad restart", func(s *Spec) { s.Restart = "sometimes" }},
 		{"negative memory", func(s *Spec) { s.Resources.MemoryMB = -1 }},
 		{"bad health action", func(s *Spec) { s.HealthAction = 7 }},

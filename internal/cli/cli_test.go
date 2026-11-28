@@ -427,12 +427,12 @@ func TestCLIValidationErrors(t *testing.T) {
 		t.Fatalf("expected error on unknown command")
 	}
 
-	// Workload run missing image
+	// Workload run missing image and binary
 	stdout.Reset()
 	stderr.Reset()
 	err = cli.Execute(ctx, []string{"workload", "run"}, &stdout, &stderr)
 	if err == nil {
-		t.Fatalf("expected error on workload run without image")
+		t.Fatalf("expected error on workload run without image or binary")
 	}
 
 	// Workload run invalid port
