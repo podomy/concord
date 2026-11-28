@@ -17,6 +17,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord/internal/hints"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/transport"
@@ -633,7 +634,7 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		j := &memJournal{}
-		RunPullLoop(ctx, logs.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j}, nil)
+		RunPullLoop(ctx, logs.NewNop(), uuid.New(), src, fake, j, nil, &journalIndex{j: j}, nil, nil)
 		close(done)
 	}()
 
@@ -643,6 +644,138 @@ func TestRunPullLoopStopsOnCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunPullLoop did not stop")
 	}
+}
+
+// hintSyncCalls returns the number of recorded Sync calls.
+func hintSyncCalls(f *fakeSyncer) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// waitSyncCalls waits until at least want Sync calls exist or fails.
+func waitSyncCalls(t *testing.T, f *fakeSyncer, want int, what string) {
+	t.Helper()
+	for range 200 {
+		if hintSyncCalls(f) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s: calls = %d, want at least %d", what, hintSyncCalls(f), want)
+}
+
+// assertSyncQuiet fails if any new Sync call appears within d. It polls
+// so a stuck loop cannot pass vacuously by sleeping without consuming.
+func assertSyncQuiet(t *testing.T, f *fakeSyncer, before int, d time.Duration, what string) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if got := hintSyncCalls(f); got != before {
+			t.Fatalf("%s: calls = %d, want %d (no new pull)", what, got, before)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := hintSyncCalls(f); got != before {
+		t.Fatalf("%s: calls = %d, want %d", what, got, before)
+	}
+}
+
+// switchableIndex delegates to a memJournal but can inject a lookup
+// error to exercise the fail open path.
+type switchableIndex struct {
+	mu   sync.Mutex
+	j    *memJournal
+	fail bool
+}
+
+// Get returns the event for id, or an injected error when failing.
+func (s *switchableIndex) Get(_ context.Context, id uuid.UUID) (*journal.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail {
+		return nil, errors.New("index unavailable") //nolint:wrapcheck // test sentinel, no wrap target
+	}
+	for i := range s.j.events {
+		if s.j.events[i].ID == id {
+			return &s.j.events[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// setFail toggles lookup error injection.
+func (s *switchableIndex) setFail(fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fail = fail
+}
+
+// A hint for an already stored tip skips the pull; an unknown tip pulls.
+// Self origin skips, nil tip pulls, and byID errors fail open to a pull.
+func TestHintKnownTipSkipsPull(t *testing.T) {
+	t.Parallel()
+
+	self := uuid.New()
+	peerID := uuid.New()
+	src := &fakeMembers{list: []peerdiscovery.Node{keyedNode(peerID, "192.0.2.10:7946")}}
+	fake := &fakeSyncer{}
+	j := &memJournal{}
+	known := mustEvent()
+	j.events = append(j.events, known)
+	byID := &switchableIndex{j: j}
+	hintCh := make(chan hints.Hint, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		RunPullLoop(ctx, logs.NewNop(), self, src, fake, j, nil, byID, nil, hintCh)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("RunPullLoop did not stop")
+		}
+	}()
+
+	// Unknown tip pulls within the bound.
+	hintCh <- hints.Hint{Origin: peerID, Tip: uuid.New()}
+	waitSyncCalls(t, fake, 1, "unknown tip hint did not pull")
+
+	// Known tip skips: poll up to 2s asserting no new Sync call.
+	before := hintSyncCalls(fake)
+	hintCh <- hints.Hint{Origin: peerID, Tip: known.ID}
+	assertSyncQuiet(t, fake, before, 2*time.Second, "known tip hint pulled")
+
+	// Probe proves the loop consumed the known hint: the next unknown
+	// tip must still pull exactly once more.
+	hintCh <- hints.Hint{Origin: peerID, Tip: uuid.New()}
+	waitSyncCalls(t, fake, before+1, "probe after known tip did not pull")
+	afterProbe := hintSyncCalls(fake)
+	if afterProbe != before+1 {
+		t.Fatalf("probe calls = %d, want %d", afterProbe, before+1)
+	}
+
+	// Self origin skips even for an unknown tip.
+	before = hintSyncCalls(fake)
+	hintCh <- hints.Hint{Origin: self, Tip: uuid.New()}
+	assertSyncQuiet(t, fake, before, 500*time.Millisecond, "self origin hint pulled")
+
+	// Nil tip pulls: no index check, just an early tick.
+	before = hintSyncCalls(fake)
+	hintCh <- hints.Hint{Origin: peerID, Tip: uuid.Nil}
+	waitSyncCalls(t, fake, before+1, "nil tip hint did not pull")
+
+	// ByID error fails open to a pull for an otherwise known tip.
+	byID.setFail(true)
+	before = hintSyncCalls(fake)
+	hintCh <- hints.Hint{Origin: peerID, Tip: known.ID}
+	waitSyncCalls(t, fake, before+1, "byID error hint did not fail open")
+	byID.setFail(false)
 }
 
 type syncCall struct {

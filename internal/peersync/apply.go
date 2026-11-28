@@ -38,7 +38,7 @@ func ApplyEvents(
 		if existing != nil {
 			continue
 		}
-		if err := journalview.RecordEvent(ctx, j, views, event); err != nil {
+		if err := journalview.RecordEventSilent(ctx, j, views, event); err != nil {
 			return applied, fmt.Errorf("record event %s: %w", event.ID, err)
 		}
 		applied++

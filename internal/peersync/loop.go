@@ -13,6 +13,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
+	"github.com/podomy/concord/internal/hints"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/peerdiscovery"
@@ -58,6 +59,11 @@ type MemberSource interface {
 //
 // Individual Sync/apply failures are soft-fail (log and continue). The loop
 // blocks until ctx is cancelled.
+//
+// Hints wake the loop early. A hint carries a journal tip observed on the
+// weld bus and triggers the same pullTick as the ticker. Hints are
+// advisory: a nil channel disables them and the ticker still converges.
+// The loop stays single threaded, so cursors need no locking.
 func RunPullLoop(
 	ctx context.Context,
 	logger *logs.Logger,
@@ -68,6 +74,7 @@ func RunPullLoop(
 	views []journalview.View,
 	byID EventByID,
 	cursorStore CursorStore,
+	hintCh <-chan hints.Hint,
 ) {
 	previous := map[uuid.UUID]peerdiscovery.Node{}
 	cursors := newCursorSet()
@@ -97,10 +104,39 @@ func RunPullLoop(
 		select {
 		case <-ctx.Done():
 			return
+		case h := <-hintCh:
+			previous = handleHint(ctx, logger, selfID, members, state, previous, h)
 		case <-ticker.C:
 			previous = pullTick(ctx, logger, selfID, members, state, previous)
 		}
 	}
+}
+
+// handleHint wakes one pull pass for a foreign hint with an unknown tip.
+// Late joiners resume from the stored cursor, never from the hint. Own
+// hints skip since this node already holds the event. A tip already in
+// the local index skips too: a queued wakeup covers the newcomer, so
+// duplicates cost one bbolt read instead of one full tick. Lookup errors
+// fail open to a pull since the ticker would cover the gap anyway.
+func handleHint(
+	ctx context.Context,
+	logger *logs.Logger,
+	selfID uuid.UUID,
+	members MemberSource,
+	state pullState,
+	previous map[uuid.UUID]peerdiscovery.Node,
+	h hints.Hint,
+) map[uuid.UUID]peerdiscovery.Node {
+	if h.Origin == selfID {
+		return previous
+	}
+	if h.Tip != uuid.Nil {
+		known, err := state.byID.Get(ctx, h.Tip)
+		if err == nil && known != nil {
+			return previous
+		}
+	}
+	return pullTick(ctx, logger, selfID, members, state, previous)
 }
 
 // pullState is the per-loop dependencies shared by meet/periodic/syncOne.

@@ -120,26 +120,6 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 	publishPosition(nodeConfig, peerService, sampler)
 	peerService.SetAnchor(nodeConfig.Anchor)
 
-	// Peerdiscovery is split: ObserveMemberlistPeers is
-	// passive, it only polls the already-joined memberlist
-	// and records peer.seen/updated/lost. runDiscoveryLoop
-	// is active, it re-queries mDNS and anchors for new
-	// candidates and calls Join. Without the loop a node
-	// that booted alone would never discover later peers.
-	goBackground(&bg, func() {
-		peerdiscovery.ObserveMemberlistPeers(
-			runCtx,
-			logger,
-			nodeConfig.ID,
-			peerService,
-			st.journal,
-			views,
-		)
-	})
-	goBackground(&bg, func() {
-		runDiscoveryLoop(runCtx, logger, peerService, nodeConfig.Anchors, sampler)
-	})
-
 	err = dnsserver.Start(runCtx, peerService, logger, "")
 	if err != nil {
 		abort()
@@ -155,6 +135,30 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 		abort()
 		return err
 	}
+	hintCh, cleanupHints := attachHintBus(runCtx, logger, nodeConfig.ID, &bg)
+	defer cleanupHints()
+	// Peerdiscovery is split: ObserveMemberlistPeers is
+	// passive, it only polls the already-joined memberlist
+	// and records peer.seen/updated/lost. runDiscoveryLoop
+	// is active, it re-queries mDNS and anchors for new
+	// candidates and calls Join. Without the loop a node
+	// that booted alone would never discover later peers.
+	// Both start only after the observer is set: ObserveMemberlistPeers
+	// records through RecordEvent, so starting it earlier would
+	// race the observer write.
+	goBackground(&bg, func() {
+		peerdiscovery.ObserveMemberlistPeers(
+			runCtx,
+			logger,
+			nodeConfig.ID,
+			peerService,
+			st.journal,
+			views,
+		)
+	})
+	goBackground(&bg, func() {
+		runDiscoveryLoop(runCtx, logger, peerService, nodeConfig.Anchors, sampler)
+	})
 	goBackground(&bg, func() {
 		peersync.RunPullLoop(
 			runCtx,
@@ -166,6 +170,7 @@ func Run(ctx context.Context, logger *logs.Logger) error {
 			views,
 			eventsByID,
 			peersync.NewCursorStore(st.kv),
+			hintCh,
 		)
 	})
 	logger.Info("peer sync pull loop started")
