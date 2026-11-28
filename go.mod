@@ -10,7 +10,7 @@ require (
 	github.com/opencontainers/cgroups v0.0.4
 	github.com/opencontainers/runc v1.3.3
 	github.com/podomy/concord-sdk v0.1.0
-	github.com/podomy/weld v0.1.0
+	github.com/podomy/weld v0.1.1
 	github.com/vishvananda/netlink v1.3.1
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.53.0
