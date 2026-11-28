@@ -23,7 +23,7 @@ func TestRunHealthChecksManyWorkloadsCompletesFast(t *testing.T) {
 	t.Parallel()
 
 	old := checkHealth
-	checkHealth = func(_ context.Context, _ *logs.Logger, _ workload.Spec, _ *libcontainer.Container) bool {
+	checkHealth = func(_ context.Context, _ *logs.Logger, _ workload.Spec) bool {
 		time.Sleep(100 * time.Millisecond)
 		return true
 	}

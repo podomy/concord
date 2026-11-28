@@ -18,11 +18,11 @@ import (
 	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/clock"
-	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -42,7 +42,7 @@ const historyInterval = 5 * time.Second
 // well under the 500ms cadence even when one probe hangs.
 const fastProbeConcurrency = 8
 
-// fastProbeTimeout bounds one probe's context. cr.CheckHealth already
+// fastProbeTimeout bounds one probe's context. proc.CheckHealth already
 // times out internally, but the explicit bound keeps the beat detached
 // from caller cancellation semantics.
 const fastProbeTimeout = 5 * time.Second
@@ -76,8 +76,8 @@ var statsAbandoned atomic.Int64
 var errStatsTimeout = errors.New("container stats timed out")
 
 // checkHealth runs one probe. A var so unit tests stub slow probes
-// without root or network; production always uses cr.CheckHealth.
-var checkHealth = cr.CheckHealth
+// without root or network; production always uses proc.CheckHealth.
+var checkHealth = proc.CheckHealth
 
 // runFastTick checks the health of running workloads on the fast beat and
 // samples pressure for the scheduler and inspection. It appends journal
@@ -178,7 +178,7 @@ func probeTarget(ctx context.Context, logger *logs.Logger, sem chan struct{}, t 
 	defer cancel()
 	resCh := make(chan bool, 1)
 	go func() {
-		resCh <- checkHealth(probeCtx, logger, t.entry.Spec, t.entry.Container)
+		resCh <- checkHealth(probeCtx, logger, t.entry.Spec)
 	}()
 	select {
 	case r := <-resCh:

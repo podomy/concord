@@ -23,7 +23,7 @@ import (
 func TestRunHealthChecksAbandonsHungProbe(t *testing.T) {
 	oldCheck := checkHealth
 	oldAfter := abandonedProbeAfter
-	checkHealth = func(ctx context.Context, _ *logs.Logger, _ workload.Spec, _ *libcontainer.Container) bool {
+	checkHealth = func(ctx context.Context, _ *logs.Logger, _ workload.Spec) bool {
 		<-ctx.Done()
 		return false
 	}
