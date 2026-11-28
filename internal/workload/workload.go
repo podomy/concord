@@ -14,7 +14,8 @@ import (
 
 // Spec is the desired state of one workload.
 type Spec struct {
-	Image          string // OCI reference, e.g. "docker.io/nginx:latest".
+	// Image is an opaque label only, never fetched. Empty is allowed.
+	Image          string // opaque label, e.g. "docker.io/nginx:latest".
 	Restart        RestartPolicy
 	Command        []string // entrypoint override.
 	Env            map[string]string
@@ -189,7 +190,8 @@ const (
 // Resources caps CPU shares and memory for one workload.
 type Resources struct {
 	CPUShares uint64 // relative weight (default 1024).
-	MemoryMB  int64  // max memory, 0 = unlimited.
+	// MemoryMB is advisory through CONCORD_MEM_LIMIT_MB with no cgroup.
+	MemoryMB int64 // max memory, 0 = unlimited.
 }
 
 // FileRef points at one file's content in the registry: the container

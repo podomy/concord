@@ -71,7 +71,7 @@ func printWorkloadHelp(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Available Commands:")                                                           //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  inspect     Display detailed specification for a workload")                   //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  list        List all active workloads (alias ls)")                            //nolint:errcheck // CLI output
-	_, _ = fmt.Fprintln(w, "  logs        Show captured container output for a workload")                   //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "  logs        Show captured host-process output for a workload")                //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  run         Deploy and run a new host workload from staged files")            //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  stats       Display live utilization for a workload")                         //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  stop        Stop and remove a workload from the cluster")                     //nolint:errcheck // CLI output
@@ -142,8 +142,8 @@ var workloadRunTakesValue = map[string]bool{
 // newWorkloadRunFlagSet binds run flags to rf and documents them for help.
 func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*flag.FlagSet, []flagDoc) {
 	fs := flag.NewFlagSet("concord workload run", flag.ContinueOnError)
-	fs.StringVar(&rf.port, "port", "", "Port mapping (host:container, e.g. 8080:80)")
-	fs.StringVar(&rf.port, "p", "", "Port mapping (host:container, e.g. 8080:80)")
+	fs.StringVar(&rf.port, "port", "", "Port binding (host:container, e.g. 8080:80; host port is bound directly)")
+	fs.StringVar(&rf.port, "p", "", "Port binding (host:container, e.g. 8080:80; host port is bound directly)")
 	fs.Var(env, "env", "Environment variable in KEY=VALUE format (repeatable)")
 	fs.Var(env, "e", "Environment variable in KEY=VALUE format (repeatable)")
 	fs.StringVar(&rf.restart, "restart", "always", "Restart policy: 'always', 'never', or 'on_failure'")
@@ -157,7 +157,7 @@ func newWorkloadRunFlagSet(rf *runFlags, env, depends, files *stringArray) (*fla
 	fs.StringVar(&rf.qos, "qos", "besteffort", "Compute class: 'besteffort', 'burstable', or 'guaranteed'")
 	fs.Var(files, "file", "Stage a file: --file /dest/path=/local/path[:mode] (repeatable; the binary is a staged file)")
 	docs := []flagDoc{
-		{long: "port", short: "p", kind: "string", def: `""`, usage: "Port mapping (host:container, e.g. 8080:80)"},
+		{long: "port", short: "p", kind: "string", def: `""`, usage: "Port binding (host:container, e.g. 8080:80; host port is bound directly)"},
 		{long: "env", short: "e", kind: "stringArray", def: "[]", usage: "Environment variable in KEY=VALUE format (repeatable)"},
 		{long: "restart", kind: "string", def: `"always"`, usage: "Restart policy: 'always', 'never', or 'on_failure'"},
 		{long: "cpu", kind: "uint", def: "1024", usage: "CFS CPU shares (1024 = 1 core)"},
@@ -618,7 +618,7 @@ func printWorkloadLogsHelp(w io.Writer) {
 	var tail int
 	var follow bool
 	_, docs := newWorkloadLogsFlagSet(&tail, &follow)
-	_, _ = fmt.Fprintln(w, "Show captured container output for a workload")                                //nolint:errcheck // CLI output
+	_, _ = fmt.Fprintln(w, "Show captured host-process output for a workload")                             //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "")                                                                             //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "Usage:")                                                                       //nolint:errcheck // CLI output
 	_, _ = fmt.Fprintln(w, "  concord workload logs <id>")                                                 //nolint:errcheck // CLI output
@@ -628,7 +628,7 @@ func printWorkloadLogsHelp(w io.Writer) {
 	printFlagDocs(w, docs)
 }
 
-// runWorkloadLogs parses logs flags and prints captured container output.
+// runWorkloadLogs parses logs flags and prints captured host-process output.
 func runWorkloadLogs(ctx context.Context, stdout, stderr io.Writer, args []string) error {
 	var tail int
 	var follow bool

@@ -14,10 +14,12 @@ import (
 	"github.com/podomy/concord/internal/workload"
 )
 
-// BinaryPath selects the executable entry from spec file refs. The first
-// command word wins when it names a staged path; otherwise a single
-// exec-bit entry wins. Anything else is a submit error surfaced here:
-// guessing between several binaries would start the wrong one.
+// BinaryPath selects the executable entry from spec file refs. When the
+// spec names a command, the first word must match a staged path; a
+// mismatch is a submit error surfaced here, so the binary never differs
+// from argv zero. When the command is empty, a single exec-bit entry
+// wins. Anything else is a submit error surfaced here: guessing between
+// several binaries would start the wrong one.
 func BinaryPath(spec workload.Spec) (workload.FileRef, error) {
 	if len(spec.Command) > 0 {
 		for _, f := range spec.Files {
@@ -25,6 +27,7 @@ func BinaryPath(spec workload.Spec) (workload.FileRef, error) {
 				return f, nil
 			}
 		}
+		return workload.FileRef{}, fmt.Errorf("command names no staged file: %q", spec.Command[0])
 	}
 	var found *workload.FileRef
 	for i := range spec.Files {

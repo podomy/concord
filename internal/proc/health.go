@@ -115,7 +115,8 @@ func checkTCP(ctx context.Context, logger *logs.Logger, spec workload.Spec) bool
 		logger.Debug("tcp probe failed", logs.Uint16("port", spec.HostPort), logs.Error(err))
 		return false
 	}
-	if err := conn.Close(); err != nil {
+	err = conn.Close()
+	if err != nil {
 		logger.Debug("tcp probe close failed", logs.Uint16("port", spec.HostPort), logs.Error(err))
 	}
 

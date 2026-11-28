@@ -15,13 +15,14 @@ import (
 // Builder validates client-side too, but the server never trusts it:
 // raw HTTP can send anything.
 //
-// Image is an optional label only: empty is allowed and no fetch happens
+// Image is an opaque label only: empty is allowed and no fetch happens
 // anywhere. The runtime starts host processes from staged file artifacts,
 // and specDrifted still compares the label so a label bump restarts.
 //
 // Memory: negative limits are rejected. Zero or unset means unlimited:
-// no cgroup limit is set (see cr.BundleBuilder) and the scheduler's
-// fitsMemory always fits a request <= 0, so 0 never strands a workload.
+// enforcement is advisory through CONCORD_MEM_LIMIT_MB with no cgroup,
+// and the scheduler's fitsMemory always fits a request <= 0, so 0 never
+// strands a workload. Host processes run with no bundle.
 //
 // CPU shares are relative weights with no kernel absolute: 0 means the
 // kernel default applies (no explicit shares set), any other value is

@@ -60,6 +60,25 @@ func TestDriftRestartAfterCooldown(t *testing.T) {
 	}
 }
 
+// An image-label-only change still restarts: the label is opaque and
+// never fetched, but the operator ordered a change, so the normal drift
+// path converges conservatively.
+func TestImageLabelOnlyDriftRestarts(t *testing.T) {
+	old := workload.Spec{ID: uuid.New(), Image: "app:v1"}
+	updated := old
+	updated.Image = "app:v2"
+
+	if !specDrifted(old, updated) {
+		t.Fatal("image-label-only change must drift")
+	}
+	entry := &WorkloadEntry{Spec: old, ExitStatus: &proc.ExitStatus{Code: 0}}
+	running := map[uuid.UUID]*WorkloadEntry{old.ID: entry}
+
+	if !handleExitedEntry(entry, updated, running, nil) {
+		t.Fatal("image-label-only drift did not restart through the normal path")
+	}
+}
+
 // Identical specs never drift, so a no-op update neither bumps nor
 // restarts through the drift path.
 func TestNoOpUpdateSkipsDriftRestart(t *testing.T) {

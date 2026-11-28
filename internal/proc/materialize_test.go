@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/podomy/concord/internal/proc"
@@ -74,6 +75,26 @@ func TestBinaryPathAmbiguousFails(t *testing.T) {
 	}
 	if _, err := proc.BinaryPath(spec); err == nil {
 		t.Fatal("expected ambiguous binary error, got nil")
+	}
+}
+
+// A command naming no staged file fails instead of falling through to
+// the exec-bit search, so the binary never differs from argv zero.
+func TestBinaryPathCommandMismatchFails(t *testing.T) {
+	t.Parallel()
+
+	spec := workload.Spec{
+		Command: []string{"/app/missing"},
+		Files: []workload.FileRef{
+			{Path: "/app/run", Digest: testDigest, Mode: 0o755},
+		},
+	}
+	_, err := proc.BinaryPath(spec)
+	if err == nil {
+		t.Fatal("expected command mismatch error, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "command names no staged file") {
+		t.Fatalf("error = %q, want command names no staged file", got)
 	}
 }
 

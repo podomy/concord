@@ -89,6 +89,7 @@ func (m *mockHandle) Signal(sig os.Signal) error {
 func (m *mockHandle) Exited() <-chan proc.ExitStatus { return m.exited }
 
 func TestReconcilerStageError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	_, workloads, running := setupReconcilerTest(t)
 	id := uuid.New()
 	writeSpecEvent(t, workloads, binSpec(id), uuid.Nil)
@@ -169,6 +170,7 @@ func setupReconcilerTest(t *testing.T) (*proc.FakeLauncher, *journalview.Workloa
 // proceed without a registry.
 func runTickWith(t *testing.T, launcher *proc.FakeLauncher, workloads *journalview.Workloads, running map[uuid.UUID]*WorkloadEntry) {
 	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	stubStageFetch(t)
 	exitEvents := make(chan ExitEvent, 100)
 	reconcileTick(t.Context(), logs.NewTest(t), uuid.Nil, launcher, &mockJournal{}, workloads, running, map[uuid.UUID]int{}, exitEvents, nil, nil, nil)
@@ -319,11 +321,15 @@ func TestBuildStartConfigUsesSpecCommand(t *testing.T) {
 }
 
 // A nil sampler leaves writers unset and output discards as before. The
-// scheduled memory request rides along as an env var.
+// scheduled memory request rides along as an env var. An empty command
+// runs the binary bare with argv zero set to the binary path.
 func TestBuildStartConfigWithoutSampler(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Resources: workload.Resources{MemoryMB: 128}}
 
 	cfg := buildStartConfig(spec, "/stage/app/bin", nil)
+	if len(cfg.Args) != 1 || cfg.Args[0] != "/stage/app/bin" {
+		t.Fatalf("args = %v, want binary bare", cfg.Args)
+	}
 	if cfg.Stdout != nil || cfg.Stderr != nil {
 		t.Fatal("expected unset writers without sampler")
 	}
@@ -338,6 +344,35 @@ func TestBuildStartConfigWithoutSampler(t *testing.T) {
 	}
 	if cfg.Dir != "/stage/app" {
 		t.Fatalf("dir = %q, want stage dir", cfg.Dir)
+	}
+}
+
+// An empty command runs the binary bare: argv zero is the staged binary.
+func TestBuildStartConfigEmptyCommandRunsBinaryBare(t *testing.T) {
+	spec := workload.Spec{ID: uuid.New()}
+
+	cfg := buildStartConfig(spec, "/stage/app/bin", node.NewSampler())
+	if len(cfg.Args) != 1 || cfg.Args[0] != "/stage/app/bin" {
+		t.Fatalf("args = %v, want [/stage/app/bin]", cfg.Args)
+	}
+}
+
+// A command naming no staged file never starts: staging fails and the
+// tick retries instead of running the wrong binary.
+func TestReconcileUnmatchedCommandStartsNothing(t *testing.T) {
+	_, workloads, running := setupReconcilerTest(t)
+	spec := binSpec(uuid.New())
+	spec.Command = []string{"/app/missing"}
+	writeSpecEvent(t, workloads, spec, uuid.Nil)
+	launcher := &proc.FakeLauncher{}
+
+	runTickWith(t, launcher, workloads, running)
+
+	if launcher.Calls() != 0 {
+		t.Fatal("launcher started despite unmatched command")
+	}
+	if _, ok := running[spec.ID]; ok {
+		t.Fatal("entry recorded despite unmatched command")
 	}
 }
 
@@ -415,6 +450,7 @@ func TestReconcilerStopTimeoutFromSpec(t *testing.T) {
 }
 
 func TestReconcilerTickRestartPolicies(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	stubStageFetch(t)
 	// Test RestartNever: exited workload should not be restarted.
 	specNever := binSpec(uuid.New())
@@ -457,6 +493,7 @@ func TestReconcilerTickRestartPolicies(t *testing.T) {
 // codes and transport errors, unknown policies never restart, and a future
 // restartAfter cools down even RestartAlways. Semantics unchanged.
 func TestReconcilerTickRestartPoliciesExtended(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	stubStageFetch(t)
 	// OnFailure with a non-zero exit code restarts.
 	specFail := binSpec(uuid.New())
@@ -565,6 +602,7 @@ func TestNoteBlockedTickStallThreshold(t *testing.T) {
 // Stall counters reset when dependencies resolve and prune with the view:
 // a removed workload never carries a stale count into a future same-ID spec.
 func TestBlockedCountersResetAndPrune(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	stubStageFetch(t)
 	launcher, workloads, running := setupReconcilerTest(t)
 	dep := binSpec(uuid.New())

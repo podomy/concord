@@ -280,10 +280,9 @@ func (s *Server) handleWorkloadStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWorkloadLogs returns one workload's captured stdout/stderr lines
-// oldest-first, optionally tailed to the last N. Rings hold the roam
-// since container start (1000 lines); adopted containers capture nothing
-// until restarted. Absent rings report 404, mirroring stats: nothing
-// sampled, nothing to show.
+// oldest-first, optionally tailed to the last N. Rings hold the lines
+// since host-process start (1000 lines). Absent rings report 404,
+// mirroring stats: nothing sampled, nothing to show.
 func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := uuid.Parse(idStr)

@@ -528,7 +528,7 @@ func reconcileWorkloadSpec(
 		}
 	}
 
-	// 5. Start new container instance, gated on same-node dependencies.
+	// 5. Start new process instance, gated on same-node dependencies.
 	if !depsReady(running, specs, nodeID, spec) {
 		noteBlockedTick(ctx, logger, j, views, nodeID, spec, blocked)
 		logger.Debug("waiting on dependencies", logs.String("id", spec.ID.String()))
@@ -732,7 +732,8 @@ func stopTimeout(spec workload.Spec) time.Duration {
 	return 60 * time.Second
 }
 
-// destroyContainer initiates asynchronous shutdown of a process by sending SIGTERM.
+// destroyContainer initiates asynchronous shutdown of a host process by sending SIGTERM.
+// The name stays for churn; the target is a process, not a container.
 // If SIGTERM times out after stopTimeout(spec), a SIGKILL fallback is sent
 // unless the target already exited: the timer watches the entry done
 // channel closed by handleExitEvent and cancels on early exit, so no
@@ -868,11 +869,15 @@ func countRunning(running map[uuid.UUID]*WorkloadEntry) int {
 
 // buildStartConfig renders the launcher start config from the spec and
 // the staged binary path. A spec command runs wholesale; an empty spec
-// command runs the binary bare. Container output flows into the
+// command runs the binary bare with argv zero set to the binary path.
+// Host-process output flows into the
 // sampler's per-workload log rings; a nil sampler leaves writers unset
 // and output discards as before.
 func buildStartConfig(spec workload.Spec, binPath string, sampler *node.Sampler) proc.StartConfig {
 	args := spec.Command
+	if len(args) == 0 {
+		args = []string{binPath}
+	}
 
 	env := make([]string, 0, len(spec.Env)+1)
 	for k, v := range spec.Env {

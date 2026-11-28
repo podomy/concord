@@ -319,7 +319,7 @@ func teardownNetworking(logger *logs.Logger) {
 
 func setupNetwork(ctx context.Context, nodeIndex int) error {
 	// Create the bridge, which also sets up the masquerade rule for the
-	// 10.0.0.0/16 container subnet. The single SetupMasquerade call inside
+	// 10.0.0.0/16 overlay subnet. The single SetupMasquerade call inside
 	// CreateBridge provably covers this path, so no second probe here.
 	err := cn.CreateBridge(ctx, nodeIndex)
 	if err != nil {
@@ -462,8 +462,8 @@ func startWorkloadAndNetwork(
 	sampler *node.Sampler,
 	bg *sync.WaitGroup,
 ) (*registry.Registry, error) {
-	// Network before workloads: the reconciler pulls and creates
-	// containers that need cn0, veth pairs, and masquerade on their first
+	// Network before workloads: the overlay needs the bridge and
+	// masquerade before the reconciler starts host processes on its first
 	// tick. Resolving the deterministic subnet index first also fails the
 	// boot loudly when this node is absent from the memberlist, instead of
 	// silently falling back to index 0 and overlapping another node's /24.
@@ -531,7 +531,7 @@ func nodeIndex(
 
 	// Sort the members in ascending order and find ourselves through the
 	// shared helper. Absence is an error, never a silent 0: two nodes on
-	// subnet 10.0.0.0/24 would hand out overlapping container IPs. The
+	// subnet 10.0.0.0/24 would hand out overlapping overlay IPs. The
 	// helper keeps the boot pick and the reconciler's drift check on one
 	// order.
 	idx, err := cn.SubnetIndexFor(members, nodeID)
