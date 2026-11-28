@@ -108,6 +108,7 @@ func (OsLauncher) Start(ctx context.Context, cfg StartConfig) (Handle, error) {
 	}
 	cmd := exec.CommandContext(ctx, cfg.BinPath, cfg.Args...) //nolint:gosec // BinPath is the staged workload binary from a content-addressed digest, argv from the workload spec
 	cmd.Dir = cfg.Dir
+	cmd.Dir = cfg.Dir
 	cmd.Env = append(os.Environ(), cfg.Env...)
 	if cfg.Stdout != nil {
 		cmd.Stdout = cfg.Stdout

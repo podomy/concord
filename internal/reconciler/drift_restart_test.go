@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/podomy/concord/internal/clock"
-	"github.com/podomy/concord/internal/cr"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -22,13 +22,13 @@ func TestDriftRestartHonorsBackoff(t *testing.T) {
 	updated := old
 	updated.Image = "app:v2"
 
-	entry := &ContainerAndProcess{
+	entry := &WorkloadEntry{
 		Spec:         old,
-		ExitStatus:   &cr.ExitStatus{Code: 1},
+		ExitStatus:   &proc.ExitStatus{Code: 1},
 		restartCount: 1,
 		restartAfter: clock.Now().Add(time.Hour),
 	}
-	running := map[uuid.UUID]*ContainerAndProcess{old.ID: entry}
+	running := map[uuid.UUID]*WorkloadEntry{old.ID: entry}
 
 	if handleExitedEntry(entry, updated, running, nil) {
 		t.Fatal("drifted entry restarted inside its cooldown")
@@ -45,12 +45,12 @@ func TestDriftRestartAfterCooldown(t *testing.T) {
 	updated := old
 	updated.Image = "app:v2"
 
-	entry := &ContainerAndProcess{
+	entry := &WorkloadEntry{
 		Spec:         old,
-		ExitStatus:   &cr.ExitStatus{Code: 1},
+		ExitStatus:   &proc.ExitStatus{Code: 1},
 		restartAfter: clock.Now().Add(-time.Second),
 	}
-	running := map[uuid.UUID]*ContainerAndProcess{old.ID: entry}
+	running := map[uuid.UUID]*WorkloadEntry{old.ID: entry}
 
 	if !handleExitedEntry(entry, updated, running, nil) {
 		t.Fatal("drifted entry did not restart past its cooldown")
@@ -64,8 +64,8 @@ func TestDriftRestartAfterCooldown(t *testing.T) {
 // restarts through the drift path.
 func TestNoOpUpdateSkipsDriftRestart(t *testing.T) {
 	spec := workload.Spec{ID: uuid.New(), Image: "app:v1"}
-	entry := &ContainerAndProcess{Spec: spec, ExitStatus: &cr.ExitStatus{Code: 0}}
-	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
+	entry := &WorkloadEntry{Spec: spec, ExitStatus: &proc.ExitStatus{Code: 0}}
+	running := map[uuid.UUID]*WorkloadEntry{spec.ID: entry}
 
 	if handleExitedEntry(entry, spec, running, nil) {
 		t.Fatal("identical spec restarted through drift path")

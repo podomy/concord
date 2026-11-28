@@ -8,12 +8,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/opencontainers/runc/libcontainer"
 
 	"github.com/podomy/concord/internal/logs"
 
-	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/node"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -34,10 +33,9 @@ func TestRunHealthChecksAbandonsHungProbe(t *testing.T) {
 	})
 	before := probesAbandoned.Load()
 
-	var ctr libcontainer.Container
-	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1)}
-	entry := &ContainerAndProcess{Container: &ctr, ProcessHandle: proc, Spec: workload.Spec{ID: uuid.New(), HealthAction: workload.HealthActionRestart}}
-	running := map[uuid.UUID]*ContainerAndProcess{entry.Spec.ID: entry}
+	handle := &mockHandle{exited: make(chan proc.ExitStatus, 1), pid: 1 << 30}
+	entry := &WorkloadEntry{Handle: handle, Spec: workload.Spec{ID: uuid.New(), HealthAction: workload.HealthActionRestart}}
+	running := map[uuid.UUID]*WorkloadEntry{entry.Spec.ID: entry}
 
 	runHealthChecks(context.Background(), logs.NewTest(t), running, &mockJournal{}, nil, uuid.New())
 
@@ -47,8 +45,8 @@ func TestRunHealthChecksAbandonsHungProbe(t *testing.T) {
 	if entry.Stopping {
 		t.Fatal("abandoned probe destroyed the workload")
 	}
-	if len(proc.signals) != 0 {
-		t.Fatalf("signals = %v, want none for abandoned probe", proc.signals)
+	if len(handle.signals) != 0 {
+		t.Fatalf("signals = %v, want none for abandoned probe", handle.signals)
 	}
 }
 
@@ -57,8 +55,7 @@ func TestRunHealthChecksAbandonsHungProbe(t *testing.T) {
 func TestSampleWorkloadEntryDeadPIDKeepsSample(t *testing.T) {
 	t.Parallel()
 
-	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1), pid: 1 << 30}
-	entry := &ContainerAndProcess{ProcessHandle: proc, Spec: workload.Spec{ID: uuid.New()}}
+	entry := &WorkloadEntry{Handle: &mockHandle{exited: make(chan proc.ExitStatus, 1), pid: 1 << 30}, Spec: workload.Spec{ID: uuid.New()}}
 	sampler := node.NewSampler()
 
 	sampleWorkloadEntry(logs.NewTest(t), sampler, entry)

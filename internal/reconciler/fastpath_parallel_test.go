@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/opencontainers/runc/libcontainer"
 
 	"github.com/podomy/concord/internal/logs"
 
@@ -29,13 +28,12 @@ func TestRunHealthChecksManyWorkloadsCompletesFast(t *testing.T) {
 	}
 	t.Cleanup(func() { checkHealth = old })
 
-	running := map[uuid.UUID]*ContainerAndProcess{}
-	var ctr libcontainer.Container
+	running := map[uuid.UUID]*WorkloadEntry{}
 	for range 20 {
 		id := uuid.New()
-		running[id] = &ContainerAndProcess{
-			Container: &ctr,
-			Spec:      workload.Spec{ID: id},
+		running[id] = &WorkloadEntry{
+			Handle: &mockHandle{pid: 1 << 30},
+			Spec:   workload.Spec{ID: id},
 		}
 	}
 

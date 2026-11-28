@@ -17,7 +17,6 @@ import (
 	"github.com/podomy/concord/internal/blob"
 	"github.com/podomy/concord/internal/certs"
 	"github.com/podomy/concord/internal/cn"
-	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/dnsserver"
 	"github.com/podomy/concord/internal/ipc"
 	"github.com/podomy/concord/internal/journal"
@@ -26,6 +25,7 @@ import (
 	"github.com/podomy/concord/internal/node"
 	"github.com/podomy/concord/internal/peerdiscovery"
 	"github.com/podomy/concord/internal/peersync"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/reconciler"
 	"github.com/podomy/concord/internal/registry"
 	"github.com/podomy/concord/internal/transport"
@@ -372,12 +372,8 @@ var newBlobSyncer = func(store *blob.Store, members *peerdiscovery.MemberService
 	return peersync.New(store, members, logger)
 }
 
-// newContainerRuntime builds the container runtime. A var so the startup
-// leak test fails it and asserts the registry and syncer release.
-var newContainerRuntime = cr.NewRuntime
-
 // startWorkloadInfrastructure starts the local blob store before the
-// reconciler. Pulls must never run before the store serves; blob sync
+// reconciler. Fetches must never run before the store serves; blob sync
 // starts here after the registry, before the reconciler.
 func startWorkloadInfrastructure(
 	ctx context.Context,
@@ -433,19 +429,14 @@ func startWorkloadInfrastructure(
 		logger.Info("blob sync started")
 	}
 
-	// Start the workload reconciler loop.
-	puller := cr.NewImagePuller()
-	crRuntime, err := newContainerRuntime()
-	if err != nil {
-		return nil, fmt.Errorf("container runtime: %w", err)
-	}
+	// Start the workload reconciler loop. Host processes need no
+	// runtime construction: the launcher spawns directly.
 	goBackground(bg, func() {
 		reconciler.RunLoop(
 			ctx,
 			logger,
 			nodeID,
-			puller,
-			crRuntime,
+			proc.OsLauncher{},
 			st.journal,
 			workloads,
 			views,

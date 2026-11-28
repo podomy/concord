@@ -13,7 +13,7 @@ import (
 
 	"github.com/podomy/concord/internal/logs"
 
-	"github.com/podomy/concord/internal/cr"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -23,20 +23,20 @@ func TestDestroyContainerCancelsSigkillOnEarlyExit(t *testing.T) {
 	t.Parallel()
 
 	spec := workload.Spec{ID: uuid.New(), StopTimeoutSeconds: 1}
-	exited := make(chan cr.ExitStatus, 1)
-	proc := &mockProcessHandle{exitedChan: exited}
-	entry := &ContainerAndProcess{Spec: spec, ProcessHandle: proc}
-	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
+	exited := make(chan proc.ExitStatus, 1)
+	handle := &mockHandle{exited: exited}
+	entry := &WorkloadEntry{Spec: spec, Handle: handle}
+	running := map[uuid.UUID]*WorkloadEntry{spec.ID: entry}
 
 	destroyContainer(logs.NewTest(t), spec, running)
 
 	// Simulate the exit path closing done before the 1s timeout.
-	handleExitEvent(context.Background(), logs.NewTest(t), &mockJournal{}, uuid.New(), spec.ID, cr.ExitStatus{Code: 0}, running, map[uuid.UUID]string{}, nil, nil)
+	handleExitEvent(context.Background(), logs.NewTest(t), &mockJournal{}, uuid.New(), spec.ID, proc.ExitStatus{Code: 0}, running, nil, nil)
 
 	time.Sleep(1500 * time.Millisecond)
 
-	if len(proc.signals) != 1 || proc.signals[0] != syscall.SIGTERM {
-		t.Fatalf("signals = %v, want only one SIGTERM (no SIGKILL after early exit)", proc.signals)
+	if len(handle.signals) != 1 || handle.signals[0] != syscall.SIGTERM {
+		t.Fatalf("signals = %v, want only one SIGTERM (no SIGKILL after early exit)", handle.signals)
 	}
 	if entry.ExitStatus == nil {
 		t.Fatal("expected exit recorded")
@@ -87,22 +87,21 @@ func TestSpecDriftedCoversFullSpec(t *testing.T) {
 }
 
 // Shutdown drain processes queued exits within the documented bound so
-// in-flight exits record stopped status and free network deterministically.
+// in-flight exits record stopped status deterministically.
 func TestDrainExitEventsProcessesQueue(t *testing.T) {
 	t.Parallel()
 
 	spec := workload.Spec{ID: uuid.New()}
-	entry := &ContainerAndProcess{Spec: spec}
-	running := map[uuid.UUID]*ContainerAndProcess{spec.ID: entry}
-	cidrs := map[uuid.UUID]string{}
+	entry := &WorkloadEntry{Spec: spec}
+	running := map[uuid.UUID]*WorkloadEntry{spec.ID: entry}
 	exitEvents := make(chan ExitEvent, 10)
-	exitEvents <- ExitEvent{WorkloadID: spec.ID, ExitStatus: cr.ExitStatus{Code: 0}}
+	exitEvents <- ExitEvent{WorkloadID: spec.ID, ExitStatus: proc.ExitStatus{Code: 0}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	start := time.Now()
-	drainExitEvents(ctx, logs.NewTest(t), &mockJournal{}, uuid.New(), exitEvents, running, cidrs, nil, nil)
+	drainExitEvents(ctx, logs.NewTest(t), &mockJournal{}, uuid.New(), exitEvents, running, nil, nil)
 	elapsed := time.Since(start)
 
 	if entry.ExitStatus == nil {

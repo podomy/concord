@@ -68,7 +68,7 @@ var checkHealth = proc.CheckHealth
 // events solely on transitions (see runHealthChecks), so the fast cadence
 // never floods the log: raw observations stay in memory, only their edges
 // converge.
-func runFastTick(ctx context.Context, logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) {
+func runFastTick(ctx context.Context, logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*WorkloadEntry, j journal.Journal, views []journalview.View, nodeID uuid.UUID, peerService *peerdiscovery.MemberService) {
 	runHealthChecks(ctx, logger, running, j, views, nodeID)
 	samplePressure(logger, sampler, running, peerService)
 	// Log ring backpressure surfaces here, one debug line per beat while
@@ -81,7 +81,7 @@ func runFastTick(ctx context.Context, logger *logs.Logger, sampler *node.Sampler
 	}
 }
 
-func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.UUID]*ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.UUID]*WorkloadEntry, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
 	targets := collectProbeTargets(running)
 	if len(targets) == 0 {
 		return
@@ -132,10 +132,10 @@ func runHealthChecks(ctx context.Context, logger *logs.Logger, running map[uuid.
 // first keeps mutation below single-threaded: probes run in parallel and
 // destroy/signal decisions apply after, in map order, preserving the old
 // sequential semantics.
-func collectProbeTargets(running map[uuid.UUID]*ContainerAndProcess) []healthTarget {
+func collectProbeTargets(running map[uuid.UUID]*WorkloadEntry) []healthTarget {
 	var targets []healthTarget
 	for id, entry := range running {
-		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
+		if entry == nil || entry.Handle == nil || entry.Stopping || entry.ExitStatus != nil {
 			continue
 		}
 		targets = append(targets, healthTarget{id: id, entry: entry})
@@ -146,7 +146,7 @@ func collectProbeTargets(running map[uuid.UUID]*ContainerAndProcess) []healthTar
 // healthTarget pairs one workload ID with its running entry for a probe.
 type healthTarget struct {
 	id    uuid.UUID
-	entry *ContainerAndProcess
+	entry *WorkloadEntry
 }
 
 // probeTarget runs one health probe with an outer abandon bound covering
@@ -180,7 +180,7 @@ func probeTarget(ctx context.Context, logger *logs.Logger, sem chan struct{}, t 
 // The unhealthyReported flag keeps it edge-triggered: without it the 500ms
 // beat would append one event per beat for the whole sickness.
 // signalUnhealthy appends one workload.unhealthy edge for a sick workload.
-func signalUnhealthy(ctx context.Context, logger *logs.Logger, entry *ContainerAndProcess, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
+func signalUnhealthy(ctx context.Context, logger *logs.Logger, entry *WorkloadEntry, j journal.Journal, views []journalview.View, nodeID uuid.UUID) {
 	if entry.unhealthyReported {
 		return
 	}
@@ -204,7 +204,7 @@ func signalUnhealthy(ctx context.Context, logger *logs.Logger, entry *ContainerA
 // samplePressure refreshes host and per-workload utilization and gossips the
 // host trio for placement. Sampling failures keep previous readings and log
 // at debug: /proc either works or is permanently broken, never flaky.
-func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) {
+func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*WorkloadEntry, peerService *peerdiscovery.MemberService) {
 	pressure, err := sampler.SampleHost()
 	if err != nil {
 		logger.Debug("sample host pressure", logs.Error(err))
@@ -216,7 +216,7 @@ func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid
 	}
 
 	for _, entry := range running {
-		if entry == nil || entry.Container == nil || entry.Stopping || entry.ExitStatus != nil {
+		if entry == nil || entry.Handle == nil || entry.Stopping || entry.ExitStatus != nil {
 			continue
 		}
 		sampleWorkloadEntry(logger, sampler, entry)
@@ -232,12 +232,12 @@ func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid
 // sampleWorkloadEntry reads one process's CPU and memory counters into the
 // sampler. A process that vanished mid-beat keeps its previous sample;
 // a dead pid only costs a debug line, never the beat.
-func sampleWorkloadEntry(logger *logs.Logger, sampler *node.Sampler, entry *ContainerAndProcess) {
-	if entry.ProcessHandle == nil {
+func sampleWorkloadEntry(logger *logs.Logger, sampler *node.Sampler, entry *WorkloadEntry) {
+	if entry.Handle == nil {
 		logger.Debug("sample workload without process", logs.String("id", entry.Spec.ID.String()))
 		return
 	}
-	cpuTotal, memBytes, err := node.ReadProcStat(entry.NamespacePID())
+	cpuTotal, memBytes, err := node.ReadProcStat(entry.PID())
 	if err != nil {
 		logger.Debug("sample workload stats", logs.String("id", entry.Spec.ID.String()), logs.Error(err))
 		return

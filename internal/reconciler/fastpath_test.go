@@ -10,16 +10,15 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/opencontainers/runc/libcontainer"
 
 	"github.com/podomy/concord/internal/logs"
 
 	"github.com/podomy/concord/internal/clock"
-	"github.com/podomy/concord/internal/cr"
 	"github.com/podomy/concord/internal/journal"
 	"github.com/podomy/concord/internal/journalview"
 	"github.com/podomy/concord/internal/kvstore"
 	"github.com/podomy/concord/internal/node"
+	"github.com/podomy/concord/internal/proc"
 	"github.com/podomy/concord/internal/workload"
 )
 
@@ -28,18 +27,17 @@ import (
 func TestRunFastTickRestartDestroysUnhealthy(t *testing.T) {
 	// TCP without a host port is unhealthy without touching a container.
 	sick := workload.Spec{ID: uuid.New(), HealthAction: workload.HealthActionRestart, HealthProbe: workload.HealthProbeTCP}
-	var nilCtr libcontainer.Container
-	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1)}
-	entry := &ContainerAndProcess{Container: &nilCtr, ProcessHandle: proc, Spec: sick}
-	running := map[uuid.UUID]*ContainerAndProcess{sick.ID: entry}
+	handle := &mockHandle{exited: make(chan proc.ExitStatus, 1), pid: 1 << 30}
+	entry := &WorkloadEntry{Handle: handle, Spec: sick}
+	running := map[uuid.UUID]*WorkloadEntry{sick.ID: entry}
 
 	runFastTick(t.Context(), logs.NewTest(t), node.NewSampler(), running, &mockJournal{}, nil, uuid.New(), nil)
 
 	if !entry.Stopping {
 		t.Fatal("expected stopping entry after unhealthy fast tick")
 	}
-	if len(proc.signals) != 1 || proc.signals[0] != syscall.SIGTERM {
-		t.Fatalf("signals = %v, want one SIGTERM", proc.signals)
+	if len(handle.signals) != 1 || handle.signals[0] != syscall.SIGTERM {
+		t.Fatalf("signals = %v, want one SIGTERM", handle.signals)
 	}
 	if entry.unhealthyReported {
 		t.Fatal("restart path must not set the signal-path edge flag")
@@ -100,9 +98,8 @@ func TestRunHealthChecksSignalEdgeDedup(t *testing.T) {
 	sick := workload.Spec{ID: uuid.New(), HealthAction: workload.HealthActionSignal, HealthProbe: workload.HealthProbeTCP}
 	healthy := sick
 	healthy.HealthProbe = workload.HealthProbeHTTP
-	var nilCtr libcontainer.Container
-	entry := &ContainerAndProcess{Container: &nilCtr, ProcessHandle: &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1)}, Spec: sick}
-	running := map[uuid.UUID]*ContainerAndProcess{sick.ID: entry}
+	entry := &WorkloadEntry{Handle: &mockHandle{exited: make(chan proc.ExitStatus, 1), pid: 1 << 30}, Spec: sick}
+	running := map[uuid.UUID]*WorkloadEntry{sick.ID: entry}
 	nodeID := uuid.New()
 	logger := logs.NewTest(t)
 	ctx := context.Background()
@@ -141,8 +138,8 @@ func TestRunFastTickDropsStaleWorkloadSamples(t *testing.T) {
 	live := uuid.New()
 	sampler.SampleWorkload(stale, 1, 1, 1, clock.Now())
 	sampler.SampleWorkload(live, 1, 1, 1, clock.Now())
-	// Containerless entries skip both health and sampling, isolating the drop loop.
-	running := map[uuid.UUID]*ContainerAndProcess{live: {Spec: workload.Spec{ID: live}}}
+	// Handleless entries skip both health and sampling, isolating the drop loop.
+	running := map[uuid.UUID]*WorkloadEntry{live: {Spec: workload.Spec{ID: live}}}
 
 	runFastTick(t.Context(), logs.NewTest(t), sampler, running, &mockJournal{}, nil, uuid.New(), nil)
 
