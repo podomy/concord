@@ -98,8 +98,8 @@ placement, and the number warns long before the failure.
 
 Per-workload stats
 
-Container.Stats() differenced across beats gives per-workload CPU
-percent and memory against its limit. Served through
+Per-workload CPU and memory sampled from procfs differenced across
+beats gives per-workload CPU percent and memory against its limit. Served through
 GET /v1/workloads/{id}/stats and workload stats, in memory only.
 Operators see what each workload costs; the mesh never hears about it.
 
@@ -126,7 +126,7 @@ gossip/trail split, lives in docs/trail.
 What stays out
 
 Per-sample journal writes, per-workload gossip, cross-node rollups, and
-new dependencies. /proc, Statfs, and libcontainer cover it all.
+new dependencies. /proc and Statfs cover it all.
 
 Where it lives
 

@@ -1,6 +1,6 @@
 Architecture & Data Flow
 
-Concord is a decentralized coordination engine. State is driven by an append-only event log, projected into local views, reconciled against container runtimes, and synchronized across nodes over an encrypted mesh.
+Concord is a decentralized coordination engine. State is driven by an append-only event log, projected into local views, reconciled against host processes, and synchronized across nodes over an encrypted mesh.
 
 ---
 
@@ -36,7 +36,7 @@ Data Flow Diagrams
        ▼
   Reconciler Loop
        │
-       ├──► (5) Fetch Image
+       ├──► (5) Stage Files
        │         │
        │         ▼
        │    Embedded OCI Registry
@@ -45,14 +45,8 @@ Data Flow Diagrams
        └──► (6) Lifecycle Control
                  │
                  ▼
-            Container Runtime
-            (internal/cr)
-                 │
-                 ├──► cgroups (CPU/Mem)
-                 │
-                 ├──► runc (Namespaces)
-                 │
-                 ├──► Bridge & veth (concord0)
+            Host Processes
+            (internal/proc)
                  │
                  └──► Health Check (/health)
 
@@ -93,7 +87,7 @@ Data Flow Diagrams
          │    Local bbolt Views
          │         │
          │         ▼
-         │    Reconciler ──► runc
+         │    Reconciler runs host processes
          │
          └──► (10) Missing Blobs
                    │
@@ -127,7 +121,7 @@ transport use it. Join targets are underlay addresses. Peers
 dial whatever ResolveAdvertise published, never cn0.
 
 Overlay is 10.0.0.0/16. Each node has cn0 at
-10.0.{index}.1/24 and allocates containers in that /24.
+10.0.{index}.1/24 and runs workloads with host ports.
 WireGuard carries peer /24s between nodes. Memberlist
 must not advertise cn0, wg-*, or any 10.0.0.0/16
 address. Joining an overlay IP on a node that also has

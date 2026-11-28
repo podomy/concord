@@ -3,7 +3,7 @@ Health Checks
 Every 500ms the fast beat asks each local workload one question: are
 you alive? The answer comes from exactly one of three probes, chosen
 per workload. Healthy answers write nothing anywhere; sickness edges
-write one journal event (signal action) or restart the container
+write one journal event (signal action) or restart the process
 (restart action). Raw observations stay in memory; only the edge
 converges. The beat mechanics live in docs/metrics.
 
@@ -11,7 +11,7 @@ The three probes
 
   http   GET http://127.0.0.1:host-portpath   2xx means healthy
   tcp    dial 127.0.0.1:host-port               connect means healthy
-  exec   run argv inside the container            exit code zero means healthy
+  exec   run argv on the host            exit code zero means healthy
 
 Configure on submit; empty probe means HTTP, so every old spec behaves
 exactly as before:
@@ -23,7 +23,7 @@ exactly as before:
   concord workload run -p 1883:1883 --health-probe tcp mosquitto:alpine
 
   # Exec: needs a command as one string, split on whitespace.
-  // Below runs /bin/check --ready inside the container.
+  // Below runs /bin/check --ready on the host.
   concord workload run --health-probe exec \
     --health-cmd "/bin/check --ready" \
     mydriver:latest
@@ -41,21 +41,20 @@ TCP dial, exec run with SIGKILL escalation), matching the beat's
 existing latency profile. Exec output discards into nothing: probe
 chatter stays out of log rings by design.
 
-Exec runs inside the container (namespaces joined, working dir /,
-spec env plus a default PATH), not on the host. An empty environment
-still resolves bare binary names. The container handle serves exec
-only; adopted containers probe normally from reattach on.
+Exec runs on the host against the workload's own ports and commands;
+there is no container to enter. An empty environment
+still resolves bare binary names.
 
 Actions on sickness
 
 When a check fails, the workload's configured action runs. There are
 two of them.
 
-Restart stops the container and starts it again, waiting longer
+Restart stops the process and starts it again, waiting longer
 between tries each time it keeps failing. Use it for things that
 crash: a dead driver should come back fresh.
 
-Signal leaves the container running and writes one note into the
+Signal leaves the process running and writes one note into the
 shared journal saying this workload is sick. Exactly one note per
 sickness: nothing more until the workload recovers, then it may write
 again. Use it for things that limp: a slow inference server should be
@@ -68,7 +67,7 @@ Where it lives
 
 Probe selection (HealthProbe in internal/workload/workload.go),
 checks (CheckHealth plus per-probe helpers in
-internal/cr/health.go), the beat (runHealthChecks in
+internal/proc/health.go), the beat (runHealthChecks in
 internal/reconciler/fastpath.go), flags (--health-probe,
 --health-cmd in internal/cli/workload.go), SDK builder
 (HealthProbe in sdk/builder.go, mirrored types in sdk/types.go),

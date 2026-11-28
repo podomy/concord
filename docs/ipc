@@ -87,9 +87,9 @@ Endpoints
 
 POST /v1/workloads: submit a workload
 
-Body is a workload spec; only image is required (surrounding
-whitespace is trimmed before validation, the stored spec is never
-padded). Returns 201 with the assigned id:
+Body is a workload spec; no field is required. The image is an
+optional label only (surrounding whitespace is trimmed before
+validation, the stored spec is never padded). Returns 201 with the assigned id:
 
   // request
   {"image":"nginx:alpine","restart":"always","host_port":8080,"container_port":80}
@@ -153,7 +153,7 @@ In-memory sampler readings, never the journal. 404 when never sampled
 avg_* fold the 5s trend window; the rest is the latest beat. node
 is always the local node: stats exist only where the workload runs.
 
-GET /v1/workloads/{id}/logs: captured container output
+GET /v1/workloads/{id}/logs: captured process output
 
 In-memory ring (1000 lines, 4KB truncate per line), oldest-first.
 ?tail=N caps to the last N lines (0 or absent means all). 404 when
@@ -176,7 +176,7 @@ specs (rejected, never auto-healed):
 
 DELETE /v1/workloads/{id}: stop a workload
 
-Commits a tombstone; the reconciler reaps the container. 204 empty on
+Commits a tombstone; the reconciler reaps the process. 204 empty on
 success, 404 when unknown or already stopped.
 
 GET /v1/nodes: list cluster nodes

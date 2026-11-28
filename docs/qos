@@ -38,7 +38,7 @@ lower-class running workload to make room:
   envelope: highest epoch wins, tombstones still dominate, no new event
   type, no new view. The arrival itself waits for the next tick, when
   the freed request counts.
-- The victim's node stops the container on the next reconciler tick
+- The victim's node stops the process on the next reconciler tick
   (the reaper): a live spec pointing elsewhere is shut down, an exited
   one is dropped from tracking. Without this the victim would run
   forever with nobody owning it.

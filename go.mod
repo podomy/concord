@@ -7,8 +7,6 @@ require (
 	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/memberlist v0.5.4
 	github.com/miekg/dns v1.1.72
-	github.com/opencontainers/cgroups v0.0.4
-	github.com/opencontainers/runc v1.3.3
 	github.com/podomy/concord-sdk v0.1.0
 	github.com/podomy/weld v0.1.1
 	github.com/vishvananda/netlink v1.3.1
@@ -18,15 +16,8 @@ require (
 )
 
 require (
-	cyphar.com/go-pathrs v0.2.5 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
-	github.com/checkpoint-restore/go-criu/v6 v6.3.0 // indirect
-	github.com/cilium/ebpf v0.17.3 // indirect
-	github.com/containerd/console v1.0.5 // indirect
-	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
-	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -41,18 +32,8 @@ require (
 	github.com/mdlayher/genetlink v1.3.2 // indirect
 	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
-	github.com/moby/sys/capability v0.4.0 // indirect
-	github.com/moby/sys/mountinfo v0.7.2 // indirect
-	github.com/moby/sys/user v0.4.0 // indirect
-	github.com/moby/sys/userns v0.1.0 // indirect
-	github.com/mrunalp/fileutils v0.5.1 // indirect
-	github.com/opencontainers/runtime-spec v1.3.0 // indirect
-	github.com/opencontainers/selinux v1.13.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
-	github.com/seccomp/libseccomp-golang v0.10.0 // indirect
-	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
@@ -60,5 +41,4 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/tools v0.46.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 )

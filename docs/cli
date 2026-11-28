@@ -33,7 +33,7 @@ detailed under Rendezvous Anchors in docs/deployment.
 Workload Commands
 
 Run a Workload
-  concord workload run [flags] image [command...]
+  concord workload run [flags] [image] [command...]
 
 Flags:
   --port, -p (default ""): port mapping host:container (e.g. 8080:80)
@@ -67,16 +67,15 @@ Examples:
   # Run with custom entrypoint command
   concord workload run alpine:latest /bin/sh -c "while true; do echo hello; sleep 5; done"
 
-Omitting the command runs the image default. The [command...]
-is optional: without it the container starts the image's own
-entrypoint plus cmd (what the image author set with ENTRYPOINT and
-CMD). concord workload run probe:latest starts /probe because
-the image says so, not because the CLI guessed. A command on the line
-replaces that default wholesale; nothing is appended. An image that
-sets neither entrypoint nor cmd, combined with no command on the line,
-fails the start with a logged build process error and retries next
-tick: an empty argv would panic container init, so the reconciler
-refuses to build one. See buildProcess in
+Omitting the command runs the staged binary bare. The image
+positional is an optional label only; the runtime starts host
+processes from staged files, never from a fetch. The [command...]
+is optional: without it the host process starts the binary selected
+by proc.BinaryPath (first command word matching a staged path, else
+the single executable entry). A command on the line passes as argv
+wholesale; nothing is appended. A spec with no command and no
+unambiguous binary fails the start with a logged error and retries
+next tick. See buildStartConfig in
 internal/reconciler/reconciler.go.
 
 ---
@@ -131,7 +130,7 @@ definitions live in docs/metrics.
 ---
 
 Stop a Workload
-  # Stops container and writes a tombstone event to the journal
+  # Stops process and writes a tombstone event to the journal
   concord workload stop id
 
 ---
@@ -141,10 +140,8 @@ Update a Workload
   # and history. Rollback is another bump
   concord workload update id --image nginx:1.28
 
-The node stops the old container and starts the new image; only the
-image changes, everything else in the spec continues. Adopted
-containers running pre-restart bytes update on their next restart:
-adoption cannot see the old image, so no drift is detected. Other
+The node stops the old process and starts the new image; only the
+image changes, everything else in the spec continues. Other
 spec changes still mean stop plus run.
 
 ---
@@ -165,9 +162,7 @@ remains. Full definitions live in docs/metrics.
 
 Workload Logs
   # Last 1000 lines at most; rings are memory-only and start empty at
-  # container start. Adopted containers (reattached after a daemon
-  # restart) capture nothing: their output pipes died with the old
-  # daemon, so rings stay empty until the workload restarts.
+  # process start.
   concord workload logs id [--tail 200] [--follow]
 
 Prints captured stdout/stderr oldest-first, one line per line. Absent
