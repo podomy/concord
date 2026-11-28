@@ -193,9 +193,16 @@ func TestReconcilerDoesNotStartTombstonedWorkload(t *testing.T) {
 type mockProcessHandle struct {
 	signals    []os.Signal
 	exitedChan chan cr.ExitStatus
+	pid        int
 }
 
-func (m *mockProcessHandle) NamespacePID() int { return 1234 }
+func (m *mockProcessHandle) NamespacePID() int {
+	if m.pid != 0 {
+		return m.pid
+	}
+	return 1234
+}
+
 func (m *mockProcessHandle) Signal(sig os.Signal) error {
 	m.signals = append(m.signals, sig)
 	return nil

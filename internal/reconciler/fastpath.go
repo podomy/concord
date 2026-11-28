@@ -6,14 +6,11 @@ package reconciler
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/opencontainers/runc/libcontainer"
 
 	"github.com/podomy/concord/internal/logs"
 
@@ -61,19 +58,6 @@ var abandonedProbeAfter = fastProbeTimeout + execKillGrace
 // probesAbandoned counts health probes abandoned after the kill grace.
 // Monotonic: a rising count means probes hang past SIGKILL.
 var probesAbandoned atomic.Int64
-
-// statsTimeout bounds one cgroup Stats read. A var so unit tests shrink
-// it; production tolerates a slow cgroupfs without stalling the beat.
-var statsTimeout = 5 * time.Second
-
-// statsAbandoned counts Stats reads abandoned after the timeout. A rising
-// count means cgroupfs is stuck; per-workload samples keep their previous
-// readings.
-var statsAbandoned atomic.Int64
-
-// errStatsTimeout marks an abandoned Stats read. Callers warn on it and
-// debug-log ordinary read errors.
-var errStatsTimeout = errors.New("container stats timed out")
 
 // checkHealth runs one probe. A var so unit tests stub slow probes
 // without root or network; production always uses proc.CheckHealth.
@@ -219,8 +203,7 @@ func signalUnhealthy(ctx context.Context, logger *logs.Logger, entry *ContainerA
 
 // samplePressure refreshes host and per-workload utilization and gossips the
 // host trio for placement. Sampling failures keep previous readings and log
-// at debug: /proc and cgroupfs either work or are permanently broken, never
-// flaky.
+// at debug: /proc either works or is permanently broken, never flaky.
 func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid.UUID]*ContainerAndProcess, peerService *peerdiscovery.MemberService) {
 	pressure, err := sampler.SampleHost()
 	if err != nil {
@@ -246,61 +229,22 @@ func samplePressure(logger *logs.Logger, sampler *node.Sampler, running map[uuid
 	}
 }
 
-// sampleWorkloadEntry reads one container's cgroup counters into the sampler.
-// A container that vanished mid-beat keeps its previous sample; a Stats
-// read that hangs past the timeout is abandoned, counted, and warned, and
-// the beat moves on with the previous sample.
+// sampleWorkloadEntry reads one process's CPU and memory counters into the
+// sampler. A process that vanished mid-beat keeps its previous sample;
+// a dead pid only costs a debug line, never the beat.
 func sampleWorkloadEntry(logger *logs.Logger, sampler *node.Sampler, entry *ContainerAndProcess) {
-	stats, err := statsWithTimeout(entry)
-	if err != nil {
-		if errors.Is(err, errStatsTimeout) {
-			logger.Warn("container stats hung, keeping previous sample", logs.String("id", entry.Spec.ID.String()))
-		} else {
-			logger.Debug("sample workload stats", logs.String("id", entry.Spec.ID.String()), logs.Error(err))
-		}
+	if entry.ProcessHandle == nil {
+		logger.Debug("sample workload without process", logs.String("id", entry.Spec.ID.String()))
 		return
 	}
-	if stats == nil || stats.CgroupStats == nil {
+	cpuTotal, memBytes, err := node.ReadProcStat(entry.NamespacePID())
+	if err != nil {
+		logger.Debug("sample workload stats", logs.String("id", entry.Spec.ID.String()), logs.Error(err))
 		return
 	}
 	var memLimit uint64
 	if entry.Spec.Resources.MemoryMB > 0 {
 		memLimit = uint64(entry.Spec.Resources.MemoryMB) * 1024 * 1024
 	}
-	sampler.SampleWorkload(entry.Spec.ID, stats.CgroupStats.CpuStats.CpuUsage.TotalUsage, stats.CgroupStats.MemoryStats.Usage.Usage, memLimit, clock.Now())
-}
-
-// containerStats reads one container's cgroup counters. A var so unit
-// tests stub a hung cgroupfs without root; production uses Stats.
-var containerStats = func(c *libcontainer.Container) (*libcontainer.Stats, error) {
-	return c.Stats()
-}
-
-// statsResult carries one Stats read across the timeout boundary.
-type statsResult struct {
-	stats *libcontainer.Stats
-	err   error
-}
-
-// statsWithTimeout bounds one Stats read. The read runs detached and the
-// beat abandons it after statsTimeout, counting and warning: a stuck
-// cgroupfs must not stall every workload behind it. The abandoned read
-// may still complete later into its buffered channel; nothing observes
-// it, and the entry keeps its previous sample.
-func statsWithTimeout(entry *ContainerAndProcess) (*libcontainer.Stats, error) {
-	if entry.Container == nil {
-		return nil, errors.New("sample workload without container") //nolint:wrapcheck // plain error, no wrap target
-	}
-	ch := make(chan statsResult, 1)
-	go func() {
-		stats, err := containerStats(entry.Container)
-		ch <- statsResult{stats: stats, err: err}
-	}()
-	select {
-	case r := <-ch:
-		return r.stats, r.err
-	case <-time.After(statsTimeout):
-		statsAbandoned.Add(1)
-		return nil, fmt.Errorf("stats read: %w", errStatsTimeout)
-	}
+	sampler.SampleWorkload(entry.Spec.ID, cpuTotal, memBytes, memLimit, clock.Now())
 }

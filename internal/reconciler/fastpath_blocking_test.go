@@ -52,39 +52,18 @@ func TestRunHealthChecksAbandonsHungProbe(t *testing.T) {
 	}
 }
 
-// A Stats read that hangs past the timeout is abandoned, counted, and
-// warned, and the workload keeps its previous sample.
-func TestSampleWorkloadEntryAbandonsHungStats(t *testing.T) {
-	oldStats := containerStats
-	oldTimeout := statsTimeout
-	ctx, cancel := context.WithCancel(context.Background())
-	released := make(chan struct{})
-	containerStats = func(_ *libcontainer.Container) (*libcontainer.Stats, error) {
-		defer close(released)
-		<-ctx.Done()
-		return nil, nil
-	}
-	statsTimeout = 50_000_000
-	t.Cleanup(func() {
-		// Unblock the abandoned read and wait for it to exit before
-		// restoring the seam: the timeout leaves it in flight.
-		cancel()
-		<-released
-		containerStats = oldStats
-		statsTimeout = oldTimeout
-	})
-	before := statsAbandoned.Load()
+// A dead pid writes no sample: the workload keeps its previous sample
+// and the beat moves on with a debug line instead of stalling.
+func TestSampleWorkloadEntryDeadPIDKeepsSample(t *testing.T) {
+	t.Parallel()
 
-	var ctr libcontainer.Container
-	entry := &ContainerAndProcess{Container: &ctr, Spec: workload.Spec{ID: uuid.New()}}
+	proc := &mockProcessHandle{exitedChan: make(chan cr.ExitStatus, 1), pid: 1 << 30}
+	entry := &ContainerAndProcess{ProcessHandle: proc, Spec: workload.Spec{ID: uuid.New()}}
 	sampler := node.NewSampler()
 
 	sampleWorkloadEntry(logs.NewTest(t), sampler, entry)
 
-	if statsAbandoned.Load() != before+1 {
-		t.Fatalf("abandoned = %d, want %d", statsAbandoned.Load(), before+1)
-	}
 	if len(sampler.Workloads()) != 0 {
-		t.Fatal("hung stats wrote a sample")
+		t.Fatal("dead pid wrote a sample")
 	}
 }
