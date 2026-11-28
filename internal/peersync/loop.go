@@ -136,6 +136,10 @@ func handleHint(
 			return previous
 		}
 	}
+	logger.Info("hint wakeup, pulling early",
+		logs.String("origin", h.Origin.String()),
+		logs.String("tip", h.Tip.String()),
+	)
 	return pullTick(ctx, logger, selfID, members, state, previous)
 }
 
